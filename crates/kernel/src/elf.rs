@@ -404,6 +404,11 @@ pub unsafe fn load_elf_from_inode(
     // Step 4: Activate and enter user mode
     upt.activate();
     let user_sp = crate::execargs::write_to_stack(stack_top);
+    crate::serial::write_str("rux: entry=0x");
+    crate::write_hex_serial(elf_info.entry as usize);
+    crate::serial::write_str(" sp=0x");
+    crate::write_hex_serial(user_sp as usize);
+    crate::serial::write_str("\n");
     crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }
 

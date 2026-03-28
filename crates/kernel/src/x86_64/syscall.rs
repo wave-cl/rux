@@ -109,8 +109,8 @@ unsafe extern "C" fn syscall_entry() {
 /// Called from the assembly entry point with syscall number and arguments.
 #[no_mangle]
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
-    // Enable interrupts during syscall handling
-    unsafe { core::arch::asm!("sti"); }
+    // Keep interrupts disabled during syscall handling for now
+    // (enabling would require saving/restoring more state on timer IRQ)
 
     let result = match nr {
         // File I/O
@@ -149,7 +149,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         107 => 0,                                  // geteuid
         108 => 0,                                  // getegid
         110 => 1,                                  // getppid
-        158 => 0,                                  // arch_prctl (stub)
+        158 => syscall_arch_prctl(a0, a1),            // arch_prctl
         217 => syscall_getdents(a0, a1),          // getdents64
         218 => 1,                                  // set_tid_address → return pid
         228 => syscall_clock_gettime(a0, a1),     // clock_gettime
@@ -169,8 +169,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         }
     };
 
-    // Disable interrupts before returning to sysretq
-    unsafe { core::arch::asm!("cli"); }
+    // Interrupts already disabled (SFMASK clears IF on syscall entry)
     result
 }
 
@@ -728,6 +727,38 @@ fn syscall_getcwd(buf: u64, size: u64) -> i64 {
         *ptr.add(1) = 0;
     }
     buf as i64
+}
+
+fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
+    const ARCH_SET_FS: u64 = 0x1002;
+    const ARCH_SET_GS: u64 = 0x1001;
+    const ARCH_GET_FS: u64 = 0x1003;
+    const ARCH_GET_GS: u64 = 0x1004;
+
+    unsafe {
+        match code {
+            ARCH_SET_FS => {
+                // Set FS base via IA32_FS_BASE MSR (0xC0000100)
+                core::arch::asm!(
+                    "wrmsr",
+                    in("ecx") 0xC0000100u32,
+                    in("eax") addr as u32,
+                    in("edx") (addr >> 32) as u32,
+                );
+                0
+            }
+            ARCH_SET_GS => {
+                core::arch::asm!(
+                    "wrmsr",
+                    in("ecx") 0xC0000101u32,
+                    in("eax") addr as u32,
+                    in("edx") (addr >> 32) as u32,
+                );
+                0
+            }
+            _ => -22 // -EINVAL
+        }
+    }
 }
 
 fn syscall_clock_gettime(_clockid: u64, tp: u64) -> i64 {
