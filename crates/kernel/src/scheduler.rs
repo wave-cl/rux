@@ -80,6 +80,10 @@ impl Scheduler {
         {
             task.saved_rsp = crate::x86_64::context::init_task_stack(stack_top, entry as u64, 0);
         }
+        #[cfg(target_arch = "aarch64")]
+        {
+            task.saved_rsp = crate::aarch64::context::init_task_stack(stack_top, entry as u64, 0);
+        }
 
         // Enqueue into CFS
         self.cfs.set_clock(0, self.clock_ns);
@@ -143,6 +147,8 @@ impl Scheduler {
 
             #[cfg(target_arch = "x86_64")]
             crate::x86_64::context::context_switch(old_rsp_ptr, new_rsp);
+            #[cfg(target_arch = "aarch64")]
+            crate::aarch64::context::context_switch(old_rsp_ptr, new_rsp);
         }
     }
 }

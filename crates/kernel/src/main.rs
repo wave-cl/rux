@@ -35,7 +35,139 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
 #[cfg(target_arch = "aarch64")]
 fn aarch64_init() {
     serial::write_str("rux: aarch64 running in EL1\n");
-    // TODO: exception vectors, timer, page tables, context switch
+
+    // Exception vectors
+    unsafe { aarch64::exception::init(); }
+    serial::write_str("rux: exception vectors installed\n");
+
+    // GIC interrupt controller
+    unsafe { aarch64::gic::init(); }
+    serial::write_str("rux: GIC initialized\n");
+
+    // Generic timer at 1000 Hz
+    unsafe { aarch64::timer::init(1000); }
+    serial::write_str("rux: timer initialized (1000 Hz)\n");
+
+    // Enable IRQs
+    unsafe { aarch64::gic::enable_irqs(); }
+    serial::write_str("rux: interrupts enabled\n");
+
+    // Wait for timer ticks
+    let start = aarch64::timer::ticks();
+    while aarch64::timer::ticks() < start + 10 {
+        core::hint::spin_loop();
+    }
+    serial::write_str("rux: timer OK\n");
+
+    // ── Context switch test ─────────────────────────────────────────
+    serial::write_str("rux: context switch test...\n");
+    unsafe {
+        static mut STACK_B: [u8; 65536] = [0; 65536];
+        let stack_top = STACK_B.as_ptr() as u64 + 65536;
+        let task_b_rsp = aarch64::context::init_task_stack(stack_top, aarch64_task_b as u64, 0);
+
+        aarch64::context::context_switch(&raw mut MAIN_RSP_AA64, task_b_rsp);
+        serial::write_str("rux: back in main task\n");
+    }
+
+    // ── Preemptive scheduling test ──────────────────────────────────
+    serial::write_str("rux: preemptive scheduler test...\n");
+    unsafe {
+        use rux_sched::SchedClassOps;
+        let sched = scheduler::get();
+
+        static mut SCHED_STACK_A: [u8; 65536] = [0; 65536];
+        static mut SCHED_STACK_B: [u8; 65536] = [0; 65536];
+
+        sched.create_task(
+            aarch64_counter_a,
+            SCHED_STACK_A.as_ptr() as u64 + 65536,
+            0,
+        );
+        sched.create_task(
+            aarch64_counter_b,
+            SCHED_STACK_B.as_ptr() as u64 + 65536,
+            5,
+        );
+
+        serial::write_str("rux: created tasks A and B\n");
+        sched.need_resched = true;
+        sched.schedule();
+    }
+
+    let a_count = unsafe { COUNTER_A };
+    let b_count = unsafe { COUNTER_B };
+    let mut buf = [0u8; 10];
+    serial::write_str("rux: task A count: ");
+    serial::write_str(write_u32(&mut buf, a_count));
+    serial::write_str(", task B count: ");
+    serial::write_str(write_u32(&mut buf, b_count));
+    serial::write_str("\n");
+
+    if a_count > 0 && b_count > 0 {
+        serial::write_str("rux: preemptive scheduling OK!\n");
+    } else {
+        serial::write_str("FAIL: preemptive scheduling\n");
+        exit::exit_qemu(exit::EXIT_FAILURE);
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+static mut MAIN_RSP_AA64: u64 = 0;
+
+#[cfg(target_arch = "aarch64")]
+extern "C" fn aarch64_task_b() {
+    serial::write_str("rux: task B running!\n");
+    unsafe {
+        static mut TASK_B_RSP: u64 = 0;
+        aarch64::context::context_switch(&raw mut TASK_B_RSP, MAIN_RSP_AA64);
+    }
+    loop { core::hint::spin_loop(); }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn aarch64_maybe_yield() {
+    unsafe {
+        let sched = scheduler::get();
+        if sched.need_resched {
+            sched.schedule();
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn aarch64_task_exit() -> ! {
+    unsafe {
+        use rux_sched::SchedClassOps;
+        let sched = scheduler::get();
+        let idx = sched.current;
+        sched.tasks[idx].active = false;
+        sched.tasks[idx].entity.state = rux_sched::TaskState::Dead;
+        sched.cfs.dequeue(0, &mut sched.tasks[idx].entity, 0);
+        sched.need_resched = true;
+        sched.schedule();
+    }
+    loop { core::hint::spin_loop(); }
+}
+
+#[cfg(target_arch = "aarch64")]
+extern "C" fn aarch64_counter_a() {
+    for _ in 0..100_000 {
+        unsafe { COUNTER_A += 1; }
+        aarch64_maybe_yield();
+    }
+    serial::write_str("rux: task A done\n");
+    aarch64_task_exit();
+}
+
+#[cfg(target_arch = "aarch64")]
+extern "C" fn aarch64_counter_b() {
+    for _ in 0..100_000 {
+        unsafe { COUNTER_B += 1; }
+        aarch64_maybe_yield();
+    }
+    serial::write_str("rux: task B done\n");
+    aarch64_task_exit();
 }
 
 #[cfg(target_arch = "x86_64")]

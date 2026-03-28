@@ -9,6 +9,11 @@ _start:
     /* Disable interrupts */
     msr     daifset, #0xF
 
+    /* Enable FP/NEON (CPACR_EL1.FPEN = 0b11) — prevents #UD on FP instructions */
+    mov     x0, #(3 << 20)
+    msr     cpacr_el1, x0
+    isb
+
     /* Set up stack at the top of the boot_stack in BSS */
     adrp    x0, boot_stack_top
     add     x0, x0, :lo12:boot_stack_top
