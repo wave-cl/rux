@@ -3,16 +3,40 @@
 
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
+#[cfg(target_arch = "aarch64")]
+use aarch64::{serial, exit};
 
-/// Kernel entry point. Called from boot.S after long mode is set up.
+/// Kernel entry point. Called from boot.S.
+/// On x86_64: `arg` is the multiboot info physical address.
+/// On aarch64: `arg` is unused (DTB pointer, ignored for now).
 #[no_mangle]
-pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
+pub extern "C" fn kernel_main(arg: usize) -> ! {
     unsafe { serial::init(); }
     serial::write_str("rux: boot OK\n");
 
+    #[cfg(target_arch = "x86_64")]
+    x86_64_init(arg);
+
+    #[cfg(target_arch = "aarch64")]
+    aarch64_init();
+
+    serial::write_str("rux: all checks passed\n");
+    exit::exit_qemu(exit::EXIT_SUCCESS);
+}
+
+#[cfg(target_arch = "aarch64")]
+fn aarch64_init() {
+    serial::write_str("rux: aarch64 running in EL1\n");
+    // TODO: exception vectors, timer, page tables, context switch
+}
+
+#[cfg(target_arch = "x86_64")]
+fn x86_64_init(multiboot_info: usize) {
     // Initialize GDT with TSS
     // The boot stack top is defined in boot.S. We use 0x104000 + 16384 = 0x108000
     // (bss starts at ~0x104000, boot_stack is 16K after page tables)
@@ -40,9 +64,9 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
 
     // ── Parse multiboot memory map ──────────────────────────────────────
     serial::write_str("rux: multiboot info at ");
-    write_hex_serial(_multiboot_info);
+    write_hex_serial(multiboot_info);
     serial::write_str("\n");
-    let memmap = unsafe { x86_64::multiboot::parse_memory_map(_multiboot_info) };
+    let memmap = unsafe { x86_64::multiboot::parse_memory_map(multiboot_info) };
     serial::write_str("rux: memory map (");
     let mut buf = [0u8; 10];
     serial::write_str(write_u32(&mut buf, memmap.count as u32));
@@ -277,9 +301,6 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
         }
         serial::write_str("rux: CFS scheduler OK (weighted fair)\n");
     }
-
-    serial::write_str("rux: all checks passed\n");
-    exit::exit_qemu(exit::EXIT_SUCCESS);
 }
 
 #[panic_handler]
@@ -300,6 +321,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     exit::exit_qemu(exit::EXIT_FAILURE);
 }
 
+#[cfg(target_arch = "x86_64")]
 /// Task B entry point — runs on its own stack.
 extern "C" fn task_b_entry() {
     serial::write_str("rux: task B running!\n");
@@ -317,8 +339,7 @@ extern "C" fn task_b_entry() {
     loop { core::hint::spin_loop(); }
 }
 
-/// Reference to main task's saved RSP (set during context switch).
-/// Task B reads this to switch back.
+#[cfg(target_arch = "x86_64")]
 static mut MAIN_RSP: u64 = 0;
 
 fn write_hex_serial(n: usize) {
