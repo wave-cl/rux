@@ -107,6 +107,49 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
             serial::write_str("\n");
             alloc.dealloc(page, rux_mm::PageSize::FourK);
             serial::write_str("rux: dealloc OK\n");
+
+            // ── Page table test ─────────────────────────────────────────
+            serial::write_str("rux: page table test...\n");
+            let mut pt = x86_64::paging::PageTable4Level::new(alloc)
+                .expect("failed to create page table");
+            serial::write_str("rux: page table created (root=");
+            write_hex_serial(pt.root_phys().as_usize());
+            serial::write_str(")\n");
+
+            // Allocate a physical frame and map it at virtual 0x8000_0000
+            let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("alloc frame");
+            let test_virt = rux_klib::VirtAddr::new(0x8000_0000);
+            let flags = rux_mm::MappingFlags::READ.or(rux_mm::MappingFlags::WRITE);
+            pt.map_4k(test_virt, frame, flags, alloc).expect("map failed");
+            serial::write_str("rux: mapped ");
+            write_hex_serial(test_virt.as_usize());
+            serial::write_str(" -> ");
+            write_hex_serial(frame.as_usize());
+            serial::write_str("\n");
+
+            // Translate — should return the frame address
+            let translated = pt.translate(test_virt).expect("translate failed");
+            if translated.as_usize() != frame.as_usize() {
+                serial::write_str("FAIL: translate mismatch!\n");
+                exit::exit_qemu(exit::EXIT_FAILURE);
+            }
+            serial::write_str("rux: translate OK\n");
+
+            // Unmap
+            let unmapped = pt.unmap_4k(test_virt).expect("unmap failed");
+            if unmapped.as_usize() != frame.as_usize() {
+                serial::write_str("FAIL: unmap returned wrong address!\n");
+                exit::exit_qemu(exit::EXIT_FAILURE);
+            }
+
+            // Verify unmapped — translate should fail
+            if pt.translate(test_virt).is_ok() {
+                serial::write_str("FAIL: translate succeeded after unmap!\n");
+                exit::exit_qemu(exit::EXIT_FAILURE);
+            }
+            serial::write_str("rux: unmap + re-translate OK\n");
+
+            alloc.dealloc(frame, rux_mm::PageSize::FourK);
         }
     }
 
