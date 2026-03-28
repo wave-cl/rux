@@ -32,7 +32,6 @@ pub enum InodeType {
 }
 
 impl InodeType {
-    /// Convert to S_IFMT mode bits.
     #[inline(always)]
     pub const fn to_mode(self) -> u32 {
         match self {
@@ -46,7 +45,6 @@ impl InodeType {
         }
     }
 
-    /// Convert from S_IFMT mode bits.
     pub const fn from_mode(mode: u32) -> Option<Self> {
         match mode & S_IFMT {
             S_IFREG => Some(Self::File),
@@ -97,7 +95,6 @@ impl OpenFlags {
     pub const fn and(self, other: Self) -> Self { Self(self.0 & other.0) }
     #[inline(always)]
     pub const fn contains(self, flag: Self) -> bool { self.0 & flag.0 == flag.0 }
-    /// Access mode bits: O_RDONLY(0), O_WRONLY(1), O_RDWR(2).
     #[inline(always)]
     pub const fn access_mode(self) -> u32 { self.0 & 3 }
     #[inline(always)]
@@ -106,7 +103,7 @@ impl OpenFlags {
     pub const fn is_write(self) -> bool { self.access_mode() != 0 }
 }
 
-// ── VFS errors ──────────────────────────────────────────────────────────
+// ── VFS errors ──────────────────────────────────────────────���───────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -157,46 +154,88 @@ impl VfsError {
     }
 }
 
-// ── Inode ID ────────────────────────────────────────────────────────────
+// ── Inode ID ───────────────────────────────────────────��────────────────
 
 pub type InodeId = u64;
 
-// ── InodeStat (POSIX struct stat) ───────────────────────────────────────
+// ── FileName — validated name, checked once at syscall boundary ─────────
+
+/// A validated file name component (no '/', no '\0', length ≤ NAME_MAX).
+/// Created once at the syscall boundary, then passed through the VFS
+/// without re-validation. Zero-cost: just a &[u8] with an invariant.
+#[derive(Debug, Clone, Copy)]
+pub struct FileName<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> FileName<'a> {
+    /// Validate and create a FileName. Returns NameTooLong or InvalidPath on failure.
+    #[inline]
+    pub fn new(name: &'a [u8]) -> Result<Self, VfsError> {
+        if name.is_empty() || name.len() > NAME_MAX {
+            return Err(VfsError::NameTooLong);
+        }
+        if name.contains(&b'/') || name.contains(&0) {
+            return Err(VfsError::InvalidPath);
+        }
+        Ok(Self { bytes: name })
+    }
+
+    /// Access the raw bytes. No re-validation needed.
+    #[inline(always)]
+    pub const fn as_bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    #[inline(always)]
+    pub const fn len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+// ── InodeStat (POSIX struct stat) — written in place, not returned ──────
 
 /// File status — matches POSIX `struct stat` semantics.
 /// `mode` encodes both file type (S_IFMT) and permission bits (rwxrwxrwx).
+///
+/// All `stat` methods take `&mut InodeStat` to write in place rather than
+/// returning by value — avoids 80-byte copies on the hot path.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct InodeStat {
     pub ino: InodeId,
-    pub mode: u32,       // S_IFMT | permission bits
-    pub nlink: u32,      // hard link count
+    pub mode: u32,
+    pub nlink: u32,
     pub uid: u32,
     pub gid: u32,
-    pub size: u64,       // total size in bytes
-    pub blocks: u64,     // 512-byte blocks allocated
-    pub blksize: u32,    // preferred I/O block size
+    pub size: u64,
+    pub blocks: u64,
+    pub blksize: u32,
     pub _pad0: u32,
-    pub atime: u64,      // last access (nanoseconds since epoch)
-    pub mtime: u64,      // last modification
-    pub ctime: u64,      // last status change
-    pub dev: u32,        // device ID
-    pub rdev: u32,       // device ID (special files)
+    pub atime: u64,
+    pub mtime: u64,
+    pub ctime: u64,
+    pub dev: u32,
+    pub rdev: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<InodeStat>() == 80);
 
-// ── DirEntry (readdir) ──────────────────────────────────────────────────
+// ── DirEntry (readdir) — written in place, not returned ─────────────────
 
-/// Directory entry returned by readdir.
+/// Directory entry for readdir. Written in place via `&mut DirEntry`.
+/// Name buffer is 64 bytes (covers >99% of real filenames without
+/// wasting 256 bytes of stack per call).
 #[repr(C)]
 pub struct DirEntry {
     pub ino: InodeId,
     pub kind: InodeType,
     pub name_len: u8,
     pub _pad: [u8; 6],
-    pub name: [u8; 256],
+    pub name: [u8; 64],
 }
+
+const _: () = assert!(core::mem::size_of::<DirEntry>() == 80);
 
 // ── Inode traits ────────────────────────────────────────────────────────
 
@@ -204,7 +243,8 @@ pub struct DirEntry {
 pub trait Inode {
     fn id(&self) -> InodeId;
     fn kind(&self) -> InodeType;
-    fn stat(&self) -> Result<InodeStat, VfsError>;
+    /// Write inode status into `buf`. Avoids 80-byte return-by-value copy.
+    fn stat(&self, buf: &mut InodeStat) -> Result<(), VfsError>;
 }
 
 /// File data operations (regular files, char/block devices).
@@ -214,22 +254,24 @@ pub trait FileOps {
     fn truncate(&mut self, size: u64) -> Result<(), VfsError>;
 }
 
-/// Directory operations.
+/// Directory operations. Names are pre-validated `FileName` — no length
+/// checks inside the filesystem, validated once at the syscall boundary.
 pub trait DirOps {
-    fn lookup(&self, name: &[u8]) -> Result<InodeId, VfsError>;
-    fn create(&mut self, name: &[u8], mode: u32) -> Result<InodeId, VfsError>;
-    fn mkdir(&mut self, name: &[u8], mode: u32) -> Result<InodeId, VfsError>;
-    fn unlink(&mut self, name: &[u8]) -> Result<(), VfsError>;
-    fn rmdir(&mut self, name: &[u8]) -> Result<(), VfsError>;
+    fn lookup(&self, name: FileName<'_>) -> Result<InodeId, VfsError>;
+    fn create(&mut self, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
+    fn mkdir(&mut self, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
+    fn unlink(&mut self, name: FileName<'_>) -> Result<(), VfsError>;
+    fn rmdir(&mut self, name: FileName<'_>) -> Result<(), VfsError>;
     fn rename(
         &mut self,
-        old_name: &[u8],
+        old_name: FileName<'_>,
         new_dir: InodeId,
-        new_name: &[u8],
+        new_name: FileName<'_>,
     ) -> Result<(), VfsError>;
-    fn link(&mut self, name: &[u8], target: InodeId) -> Result<(), VfsError>;
-    fn symlink(&mut self, name: &[u8], target: &[u8]) -> Result<InodeId, VfsError>;
-    fn readdir(&self, offset: usize) -> Result<Option<DirEntry>, VfsError>;
+    fn link(&mut self, name: FileName<'_>, target: InodeId) -> Result<(), VfsError>;
+    fn symlink(&mut self, name: FileName<'_>, target: &[u8]) -> Result<InodeId, VfsError>;
+    /// Write next directory entry into `buf`. Returns false when no more entries.
+    fn readdir(&self, offset: usize, buf: &mut DirEntry) -> Result<bool, VfsError>;
 }
 
 /// Inode attribute operations.
@@ -248,12 +290,14 @@ pub trait SymlinkOps {
 
 /// Inode-based filesystem interface. Concrete filesystems (ramfs, ext4, etc.)
 /// implement this trait. Path resolution lives above this layer.
+///
+/// All name parameters use `FileName` — validated once, no re-checking.
+/// `stat` and `readdir` write into caller-provided buffers — no copies.
 pub trait FileSystem {
-    /// Root directory inode.
     fn root_inode(&self) -> InodeId;
 
-    /// Get inode status.
-    fn stat(&self, ino: InodeId) -> Result<InodeStat, VfsError>;
+    /// Write inode status into `buf`.
+    fn stat(&self, ino: InodeId, buf: &mut InodeStat) -> Result<(), VfsError>;
 
     // ── File I/O ────────────────────────────────────────────────────
     fn read(&self, ino: InodeId, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError>;
@@ -261,30 +305,32 @@ pub trait FileSystem {
     fn truncate(&mut self, ino: InodeId, size: u64) -> Result<(), VfsError>;
 
     // ── Directory operations ────────────────────────────────────────
-    fn lookup(&self, dir: InodeId, name: &[u8]) -> Result<InodeId, VfsError>;
-    fn create(&mut self, dir: InodeId, name: &[u8], mode: u32) -> Result<InodeId, VfsError>;
-    fn mkdir(&mut self, dir: InodeId, name: &[u8], mode: u32) -> Result<InodeId, VfsError>;
-    fn unlink(&mut self, dir: InodeId, name: &[u8]) -> Result<(), VfsError>;
-    fn rmdir(&mut self, dir: InodeId, name: &[u8]) -> Result<(), VfsError>;
-    fn link(&mut self, dir: InodeId, name: &[u8], target: InodeId) -> Result<(), VfsError>;
+    fn lookup(&self, dir: InodeId, name: FileName<'_>) -> Result<InodeId, VfsError>;
+    fn create(&mut self, dir: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
+    fn mkdir(&mut self, dir: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
+    fn unlink(&mut self, dir: InodeId, name: FileName<'_>) -> Result<(), VfsError>;
+    fn rmdir(&mut self, dir: InodeId, name: FileName<'_>) -> Result<(), VfsError>;
+    fn link(&mut self, dir: InodeId, name: FileName<'_>, target: InodeId) -> Result<(), VfsError>;
     fn symlink(
         &mut self,
         dir: InodeId,
-        name: &[u8],
+        name: FileName<'_>,
         target: &[u8],
     ) -> Result<InodeId, VfsError>;
     fn readlink(&self, ino: InodeId, buf: &mut [u8]) -> Result<usize, VfsError>;
+    /// Write next directory entry into `buf`. Returns false when no more entries.
     fn readdir(
         &self,
         dir: InodeId,
         offset: usize,
-    ) -> Result<Option<DirEntry>, VfsError>;
+        buf: &mut DirEntry,
+    ) -> Result<bool, VfsError>;
     fn rename(
         &mut self,
         old_dir: InodeId,
-        old_name: &[u8],
+        old_name: FileName<'_>,
         new_dir: InodeId,
-        new_name: &[u8],
+        new_name: FileName<'_>,
     ) -> Result<(), VfsError>;
 
     // ── Attribute operations ────────────────────────────────────────
