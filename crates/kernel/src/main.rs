@@ -38,6 +38,78 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
     }
     serial::write_str("rux: timer OK\n");
 
+    // ── Parse multiboot memory map ──────────────────────────────────────
+    serial::write_str("rux: multiboot info at ");
+    write_hex_serial(_multiboot_info);
+    serial::write_str("\n");
+    let memmap = unsafe { x86_64::multiboot::parse_memory_map(_multiboot_info) };
+    serial::write_str("rux: memory map (");
+    let mut buf = [0u8; 10];
+    serial::write_str(write_u32(&mut buf, memmap.count as u32));
+    serial::write_str(" regions, ");
+    serial::write_str(write_u32(&mut buf, (memmap.total_usable / (1024 * 1024)) as u32));
+    serial::write_str(" MiB usable)\n");
+
+    for i in 0..memmap.count {
+        let r = &memmap.regions[i];
+        serial::write_str("  ");
+        write_hex_serial(r.base.as_usize());
+        serial::write_str(" - ");
+        write_hex_serial(r.base.as_usize() + r.size);
+        serial::write_str(" (");
+        serial::write_str(write_u32(&mut buf, (r.size / 1024) as u32));
+        serial::write_str(" KiB)\n");
+    }
+
+    // ── Init frame allocator from the largest region ────────────────────
+    // Find the largest usable region
+    let mut best = 0;
+    for i in 1..memmap.count {
+        if memmap.regions[i].size > memmap.regions[best].size {
+            best = i;
+        }
+    }
+    if memmap.count > 0 {
+        let region = &memmap.regions[best];
+        let alloc_base = if region.base.as_usize() < 0x200000 {
+            0x200000usize
+        } else {
+            region.base.as_usize()
+        };
+        let alloc_size = region.size - (alloc_base - region.base.as_usize());
+        let frames = (alloc_size / 4096) as u32;
+        let frames = frames.min(4096); // limit for initial testing
+
+        serial::write_str("rux: init allocator at ");
+        write_hex_serial(alloc_base);
+        serial::write_str(" (");
+        serial::write_str(write_u32(&mut buf, frames));
+        serial::write_str(" frames)\n");
+
+        unsafe {
+            serial::write_str("rux: zeroing allocator...\n");
+            let alloc_ptr = 0x400000 as *mut u64;
+            let alloc_qwords = core::mem::size_of::<rux_mm::frame::BuddyAllocator>() / 8;
+            for i in 0..alloc_qwords {
+                core::ptr::write_volatile(alloc_ptr.add(i), 0u64);
+            }
+            serial::write_str("rux: zeroing done\n");
+
+            let alloc = &mut *(0x400000 as *mut rux_mm::frame::BuddyAllocator);
+            serial::write_str("rux: calling init...\n");
+            alloc.init(rux_klib::PhysAddr::new(alloc_base), frames);
+            serial::write_str("rux: init done\n");
+
+            use rux_mm::FrameAllocator;
+            let page = alloc.alloc(rux_mm::PageSize::FourK).expect("alloc failed");
+            serial::write_str("rux: alloc at ");
+            write_hex_serial(page.as_usize());
+            serial::write_str("\n");
+            alloc.dealloc(page, rux_mm::PageSize::FourK);
+            serial::write_str("rux: dealloc OK\n");
+        }
+    }
+
     // ── Context switch test ─────────────────────────────────────────────
     // Create a second kernel task on a separate stack. Switch to it,
     // it prints a message, switches back. Proves context_switch works.
@@ -107,6 +179,12 @@ extern "C" fn task_b_entry() {
 /// Reference to main task's saved RSP (set during context switch).
 /// Task B reads this to switch back.
 static mut MAIN_RSP: u64 = 0;
+
+fn write_hex_serial(n: usize) {
+    serial::write_str("0x");
+    let mut buf = [0u8; 16];
+    write_hex_buf(&mut buf, n);
+}
 
 fn write_hex_buf(buf: &mut [u8; 16], mut n: usize) {
     if n == 0 {

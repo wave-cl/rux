@@ -13,6 +13,7 @@ rust-objcopy --output-target=elf32-i386 ${KERNEL} ${KERNEL}.elf32
 
 # Run
 exec ${QEMU} \
+  -cpu Haswell \
   -kernel ${KERNEL}.elf32 \
   -serial mon:stdio \
   -display none \

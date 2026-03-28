@@ -30,11 +30,13 @@ multiboot_header:
 .code32
 .global _start
 _start:
-    /* Save multiboot info pointer (ebx) */
-    movl %ebx, %edi
-
     /* Disable interrupts */
     cli
+
+    /* Save multiboot info pointer (ebx) to esi — edi will be clobbered
+     * by the page table setup (rep stosl uses edi). esi is preserved
+     * through the page table init and long mode transition. */
+    movl %ebx, %esi
 
     /* Set up temporary page tables for identity map of first 2GB
      * using 2MB huge pages (only need PML4 → PDPT → PD, no PT level)
@@ -110,9 +112,11 @@ long_mode_entry:
     /* Set up stack (grows down from top of boot_stack) */
     movabs $boot_stack_top, %rsp
 
-    /* Restore multiboot info pointer (was saved in edi, now in rdi for SysV ABI) */
-    /* edi was set before paging — still valid since we identity-mapped */
-    movl %edi, %edi              /* zero-extend edi to rdi */
+    /* NOTE: Do NOT zero BSS here — boot page tables and stack are in .bss.
+     * Zeroing would destroy the active page tables and triple-fault. */
+
+    /* Restore multiboot info pointer from esi into rdi (SysV ABI first arg) */
+    movl %esi, %edi              /* zero-extend esi to rdi */
 
     /* Call Rust entry point: kernel_main(multiboot_info: usize) */
     call kernel_main
