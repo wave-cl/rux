@@ -284,8 +284,9 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, _frame: *cons
             panic!("Page fault at {:#x} (error_code={:#x})", cr2, error_code);
         }
         32 => {
-            // Timer tick — will be handled by the scheduler later
-            // For now, just acknowledge
+            // Timer tick
+            super::pit::tick();
+            unsafe { super::pit::ack(); }
         }
         _ => {
             // Unhandled vector — print and continue

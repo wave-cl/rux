@@ -23,9 +23,24 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
     unsafe { x86_64::idt::init(); }
     serial::write_str("rux: IDT loaded\n");
 
-    // Test: enable interrupts briefly (should not crash since no IRQs are unmasked)
-    // unsafe { core::arch::asm!("sti"); }
-    // serial::write_str("rux: interrupts enabled\n");
+    // Initialize PIT timer at 1000 Hz
+    unsafe { x86_64::pit::init(1000); }
+    serial::write_str("rux: PIT timer initialized (1000 Hz)\n");
+
+    // Enable interrupts
+    unsafe { core::arch::asm!("sti", options(nostack, preserves_flags)); }
+    serial::write_str("rux: interrupts enabled\n");
+
+    // Wait for some timer ticks
+    let start = x86_64::pit::ticks();
+    while x86_64::pit::ticks() < start + 100 {
+        core::hint::spin_loop();
+    }
+    let elapsed = x86_64::pit::ticks() - start;
+    serial::write_str("rux: timer test OK (");
+    let mut buf = [0u8; 10];
+    serial::write_str(write_u32(&mut buf, elapsed as u32));
+    serial::write_str(" ticks)\n");
 
     serial::write_str("rux: all checks passed\n");
     exit::exit_qemu(exit::EXIT_SUCCESS);
