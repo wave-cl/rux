@@ -24,9 +24,11 @@ pub fn handle_syscall(frame: *mut u8) {
         let arg2 = *regs.add(2);        // x2
 
         let result: i64 = match syscall_nr {
+            56 => syscall_open(arg0),                   // openat (path in x0)
+            57 => crate::fdtable::sys_close(arg0 as usize), // close
+            61 => syscall_getdents(arg0, arg1),        // getdents64
             63 => syscall_read(arg0, arg1, arg2),    // read
             64 => syscall_write(arg0, arg1, arg2),  // write
-            61 => syscall_getdents(arg0, arg1),        // getdents64
             93 => syscall_exit(arg0 as i32),          // exit
             220 => syscall_vfork(regs),               // vfork
             221 => { syscall_exec(arg0); 0 }          // execve
@@ -39,16 +41,28 @@ pub fn handle_syscall(frame: *mut u8) {
     }
 }
 
-/// read(fd, buf, len) — fd=0 reads from serial console.
-fn syscall_read(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd != 0 { return -9; } // only stdin
+fn syscall_open(path_ptr: u64) -> i64 {
     unsafe {
-        let ptr = buf as *mut u8;
-        for i in 0..len as usize {
-            *ptr.add(i) = serial::read_byte();
-        }
+        let cstr = path_ptr as *const u8;
+        let mut len = 0usize;
+        while *cstr.add(len) != 0 && len < 256 { len += 1; }
+        let path = core::slice::from_raw_parts(cstr, len);
+        crate::fdtable::sys_open(path)
     }
-    len as i64
+}
+
+/// read(fd, buf, len) — fd=0 reads from serial, fd>=3 reads from file.
+fn syscall_read(fd: u64, buf: u64, len: u64) -> i64 {
+    if fd == 0 {
+        unsafe {
+            let ptr = buf as *mut u8;
+            for i in 0..len as usize {
+                *ptr.add(i) = serial::read_byte();
+            }
+        }
+        return len as i64;
+    }
+    crate::fdtable::sys_read_fd(fd as usize, buf as *mut u8, len as usize)
 }
 
 /// write(fd, buf, len) — fd=1 or 2 writes to serial console.

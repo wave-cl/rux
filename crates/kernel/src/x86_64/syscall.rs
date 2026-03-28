@@ -14,6 +14,8 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let result: i64 = match syscall_nr {
             0 => syscall_read(arg0, arg1, arg2),
             1 => syscall_write(arg0, arg1, arg2),
+            2 => syscall_open(arg0),
+            3 => crate::fdtable::sys_close(arg0 as usize),
             39 => 1, // getpid
             57 => syscall_vfork(regs),
             59 => { syscall_exec(arg0); 0 }
@@ -28,14 +30,28 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
 }
 
 fn syscall_read(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd != 0 { return -9; } // only stdin
-    unsafe {
-        let ptr = buf as *mut u8;
-        for i in 0..len as usize {
-            *ptr.add(i) = serial::read_byte();
+    if fd == 0 {
+        // stdin: read from serial
+        unsafe {
+            let ptr = buf as *mut u8;
+            for i in 0..len as usize {
+                *ptr.add(i) = serial::read_byte();
+            }
         }
+        return len as i64;
     }
-    len as i64
+    // File fd
+    crate::fdtable::sys_read_fd(fd as usize, buf as *mut u8, len as usize)
+}
+
+fn syscall_open(path_ptr: u64) -> i64 {
+    unsafe {
+        let cstr = path_ptr as *const u8;
+        let mut len = 0usize;
+        while *cstr.add(len) != 0 && len < 256 { len += 1; }
+        let path = core::slice::from_raw_parts(cstr, len);
+        crate::fdtable::sys_open(path)
+    }
 }
 
 fn syscall_write(fd: u64, buf: u64, len: u64) -> i64 {

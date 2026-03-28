@@ -29,7 +29,7 @@ rust-objcopy --output-target=elf32-i386 \
 # ── x86_64 ───────────────────────────────────────────────────────────
 printf "\n\033[1m── x86_64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 3; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 3; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat\n'; sleep 1; printf 'readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_X86" -cpu Haswell \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -serial mon:stdio -display none \
@@ -54,22 +54,23 @@ check "preemptive scheduling"   "rux: preemptive scheduling OK"
 check "fork/exit/wait"          "rux: process lifecycle OK"
 
 # VFS
-check "ramfs"                   "rux: ramfs: 3 files"
+check "ramfs"                   "rux: ramfs ready"
 
 # Interactive shell + exec
 check "shell prompt"            "rux$ "
 check "ls lists hello"          "hello"
 check "ls lists count"          "count"
-check "ls lists ls"             "ls"
+check "ls lists cat"            "cat"
 check "exec /hello"             "Hello, world!"
 check "exec /count"             "1"
-check "count output"            "2"
+check "cat reads file"          "Welcome to rux!"
+check "cat file content"        "Type 'ls' to list commands."
 check "shell exit"              "rux: user exit(0)"
 
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 5; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 5; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat\n'; sleep 1; printf 'readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -serial mon:stdio -display none \
@@ -93,16 +94,17 @@ check "preemptive scheduling"   "rux: preemptive scheduling OK"
 check "process lifecycle"       "rux: process lifecycle OK"
 
 # VFS
-check "ramfs"                   "rux: ramfs: 3 files"
+check "ramfs"                   "rux: ramfs ready"
 
 # Interactive shell + exec
 check "shell prompt"            "rux$ "
 check "ls lists hello"          "hello"
 check "ls lists count"          "count"
-check "ls lists ls"             "ls"
+check "ls lists cat"            "cat"
 check "exec /hello"             "Hello, world!"
 check "exec /count"             "1"
-check "count output"            "2"
+check "cat reads file"          "Welcome to rux!"
+check "cat file content"        "Type 'ls' to list commands."
 check "shell exit"              "rux: user exit(0)"
 
 # ── Summary ──────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ mod scheduler;
 mod slab;
 mod elf;
 mod kstate;
+pub mod fdtable;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
@@ -262,7 +263,15 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     let ls_ino = fs.create(0, FileName::new(b"ls").unwrap(), 0o755).unwrap();
     fs.write(ls_ino, 0, ls_data).unwrap();
 
-    serial::write_str("rux: ramfs: 3 files\n");
+    let cat_data: &[u8] = include_bytes!("../../../user/cat_aarch64.elf");
+    let cat_ino = fs.create(0, FileName::new(b"cat").unwrap(), 0o755).unwrap();
+    fs.write(cat_ino, 0, cat_data).unwrap();
+
+    let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
+    let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
+    fs.write(rm_ino, 0, readme).unwrap();
+
+    serial::write_str("rux: ramfs ready\n");
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
@@ -727,7 +736,15 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let ls_ino = fs.create(0, FileName::new(b"ls").unwrap(), 0o755).unwrap();
     fs.write(ls_ino, 0, ls_data).unwrap();
 
-    serial::write_str("rux: ramfs: 3 files\n");
+    let cat_data: &[u8] = include_bytes!("../../../user/cat_x86_64.elf");
+    let cat_ino = fs.create(0, FileName::new(b"cat").unwrap(), 0o755).unwrap();
+    fs.write(cat_ino, 0, cat_data).unwrap();
+
+    let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
+    let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
+    fs.write(rm_ino, 0, readme).unwrap();
+
+    serial::write_str("rux: ramfs ready\n");
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
