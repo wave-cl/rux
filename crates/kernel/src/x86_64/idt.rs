@@ -287,6 +287,12 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, _frame: *cons
             // Timer tick
             super::pit::tick();
             unsafe { super::pit::ack(); }
+            // Scheduler tick: advance clock, set need_resched flag
+            // The actual context switch happens AFTER iretq (not inside the ISR)
+            unsafe {
+                let sched = crate::scheduler::get();
+                sched.tick(1_000_000);
+            }
         }
         _ => {
             // Unhandled vector — print and continue

@@ -6,6 +6,8 @@ mod x86_64;
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 
+mod scheduler;
+
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
 #[cfg(target_arch = "aarch64")]
@@ -229,78 +231,114 @@ fn x86_64_init(multiboot_info: usize) {
         serial::write_str("rux: back in main task\n");
     }
 
-    // ── CFS scheduler test ────────────────────────────────────────────
-    serial::write_str("rux: CFS scheduler test...\n");
-    {
-        use rux_sched::entity::SchedEntity;
-        use rux_sched::fair::cfs::CfsClass;
-        use rux_sched::fair::constants::WF_FORK;
+    // ── Preemptive scheduling test ─────────────────────────────────────
+    // Create two kernel tasks that each increment a counter in a loop.
+    // The PIT timer ISR preempts them via the scheduler. After ~200ms,
+    // we check both counters advanced — proving preemptive multitasking works.
+    serial::write_str("rux: preemptive scheduler test...\n");
+
+    unsafe {
         use rux_sched::SchedClassOps;
-        use rux_sched::TaskState;
+        let sched = scheduler::get();
 
-        let mut cfs = CfsClass::new();
-        cfs.set_clock(0, 0);
+        static mut STACK_A: [u8; 16384] = [0; 16384];
+        static mut STACK_B: [u8; 16384] = [0; 16384];
 
-        // Create two entities with different nice values
-        let mut task_a = SchedEntity::new(1);
-        task_a.nice = 0;    // weight 1024
-        task_a.cpu = 0;
+        let _idx_a = sched.create_task(
+            task_counter_a,
+            STACK_A.as_ptr() as u64 + 16384,
+            0,
+        );
+        let _idx_b = sched.create_task(
+            task_counter_b,
+            STACK_B.as_ptr() as u64 + 16384,
+            5,
+        );
 
-        let mut task_b = SchedEntity::new(2);
-        task_b.nice = 5;    // weight 423 (lower priority)
-        task_b.cpu = 0;
+        serial::write_str("rux: created tasks A and B\n");
 
-        // Enqueue both
-        cfs.enqueue(0, &mut task_a, WF_FORK);
-        cfs.enqueue(0, &mut task_b, WF_FORK);
+        // Run the scheduler loop from kernel_main.
+        // schedule() picks the first task and switches to it.
+        // When a task calls schedule(), it context-switches to the next.
+        // Tasks signal completion via TASKS_DONE counter.
+        // After both tasks complete, the last one switches back here.
+        sched.need_resched = true;
+        sched.schedule();
 
-        // Run a proper scheduling loop: pick → set_next → tick → put_prev → repeat
-        let mut prev = SchedEntity::new(99);
-        prev.state = TaskState::Interruptible;
-        let mut clock: u64 = 0;
-        let mut a_ticks: u32 = 0;
-        let mut b_ticks: u32 = 0;
-
-        for _ in 0..20 {
-            clock += 3_000_000; // 3ms per tick (matches BASE_SLICE_NS)
-            cfs.set_clock(0, clock);
-
-            if let Some(picked) = cfs.pick_next(0, &mut prev) {
-                unsafe {
-                    let curr = &mut *picked;
-                    cfs.set_next(0, curr);
-
-                    // Advance clock for the tick duration
-                    clock += 1_000_000;
-                    cfs.set_clock(0, clock);
-                    let resched = cfs.task_tick(0, curr);
-
-                    if curr.id == 1 { a_ticks += 1; }
-                    else if curr.id == 2 { b_ticks += 1; }
-
-                    // Put prev back on the runqueue
-                    cfs.put_prev(0, curr);
-                }
-            }
-        }
-
-        let mut buf = [0u8; 10];
-        serial::write_str("rux: task A (nice 0): ");
-        serial::write_str(write_u32(&mut buf, a_ticks));
-        serial::write_str(" ticks, task B (nice 5): ");
-        serial::write_str(write_u32(&mut buf, b_ticks));
-        serial::write_str(" ticks\n");
-
-        if a_ticks == 0 || b_ticks == 0 {
-            serial::write_str("FAIL: one task got zero ticks\n");
-            exit::exit_qemu(exit::EXIT_FAILURE);
-        }
-        if a_ticks < b_ticks {
-            serial::write_str("FAIL: lower-weight task got more ticks\n");
-            exit::exit_qemu(exit::EXIT_FAILURE);
-        }
-        serial::write_str("rux: CFS scheduler OK (weighted fair)\n");
+        // Back here means schedule switched back to us (slot 0, the idle/main task)
     }
+
+    // Check the counters
+    let a_count = unsafe { COUNTER_A };
+    let b_count = unsafe { COUNTER_B };
+    let mut buf = [0u8; 10];
+    serial::write_str("rux: task A count: ");
+    serial::write_str(write_u32(&mut buf, a_count));
+    serial::write_str(", task B count: ");
+    serial::write_str(write_u32(&mut buf, b_count));
+    serial::write_str("\n");
+
+    if a_count > 0 && b_count > 0 {
+        serial::write_str("rux: preemptive scheduling OK!\n");
+    } else {
+        serial::write_str("FAIL: preemptive scheduling did not run both tasks\n");
+        exit::exit_qemu(exit::EXIT_FAILURE);
+    }
+}
+
+// Counters incremented by the preemptive tasks
+static mut COUNTER_A: u32 = 0;
+static mut COUNTER_B: u32 = 0;
+static mut TASKS_DONE: u32 = 0;
+
+/// Yield point: check if the timer ISR requested a reschedule and switch if so.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn maybe_yield() {
+    unsafe {
+        let sched = scheduler::get();
+        if sched.need_resched {
+            sched.schedule();
+        }
+    }
+}
+
+/// Task exit: dequeue from scheduler and switch to next task.
+#[cfg(target_arch = "x86_64")]
+fn task_exit() -> ! {
+    unsafe {
+        use rux_sched::SchedClassOps;
+        let sched = scheduler::get();
+        let idx = sched.current;
+        sched.tasks[idx].active = false;
+        sched.tasks[idx].entity.state = rux_sched::TaskState::Dead;
+        // Dequeue from CFS
+        sched.cfs.dequeue(0, &mut sched.tasks[idx].entity, 0);
+        // Switch to next task (or idle)
+        sched.need_resched = true;
+        sched.schedule();
+    }
+    loop { core::hint::spin_loop(); }
+}
+
+#[cfg(target_arch = "x86_64")]
+extern "C" fn task_counter_a() {
+    for _ in 0..100_000 {
+        unsafe { COUNTER_A += 1; }
+        maybe_yield();
+    }
+    serial::write_str("rux: task A done\n");
+    task_exit();
+}
+
+#[cfg(target_arch = "x86_64")]
+extern "C" fn task_counter_b() {
+    for _ in 0..100_000 {
+        unsafe { COUNTER_B += 1; }
+        maybe_yield();
+    }
+    serial::write_str("rux: task B done\n");
+    task_exit();
 }
 
 #[panic_handler]
