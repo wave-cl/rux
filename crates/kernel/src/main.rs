@@ -8,6 +8,7 @@ mod aarch64;
 
 mod scheduler;
 mod slab;
+mod elf;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
@@ -179,43 +180,29 @@ fn aarch64_init(dtb_addr: usize) {
     }
 
     // ── User mode test ──────────────────────────────────────────────
-    // Embed a hand-assembled aarch64 hello world (svc #0 syscalls).
-    // No MMU — just place code at a physical address and eret to EL0.
-    serial::write_str("rux: preparing user mode...\n");
+    // ── User mode test (ELF loader) ────────────────────────────────
+    serial::write_str("rux: loading ELF binary...\n");
+
+    let elf_data: &[u8] = include_bytes!("../../../user/hello_aarch64.elf");
+
+    let elf_info = elf::parse_elf(elf_data).expect("ELF parse failed");
+
+    let mut buf = [0u8; 10];
+    serial::write_str("rux: ELF entry=");
+    write_hex_serial(elf_info.entry as usize);
+    serial::write_str(" segments=");
+    serial::write_str(write_u32(&mut buf, elf_info.num_segments as u32));
+    serial::write_str("\n");
 
     unsafe {
-        // aarch64 hello world binary (46 bytes):
-        //   write(1, "Hello, world!\n", 14) via svc #0 (x8=64)
-        //   exit(0) via svc #0 (x8=93)
-        #[rustfmt::skip]
-        let hello: &[u8] = &[
-            0x08, 0x08, 0x80, 0xd2, // mov x8, #64 (write)
-            0x20, 0x00, 0x80, 0xd2, // mov x0, #1 (stdout)
-            0xc1, 0x00, 0x00, 0x10, // adr x1, +24 (msg)
-            0xc2, 0x01, 0x80, 0xd2, // mov x2, #14 (len)
-            0x01, 0x00, 0x00, 0xd4, // svc #0
-            0xa8, 0x0b, 0x80, 0xd2, // mov x8, #93 (exit)
-            0x00, 0x00, 0x80, 0xd2, // mov x0, #0 (status)
-            0x01, 0x00, 0x00, 0xd4, // svc #0
-            // "Hello, world!\n"
-            b'H', b'e', b'l', b'l', b'o', b',', b' ',
-            b'w', b'o', b'r', b'l', b'd', b'!', b'\n',
-        ];
+        // Load segments directly to physical addresses (no MMU)
+        elf::load_segments(elf_data, &elf_info);
 
-        // Place binary at 0x42000000 (well above kernel at 0x40000000)
-        let code_addr = 0x42000000usize;
-        let dest = code_addr as *mut u8;
-        for (i, &b) in hello.iter().enumerate() {
-            core::ptr::write_volatile(dest.add(i), b);
-        }
-
-        // User stack at 0x42100000 (grows down)
+        // User stack
         let user_stack = 0x42100000u64;
 
         serial::write_str("rux: entering user mode...\n");
-
-        // Enter EL0 — eret sets ELR_EL1=entry, SPSR_EL1=EL0t, SP_EL0=stack
-        aarch64::syscall::enter_user_mode(code_addr as u64, user_stack);
+        aarch64::syscall::enter_user_mode(elf_info.entry, user_stack);
     }
 }
 
@@ -622,72 +609,114 @@ fn x86_64_init(multiboot_info: usize) {
         }
     }
 
-    // ── User mode test ──────────────────────────────────────────────────
-    // Embed a tiny hand-assembled hello world binary, map it at a user
-    // virtual address, map a user stack, enter ring 3 via iretq.
-    // The binary calls write(1, "Hello, world!\n", 14) then exit(0) via INT 0x80.
-    serial::write_str("rux: preparing user mode...\n");
+    // ── User mode test (ELF loader) ────────────────────────────────────
+    // Load a cross-compiled ELF binary, parse its PT_LOAD segments,
+    // map them at the correct virtual addresses, and enter user mode.
+    serial::write_str("rux: loading ELF binary...\n");
+
+    // Embedded ELF binary (cross-compiled for this architecture)
+    #[cfg(target_arch = "x86_64")]
+    let elf_data: &[u8] = include_bytes!("../../../user/hello_x86_64.elf");
+
+    serial::write_str("rux: ELF size=");
+    let mut buf = [0u8; 10];
+    serial::write_str(write_u32(&mut buf, elf_data.len() as u32));
+    serial::write_str(" first4=");
+    for i in 0..4 { write_hex_serial(elf_data[i] as usize); serial::write_str(","); }
+    serial::write_str("\n");
+
+    let elf_info = elf::parse_elf(elf_data).expect("ELF parse failed");
+
+    serial::write_str("rux: ELF entry=");
+    write_hex_serial(elf_info.entry as usize);
+    serial::write_str(" segments=");
+    serial::write_str(write_u32(&mut buf, elf_info.num_segments as u32));
+    serial::write_str("\n");
 
     unsafe {
         let alloc = &mut *(0x400000 as *mut rux_mm::frame::BuddyAllocator);
+        use rux_mm::FrameAllocator;
 
-        // Create a page table with kernel identity map + user pages
+        // Step 1: Allocate physical pages for each segment and copy data.
+        // Boot page tables identity-map 0-2GB, so physical addresses are writable.
+        // Track the physical page for each virtual page.
+        let mut seg_mappings: [(u64, rux_klib::PhysAddr, u32); 16] =
+            [(0, rux_klib::PhysAddr::new(0), 0); 16];
+        let mut map_count = 0;
+
+        for i in 0..elf_info.num_segments {
+            let seg = &elf_info.segments[i];
+            let vaddr_base = seg.vaddr & !0xFFF;
+            let vaddr_end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+            let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
+
+            let mut flags = rux_mm::MappingFlags::USER;
+            if seg.flags & elf::PF_R != 0 { flags = flags.or(rux_mm::MappingFlags::READ); }
+            if seg.flags & elf::PF_W != 0 { flags = flags.or(rux_mm::MappingFlags::WRITE); }
+            if seg.flags & elf::PF_X != 0 { flags = flags.or(rux_mm::MappingFlags::EXECUTE); }
+
+            for p in 0..num_pages {
+                let va = vaddr_base + (p as u64) * 4096;
+                let phys = alloc.alloc(rux_mm::PageSize::FourK).expect("seg page");
+                // Zero the page via boot identity map
+                let ptr = phys.as_usize() as *mut u8;
+                for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+                // Copy file data that falls within this page
+                let page_va_start = va;
+                let page_va_end = va + 4096;
+                if seg.file_offset + seg.filesz > 0 {
+                    let seg_file_start = seg.vaddr;
+                    let seg_file_end = seg.vaddr + seg.filesz;
+                    let copy_start = page_va_start.max(seg_file_start);
+                    let copy_end = page_va_end.min(seg_file_end);
+                    if copy_start < copy_end {
+                        let file_off = seg.file_offset + (copy_start - seg.vaddr);
+                        let dest_off = copy_start - page_va_start;
+                        let len = (copy_end - copy_start) as usize;
+                        let src = elf_data.as_ptr().add(file_off as usize);
+                        let dst = ptr.add(dest_off as usize);
+                        for j in 0..len { *dst.add(j) = *src.add(j); }
+                    }
+                }
+                if map_count < 16 {
+                    seg_mappings[map_count] = (va, phys, flags.0);
+                    map_count += 1;
+                }
+            }
+        }
+
+        // Step 2: Build user page table
         let mut upt = x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
 
-        // Kernel identity map (0-8 MiB, RWX, NO user bit)
+        // Kernel identity map (0-8 MiB, RWX, no USER)
         let kflags = rux_mm::MappingFlags::READ
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::EXECUTE);
         upt.identity_map_range(rux_klib::PhysAddr::new(0), 8 * 1024 * 1024, kflags, alloc)
             .expect("kernel map");
 
-        // User code page at virtual 0x0100_0000
-        use rux_mm::FrameAllocator;
-        let code_phys = alloc.alloc(rux_mm::PageSize::FourK).expect("code page");
-        let code_flags = rux_mm::MappingFlags::READ
-            .or(rux_mm::MappingFlags::EXECUTE)
-            .or(rux_mm::MappingFlags::USER);
-        upt.map_4k(rux_klib::VirtAddr::new(0x0100_0000), code_phys, code_flags, alloc)
-            .expect("map code");
+        // Map ELF segment pages (user virtual → physical)
+        for i in 0..map_count {
+            let (va, phys, flags_raw) = seg_mappings[i];
+            let flags = rux_mm::MappingFlags(flags_raw);
+            upt.map_4k(rux_klib::VirtAddr::new(va as usize), phys, flags, alloc)
+                .expect("map user seg");
+        }
 
-        // User stack page at virtual 0x01FF_F000
+        // Map user stack
         let stack_phys = alloc.alloc(rux_mm::PageSize::FourK).expect("stack page");
+        let stack_va = 0x7FFFF000u64;
         let stack_flags = rux_mm::MappingFlags::READ
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::USER);
-        upt.map_4k(rux_klib::VirtAddr::new(0x01FF_F000), stack_phys, stack_flags, alloc)
-            .expect("map stack");
+        upt.map_4k(
+            rux_klib::VirtAddr::new(stack_va as usize), stack_phys, stack_flags, alloc,
+        ).expect("map stack");
 
-        // Hand-assembled x86_64 hello world (56 bytes):
-        //   write(1, "Hello, world!\n", 14)  via INT 0x80
-        //   exit(0)                          via INT 0x80
-        #[rustfmt::skip]
-        let hello: &[u8] = &[
-            0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, // mov rax, 1 (write)
-            0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov rdi, 1 (stdout)
-            0x48, 0x8d, 0x35, 0x15, 0x00, 0x00, 0x00, // lea rsi, [rip+0x15] (msg)
-            0x48, 0xc7, 0xc2, 0x0e, 0x00, 0x00, 0x00, // mov rdx, 14 (len)
-            0xcd, 0x80,                                 // int 0x80
-            0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // mov rax, 60 (exit)
-            0x48, 0x31, 0xff,                           // xor rdi, rdi (status=0)
-            0xcd, 0x80,                                 // int 0x80
-            // "Hello, world!\n" (14 bytes)
-            b'H', b'e', b'l', b'l', b'o', b',', b' ',
-            b'w', b'o', b'r', b'l', b'd', b'!', b'\n',
-        ];
-
-        // Copy binary to the code page (identity mapped at code_phys)
-        let dest = code_phys.as_usize() as *mut u8;
-        for (i, &b) in hello.iter().enumerate() {
-            *dest.add(i) = b;
-        }
-
-        // Activate user page table
+        // Step 3: Activate and enter user mode
         upt.activate();
         serial::write_str("rux: entering user mode...\n");
-
-        // Enter ring 3 — never returns (exit syscall halts QEMU)
-        x86_64::syscall::enter_user_mode(0x0100_0000, 0x0200_0000);
+        x86_64::syscall::enter_user_mode(elf_info.entry, stack_va + 0x1000);
     }
 }
 
