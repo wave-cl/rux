@@ -150,6 +150,31 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
             serial::write_str("rux: unmap + re-translate OK\n");
 
             alloc.dealloc(frame, rux_mm::PageSize::FourK);
+
+            // ── Activate our own page tables ────────────────────────────
+            // Identity-map the first 32 MiB (covers kernel + allocator + stacks)
+            serial::write_str("rux: building kernel page tables...\n");
+            let mut kpt = x86_64::paging::PageTable4Level::new(alloc)
+                .expect("failed to create kernel page table");
+
+            let rwx = rux_mm::MappingFlags::READ
+                .or(rux_mm::MappingFlags::WRITE)
+                .or(rux_mm::MappingFlags::EXECUTE);
+            // Map first 8 MiB identity (0 → 0)
+            // Covers: kernel image (1-2MB), frame allocator struct (4MB),
+            // allocator data (2-6MB), BSS/stacks (1MB+), serial I/O ports
+            kpt.identity_map_range(
+                rux_klib::PhysAddr::new(0),
+                8 * 1024 * 1024,
+                rwx,
+                alloc,
+            ).expect("identity map failed");
+
+            serial::write_str("rux: identity mapped 0-8 MiB\n");
+
+            // Activate — switch CR3 to our page tables
+            kpt.activate();
+            serial::write_str("rux: CR3 switched to kernel page tables!\n");
         }
     }
 
@@ -178,6 +203,79 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
 
         // We're back! Task B switched back to us.
         serial::write_str("rux: back in main task\n");
+    }
+
+    // ── CFS scheduler test ────────────────────────────────────────────
+    serial::write_str("rux: CFS scheduler test...\n");
+    {
+        use rux_sched::entity::SchedEntity;
+        use rux_sched::fair::cfs::CfsClass;
+        use rux_sched::fair::constants::WF_FORK;
+        use rux_sched::SchedClassOps;
+        use rux_sched::TaskState;
+
+        let mut cfs = CfsClass::new();
+        cfs.set_clock(0, 0);
+
+        // Create two entities with different nice values
+        let mut task_a = SchedEntity::new(1);
+        task_a.nice = 0;    // weight 1024
+        task_a.cpu = 0;
+
+        let mut task_b = SchedEntity::new(2);
+        task_b.nice = 5;    // weight 423 (lower priority)
+        task_b.cpu = 0;
+
+        // Enqueue both
+        cfs.enqueue(0, &mut task_a, WF_FORK);
+        cfs.enqueue(0, &mut task_b, WF_FORK);
+
+        // Run a proper scheduling loop: pick → set_next → tick → put_prev → repeat
+        let mut prev = SchedEntity::new(99);
+        prev.state = TaskState::Interruptible;
+        let mut clock: u64 = 0;
+        let mut a_ticks: u32 = 0;
+        let mut b_ticks: u32 = 0;
+
+        for _ in 0..20 {
+            clock += 3_000_000; // 3ms per tick (matches BASE_SLICE_NS)
+            cfs.set_clock(0, clock);
+
+            if let Some(picked) = cfs.pick_next(0, &mut prev) {
+                unsafe {
+                    let curr = &mut *picked;
+                    cfs.set_next(0, curr);
+
+                    // Advance clock for the tick duration
+                    clock += 1_000_000;
+                    cfs.set_clock(0, clock);
+                    let resched = cfs.task_tick(0, curr);
+
+                    if curr.id == 1 { a_ticks += 1; }
+                    else if curr.id == 2 { b_ticks += 1; }
+
+                    // Put prev back on the runqueue
+                    cfs.put_prev(0, curr);
+                }
+            }
+        }
+
+        let mut buf = [0u8; 10];
+        serial::write_str("rux: task A (nice 0): ");
+        serial::write_str(write_u32(&mut buf, a_ticks));
+        serial::write_str(" ticks, task B (nice 5): ");
+        serial::write_str(write_u32(&mut buf, b_ticks));
+        serial::write_str(" ticks\n");
+
+        if a_ticks == 0 || b_ticks == 0 {
+            serial::write_str("FAIL: one task got zero ticks\n");
+            exit::exit_qemu(exit::EXIT_FAILURE);
+        }
+        if a_ticks < b_ticks {
+            serial::write_str("FAIL: lower-weight task got more ticks\n");
+            exit::exit_qemu(exit::EXIT_FAILURE);
+        }
+        serial::write_str("rux: CFS scheduler OK (weighted fair)\n");
     }
 
     serial::write_str("rux: all checks passed\n");

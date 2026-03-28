@@ -109,6 +109,41 @@ impl PageTable4Level {
         }
     }
 
+    /// Map a contiguous range of 4K pages: identity map phys → phys.
+    pub fn identity_map_range(
+        &mut self,
+        start: PhysAddr,
+        size: usize,
+        flags: MappingFlags,
+        alloc: &mut dyn FrameAllocator,
+    ) -> Result<(), MemoryError> {
+        let mut addr = start.as_usize() & !0xFFF; // page-align down
+        let end = (start.as_usize() + size + 0xFFF) & !0xFFF; // page-align up
+        while addr < end {
+            // Skip if already mapped (e.g., boot page tables overlap)
+            let virt = VirtAddr::new(addr);
+            if self.translate(virt).is_err() {
+                let _ = self.map_4k(virt, PhysAddr::new(addr), flags, alloc);
+            }
+            addr += 4096;
+        }
+        Ok(())
+    }
+
+    /// Load this page table into CR3, activating it.
+    ///
+    /// # Safety
+    /// The page table must identity-map all memory currently in use
+    /// (including the code executing this function, the stack, and
+    /// all data structures).
+    pub unsafe fn activate(&self) {
+        core::arch::asm!(
+            "mov cr3, {}",
+            in(reg) self.root.as_usize(),
+            options(nostack, preserves_flags)
+        );
+    }
+
     /// Unmap a single 4K page. Returns the physical address that was mapped.
     pub fn unmap_4k(&mut self, virt: VirtAddr) -> Result<PhysAddr, MemoryError> {
         unsafe {
