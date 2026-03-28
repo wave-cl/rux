@@ -56,7 +56,32 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             }
         }
         1 => {
-            // IRQ — dispatch to GIC handler
+            // IRQ from EL1 — dispatch to GIC handler
+            super::gic::handle_irq();
+        }
+        2 => {
+            // Synchronous exception from EL0 (user mode)
+            let ec = esr_ec(esr);
+            match ec {
+                0b010101 => {
+                    // SVC — syscall from user space
+                    super::syscall::handle_syscall(_frame as *mut u8);
+                }
+                0b100100 | 0b100101 => {
+                    panic_serial("User data abort at ", far);
+                }
+                0b100000 | 0b100001 => {
+                    panic_serial("User instruction abort at ", far);
+                }
+                _ => {
+                    super::serial::write_str("rux: user sync EC=");
+                    write_hex(ec as usize);
+                    super::serial::write_str("\n");
+                }
+            }
+        }
+        3 => {
+            // IRQ from EL0 — same GIC handler
             super::gic::handle_irq();
         }
         _ => {

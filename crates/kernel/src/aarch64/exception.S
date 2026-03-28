@@ -40,9 +40,9 @@ exception_vectors:
 
 /* ── Group 2: Lower EL, AArch64 (user → kernel) ───────────────────── */
 .balign 128
-    b       unhandled_exception     /* Synchronous */
+    b       sync_el0_handler        /* Synchronous (SVC from user) */
 .balign 128
-    b       unhandled_exception     /* IRQ */
+    b       irq_el0_handler         /* IRQ during user mode */
 .balign 128
     b       unhandled_exception     /* FIQ */
 .balign 128
@@ -123,6 +123,26 @@ sync_el1_handler:
 irq_el1_handler:
     save_context
     mov     x0, #1                  /* type = IRQ */
+    mov     x1, #0
+    mov     x2, #0
+    mov     x3, sp
+    bl      exception_dispatch
+    restore_context
+    eret
+
+sync_el0_handler:
+    save_context
+    mov     x0, #2                  /* type = sync from EL0 (user) */
+    mrs     x1, esr_el1
+    mrs     x2, far_el1
+    mov     x3, sp                  /* frame pointer */
+    bl      exception_dispatch
+    restore_context
+    eret
+
+irq_el0_handler:
+    save_context
+    mov     x0, #3                  /* type = IRQ from EL0 (user) */
     mov     x1, #0
     mov     x2, #0
     mov     x3, sp

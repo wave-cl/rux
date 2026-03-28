@@ -177,6 +177,46 @@ fn aarch64_init(dtb_addr: usize) {
         serial::write_str("FAIL: preemptive scheduling\n");
         exit::exit_qemu(exit::EXIT_FAILURE);
     }
+
+    // ── User mode test ──────────────────────────────────────────────
+    // Embed a hand-assembled aarch64 hello world (svc #0 syscalls).
+    // No MMU — just place code at a physical address and eret to EL0.
+    serial::write_str("rux: preparing user mode...\n");
+
+    unsafe {
+        // aarch64 hello world binary (46 bytes):
+        //   write(1, "Hello, world!\n", 14) via svc #0 (x8=64)
+        //   exit(0) via svc #0 (x8=93)
+        #[rustfmt::skip]
+        let hello: &[u8] = &[
+            0x08, 0x08, 0x80, 0xd2, // mov x8, #64 (write)
+            0x20, 0x00, 0x80, 0xd2, // mov x0, #1 (stdout)
+            0xc1, 0x00, 0x00, 0x10, // adr x1, +24 (msg)
+            0xc2, 0x01, 0x80, 0xd2, // mov x2, #14 (len)
+            0x01, 0x00, 0x00, 0xd4, // svc #0
+            0xa8, 0x0b, 0x80, 0xd2, // mov x8, #93 (exit)
+            0x00, 0x00, 0x80, 0xd2, // mov x0, #0 (status)
+            0x01, 0x00, 0x00, 0xd4, // svc #0
+            // "Hello, world!\n"
+            b'H', b'e', b'l', b'l', b'o', b',', b' ',
+            b'w', b'o', b'r', b'l', b'd', b'!', b'\n',
+        ];
+
+        // Place binary at 0x42000000 (well above kernel at 0x40000000)
+        let code_addr = 0x42000000usize;
+        let dest = code_addr as *mut u8;
+        for (i, &b) in hello.iter().enumerate() {
+            core::ptr::write_volatile(dest.add(i), b);
+        }
+
+        // User stack at 0x42100000 (grows down)
+        let user_stack = 0x42100000u64;
+
+        serial::write_str("rux: entering user mode...\n");
+
+        // Enter EL0 — eret sets ELR_EL1=entry, SPSR_EL1=EL0t, SP_EL0=stack
+        aarch64::syscall::enter_user_mode(code_addr as u64, user_stack);
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
