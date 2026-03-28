@@ -134,15 +134,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Keep interrupts disabled during syscall handling for now
     // (enabling would require saving/restoring more state on timer IRQ)
 
-    // Log syscalls
-    serial::write_str("sc[");
-    let mut nbuf = [0u8; 10];
-    serial::write_str(crate::write_u32(&mut nbuf, nr as u32));
-    serial::write_str("](");
-    crate::write_hex_serial(a0 as usize);
-    serial::write_str(",");
-    crate::write_hex_serial(a1 as usize);
-    serial::write_str(")");
+    // Minimal logging (only unknown syscalls logged in the match below)
 
     let result = match nr {
         // File I/O
@@ -192,6 +184,22 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         293 => -38,                                // pipe2 (TODO)
         302 => -38,                                // prlimit64 (stub)
         334 => -38,                                // rseq (stub)
+        24 => 0,                                   // sched_yield
+        35 => 0,                                   // nanosleep (stub)
+        37 => 0,                                   // alarm (stub)
+        48 => 0,                                   // shutdown (stub)
+        37 => 0,                                   // alarm
+        50 => -95,                                 // listen → -ENOTSUP
+        62 => 0,                                   // kill (stub: pretend it worked)
+        97 => 0,                                   // getrlimit (stub)
+        121 => 0,                                  // setdomainname (stub)
+        131 => -38,                                // sigaltstack (stub)
+        157 => 0,                                  // prctl (stub)
+        186 => 1,                                  // gettid → 1
+        200 => 0,                                  // tkill (stub)
+        202 => 0,                                  // futex (stub)
+        204 => 0,                                  // sched_getaffinity (stub)
+        273 => 0,                                  // set_robust_list (stub)
         _ => {
             serial::write_str("rux: unknown syscall ");
             let mut buf = [0u8; 10];
@@ -200,10 +208,6 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
             -38 // -ENOSYS
         }
     };
-
-    serial::write_str("=");
-    crate::write_hex_serial(result as usize);
-    serial::write_str("\n");
 
     result
 }
@@ -643,7 +647,9 @@ fn syscall_brk(addr: u64) -> i64 {
                 let flags = rux_mm::MappingFlags::READ
                     .or(rux_mm::MappingFlags::WRITE)
                     .or(rux_mm::MappingFlags::USER);
-                let _ = upt.map_4k(rux_klib::VirtAddr::new(pa as usize), frame, flags, alloc);
+                let va = rux_klib::VirtAddr::new(pa as usize);
+                let _ = upt.unmap_4k(va); // remove kernel identity mapping if present
+                let _ = upt.map_4k(va, frame, flags, alloc);
             }
 
             PROGRAM_BRK = addr;
@@ -653,20 +659,38 @@ fn syscall_brk(addr: u64) -> i64 {
 }
 
 fn syscall_mmap(addr: u64, len: u64, _prot: u64, flags: u64, _fd: u64) -> i64 {
-    // Minimal mmap stub: for anonymous private mappings, bump a counter
     unsafe {
-        static mut MMAP_BASE: u64 = 0x10000000; // start at 256 MiB
-        let map_flags = flags;
-        let _ = addr;
-        // MAP_ANONYMOUS = 0x20, MAP_PRIVATE = 0x02
-        if map_flags & 0x20 != 0 {
-            let aligned_len = (len + 0xFFF) & !0xFFF;
-            let result = MMAP_BASE;
-            MMAP_BASE += aligned_len;
-            // TODO: actually map pages
-            return result as i64;
+        use rux_mm::FrameAllocator;
+        static mut MMAP_BASE: u64 = 0x10000000;
+
+        // MAP_ANONYMOUS = 0x20
+        if flags & 0x20 == 0 {
+            return -12; // -ENOMEM (no file-backed mmap yet)
         }
-        -12 // -ENOMEM
+
+        let aligned_len = (len + 0xFFF) & !0xFFF;
+        let result = MMAP_BASE;
+        MMAP_BASE += aligned_len;
+
+        // Actually allocate and map pages
+        let alloc = crate::kstate::alloc();
+        let mut cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
+        let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+            rux_klib::PhysAddr::new(cr3 as usize));
+        let flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::USER);
+
+        for offset in (0..aligned_len).step_by(4096) {
+            let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("mmap page");
+            let ptr = frame.as_usize() as *mut u8;
+            for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+            let va = rux_klib::VirtAddr::new((result + offset) as usize);
+            let _ = upt.map_4k(va, frame, flags, alloc);
+        }
+
+        result as i64
     }
 }
 
@@ -703,6 +727,24 @@ fn syscall_ioctl(fd: u64, request: u64, arg: u64) -> i64 {
             }
             0
         }
+        TIOCGPGRP => {
+            // Return process group ID = 1
+            if arg != 0 {
+                unsafe { *(arg as *mut i32) = 1; }
+            }
+            0
+        }
+        TIOCSPGRP => 0, // ignore set pgrp
+        0x5401 => { // TCGETS (another variant)
+            if arg != 0 {
+                unsafe {
+                    let ptr = arg as *mut u8;
+                    for i in 0..60 { *ptr.add(i) = 0; }
+                }
+            }
+            0
+        }
+        0x5402 | 0x5403 | 0x5404 => 0, // TCSETS/TCSETSW/TCSETSF
         _ => -25 // -ENOTTY
     }
 }
