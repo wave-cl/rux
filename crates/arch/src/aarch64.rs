@@ -63,3 +63,23 @@ pub struct PageFaultInfo {
     pub is_permission_fault: bool,
     pub el: u8,
 }
+
+/// Save the current interrupt state and disable IRQs.
+/// Returns true if IRQs were enabled before disabling.
+#[inline(always)]
+pub fn save_irqs_and_disable() -> bool {
+    let daif: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, daif", out(reg) daif, options(nostack));
+        core::arch::asm!("msr daifset, #2", options(nostack)); // mask IRQ
+    }
+    daif & (1 << 7) == 0 // bit 7 = I (IRQ mask). 0 = enabled, 1 = masked
+}
+
+/// Restore interrupt state. Unmasks IRQs if `was_enabled` is true.
+#[inline(always)]
+pub fn restore_irqs(was_enabled: bool) {
+    if was_enabled {
+        unsafe { core::arch::asm!("msr daifclr, #2", options(nostack)); }
+    }
+}

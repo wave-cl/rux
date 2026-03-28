@@ -61,3 +61,28 @@ pub struct PageFaultInfo {
     pub user: bool,
     pub instruction_fetch: bool,
 }
+
+/// Save the current interrupt state and disable interrupts.
+/// Returns true if interrupts were enabled before disabling.
+#[inline(always)]
+pub fn save_irqs_and_disable() -> bool {
+    let flags: u64;
+    unsafe {
+        core::arch::asm!(
+            "pushfq",
+            "pop {}",
+            "cli",
+            out(reg) flags,
+            options(preserves_flags)
+        );
+    }
+    flags & (1 << 9) != 0 // bit 9 = IF (interrupt flag)
+}
+
+/// Restore interrupt state. Re-enables interrupts if `was_enabled` is true.
+#[inline(always)]
+pub fn restore_irqs(was_enabled: bool) {
+    if was_enabled {
+        unsafe { core::arch::asm!("sti", options(nostack, preserves_flags)); }
+    }
+}

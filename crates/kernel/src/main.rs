@@ -162,8 +162,8 @@ fn aarch64_init(dtb_addr: usize) {
         sched.schedule();
     }
 
-    let a_count = unsafe { COUNTER_A };
-    let b_count = unsafe { COUNTER_B };
+    let a_count = COUNTER_A.load(core::sync::atomic::Ordering::Relaxed);
+    let b_count = COUNTER_B.load(core::sync::atomic::Ordering::Relaxed);
     let mut buf = [0u8; 10];
     serial::write_str("rux: task A count: ");
     serial::write_str(write_u32(&mut buf, a_count));
@@ -220,7 +220,7 @@ fn aarch64_task_exit() -> ! {
 #[cfg(target_arch = "aarch64")]
 extern "C" fn aarch64_counter_a() {
     for _ in 0..100_000 {
-        unsafe { COUNTER_A += 1; }
+        COUNTER_A.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         aarch64_maybe_yield();
     }
     serial::write_str("rux: task A done\n");
@@ -230,7 +230,7 @@ extern "C" fn aarch64_counter_a() {
 #[cfg(target_arch = "aarch64")]
 extern "C" fn aarch64_counter_b() {
     for _ in 0..100_000 {
-        unsafe { COUNTER_B += 1; }
+        COUNTER_B.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         aarch64_maybe_yield();
     }
     serial::write_str("rux: task B done\n");
@@ -502,8 +502,8 @@ fn x86_64_init(multiboot_info: usize) {
     }
 
     // Check the counters
-    let a_count = unsafe { COUNTER_A };
-    let b_count = unsafe { COUNTER_B };
+    let a_count = COUNTER_A.load(core::sync::atomic::Ordering::Relaxed);
+    let b_count = COUNTER_B.load(core::sync::atomic::Ordering::Relaxed);
     let mut buf = [0u8; 10];
     serial::write_str("rux: task A count: ");
     serial::write_str(write_u32(&mut buf, a_count));
@@ -584,9 +584,8 @@ fn x86_64_init(multiboot_info: usize) {
 }
 
 // Counters incremented by the preemptive tasks
-static mut COUNTER_A: u32 = 0;
-static mut COUNTER_B: u32 = 0;
-static mut TASKS_DONE: u32 = 0;
+static COUNTER_A: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static COUNTER_B: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Yield point: check if the timer ISR requested a reschedule and switch if so.
 #[cfg(target_arch = "x86_64")]
@@ -621,7 +620,7 @@ fn task_exit() -> ! {
 #[cfg(target_arch = "x86_64")]
 extern "C" fn task_counter_a() {
     for _ in 0..100_000 {
-        unsafe { COUNTER_A += 1; }
+        COUNTER_A.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         maybe_yield();
     }
     serial::write_str("rux: task A done\n");
@@ -631,7 +630,7 @@ extern "C" fn task_counter_a() {
 #[cfg(target_arch = "x86_64")]
 extern "C" fn task_counter_b() {
     for _ in 0..100_000 {
-        unsafe { COUNTER_B += 1; }
+        COUNTER_B.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         maybe_yield();
     }
     serial::write_str("rux: task B done\n");

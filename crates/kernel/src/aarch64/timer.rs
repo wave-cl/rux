@@ -1,55 +1,44 @@
 /// ARM Generic Timer (EL1 physical timer).
-///
-/// Uses CNTP_TVAL_EL0 for countdown, CNTP_CTL_EL0 for control,
-/// CNTPCT_EL0 for current count, CNTFRQ_EL0 for frequency.
 
-static mut TICKS: u64 = 0;
-static mut FREQ: u64 = 0;
-static mut INTERVAL: u64 = 0;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-/// Initialize the generic timer at approximately `hz` frequency.
+static TICKS: AtomicU64 = AtomicU64::new(0);
+static FREQ: AtomicU64 = AtomicU64::new(0);
+static INTERVAL: AtomicU64 = AtomicU64::new(0);
+
 pub unsafe fn init(hz: u32) {
-    // Read timer frequency
     let freq: u64;
     core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nostack));
-    FREQ = freq;
+    FREQ.store(freq, Ordering::Relaxed);
 
-    // Calculate interval for desired Hz
-    INTERVAL = freq / hz as u64;
+    let interval = freq / hz as u64;
+    INTERVAL.store(interval, Ordering::Relaxed);
 
-    // Set the countdown timer
-    core::arch::asm!("msr cntp_tval_el0, {}", in(reg) INTERVAL, options(nostack));
-
-    // Enable the timer (bit 0 = enable, bit 1 = mask output)
+    core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval, options(nostack));
     core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 1u64, options(nostack));
 }
 
-/// Handle a timer tick (called from IRQ handler).
 pub fn handle_tick() {
+    TICKS.fetch_add(1, Ordering::Relaxed);
+
+    let interval = INTERVAL.load(Ordering::Relaxed);
     unsafe {
-        TICKS += 1;
+        core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval, options(nostack));
 
-        // Re-arm the timer for the next interval
-        core::arch::asm!("msr cntp_tval_el0, {}", in(reg) INTERVAL, options(nostack));
-
-        // Scheduler tick
         let sched = crate::scheduler::get();
-        sched.tick(1_000_000); // 1ms per tick at 1000 Hz
+        sched.tick(1_000_000);
     }
 }
 
-/// Get the current tick count.
 #[inline(always)]
 pub fn ticks() -> u64 {
-    unsafe { TICKS }
+    TICKS.load(Ordering::Relaxed)
 }
 
-/// Read current time in nanoseconds since boot.
 pub fn now_ns() -> u64 {
-    unsafe {
-        let count: u64;
-        core::arch::asm!("mrs {}, cntpct_el0", out(reg) count, options(nostack));
-        if FREQ == 0 { return 0; }
-        count * 1_000_000_000 / FREQ
-    }
+    let count: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) count, options(nostack)); }
+    let freq = FREQ.load(Ordering::Relaxed);
+    if freq == 0 { return 0; }
+    count * 1_000_000_000 / freq
 }

@@ -39,21 +39,15 @@ rustflags = [
 
 # ── aarch64 ───────────────────────────────────────────────────────────────
 #
-# target-cpu=apple-m1: ARMv8.5-A + LSE atomics + Apple-tuned scheduling.
+# target-cpu=generic: baseline ARMv8-A without LSE atomics, so the kernel
+# runs on both QEMU cortex-a72 AND Apple Silicon. LSE atomics (ldadd, cas)
+# require ARMv8.1-A; cortex-a72 is ARMv8.0-A and faults on them.
+# apple-m1 was used previously but generates ldadd that crashes on QEMU.
 #
-# NEON is architecturally mandatory on AArch64 — it cannot be suppressed.
-# The kernel must save/restore NEON/FP state (fpsimd_save_state) on every
-# context switch regardless. There is no +soft-float equivalent; the
-# AArch64 calling convention requires V0-V7 for float/SIMD arguments.
-#
-# No kernel-specific code model exists on aarch64 — PC-relative addressing
-# is native to the architecture (ADRP+ADD, ±4GB range).
-#
-# max-page-size=16384: Apple Silicon uses 16KB pages. Setting 4096 would
-# misalign ELF loadable segments, causing page faults or boot failure.
+# NEON is architecturally mandatory — cannot be suppressed.
 [target.aarch64-unknown-none]
 rustflags = [
-    "-C", "target-cpu=apple-m1",
+    "-C", "target-cpu=generic",
     "-C", "force-frame-pointers=no",
     "-C", "link-arg=-z", "-C", "link-arg=max-page-size=16384",
     "-C", "link-arg=--icf=all",
