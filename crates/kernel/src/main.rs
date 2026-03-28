@@ -393,7 +393,7 @@ fn x86_64_init(multiboot_info: usize) {
     if memmap.count > 0 {
         let region = &memmap.regions[best];
         let alloc_base = if region.base.as_usize() < 0x200000 {
-            0x400000usize
+            0x780000usize  // above busybox VA range (0x400000-0x714000)
         } else {
             region.base.as_usize()
         };
@@ -519,7 +519,7 @@ fn x86_64_init(multiboot_info: usize) {
             // allocator data (2-6MB), BSS/stacks (1MB+), serial I/O ports
             kpt.identity_map_range(
                 rux_klib::PhysAddr::new(0),
-                8 * 1024 * 1024,
+                16 * 1024 * 1024,
                 rwx,
                 alloc,
             ).expect("identity map failed");
@@ -716,13 +716,23 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let box_data: &[u8] = include_bytes!("../../../user/busybox_x86_64");
     rootfs::populate(fs, box_data);
 
+    // Verify paths resolve
+    match rux_vfs::path::resolve_path(fs, b"/etc/passwd") {
+        Ok(ino) => {
+            serial::write_str("rux: /etc/passwd = inode ");
+            let mut b = [0u8; 10];
+            serial::write_str(write_u32(&mut b, ino as u32));
+            serial::write_str("\n");
+        }
+        Err(_) => serial::write_str("rux: ERROR: /etc/passwd NOT FOUND!\n"),
+    }
+
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Boot: exec /sbin/init via VFS (supports large binaries like busybox)
     serial::write_str("rux: exec /sbin/init\n");
-    crate::execargs::set(b"/bin/busybox", b"");
+    crate::execargs::set(b"/bin/cat", b"/etc/passwd");
     let init_ino = rux_vfs::path::resolve_path(fs, b"/bin/busybox").expect("busybox not found");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
     elf::load_elf_from_inode(init_ino as u64, alloc);

@@ -117,15 +117,15 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Keep interrupts disabled during syscall handling for now
     // (enabling would require saving/restoring more state on timer IRQ)
 
-    // Log write syscalls to trace busybox I/O
-    if nr == 1 {
-        serial::write_str("W(fd=");
+    // Log all syscalls with first 2 args
+    {
         let mut nbuf = [0u8; 10];
-        serial::write_str(crate::write_u32(&mut nbuf, a0 as u32));
-        serial::write_str(",buf=");
+        serial::write_str("sc[");
+        serial::write_str(crate::write_u32(&mut nbuf, nr as u32));
+        serial::write_str("](");
+        crate::write_hex_serial(a0 as usize);
+        serial::write_str(",");
         crate::write_hex_serial(a1 as usize);
-        serial::write_str(",len=");
-        serial::write_str(crate::write_u32(&mut nbuf, a2 as u32));
         serial::write_str(")\n");
     }
 
@@ -205,6 +205,12 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         }
     };
 
+    // Log return value
+    {
+        serial::write_str("  =");
+        crate::write_hex_serial(result as usize);
+        serial::write_str("\n");
+    }
     result
 }
 
@@ -259,6 +265,9 @@ fn syscall_open(path_ptr: u64) -> i64 {
         let mut len = 0usize;
         while *cstr.add(len) != 0 && len < 256 { len += 1; }
         let path = core::slice::from_raw_parts(cstr, len);
+        serial::write_str("  open(\"");
+        serial::write_bytes(path);
+        serial::write_str("\")\n");
         crate::fdtable::sys_open(path)
     }
 }

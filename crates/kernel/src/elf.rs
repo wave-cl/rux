@@ -272,7 +272,7 @@ pub unsafe fn load_and_exec_elf(
     let kflags = MappingFlags::READ
         .or(MappingFlags::WRITE)
         .or(MappingFlags::EXECUTE);
-    upt.identity_map_range(PhysAddr::new(0), 8 * 1024 * 1024, kflags, alloc)
+    upt.identity_map_range(PhysAddr::new(0), 16 * 1024 * 1024, kflags, alloc)
         .expect("kernel map");
 
     // Map ELF segment pages (user virtual -> physical)
@@ -331,7 +331,7 @@ pub unsafe fn load_elf_from_inode(
     let kflags = MappingFlags::READ
         .or(MappingFlags::WRITE)
         .or(MappingFlags::EXECUTE);
-    upt.identity_map_range(PhysAddr::new(0), 8 * 1024 * 1024, kflags, alloc)
+    upt.identity_map_range(PhysAddr::new(0), 16 * 1024 * 1024, kflags, alloc)
         .expect("kernel map");
 
     // Step 2: Load each segment page-by-page from VFS
