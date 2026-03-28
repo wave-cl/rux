@@ -13,6 +13,11 @@ static mut SYSCALL_STACK: [u8; 65536] = [0; 65536];
 /// Saved user RSP during syscall (single-process, no swapgs needed).
 static mut SAVED_USER_RSP: u64 = 0;
 
+/// Debug: last RCX value before sysretq
+pub static mut DEBUG_RCX: u64 = 0;
+/// Debug: FS base before sysretq
+pub static mut DEBUG_FS: u64 = 0;
+
 /// Initialize the SYSCALL/SYSRET MSRs.
 pub unsafe fn init_syscall_msrs() {
     // IA32_STAR (0xC0000081): segment selectors
@@ -93,6 +98,21 @@ unsafe extern "C" fn syscall_entry() {
         "pop r11",        // user RFLAGS
         "pop rcx",        // user RIP
 
+        // Debug: save RCX and read FS base to check
+        "mov [rip + {debug_rcx}], rcx",
+        // Read IA32_FS_BASE to verify it persists
+        "push rcx",
+        "push rax",
+        "push rdx",
+        "mov ecx, 0xC0000100",
+        "rdmsr",
+        "shl rdx, 32",
+        "or rax, rdx",
+        "mov [rip + {debug_fs}], rax",
+        "pop rdx",
+        "pop rax",
+        "pop rcx",
+
         // Restore user stack
         "mov rsp, [rip + {saved_user_rsp}]",
 
@@ -102,6 +122,8 @@ unsafe extern "C" fn syscall_entry() {
         saved_user_rsp = sym SAVED_USER_RSP,
         syscall_stack = sym SYSCALL_STACK,
         handler = sym syscall_dispatch_linux,
+        debug_rcx = sym DEBUG_RCX,
+        debug_fs = sym DEBUG_FS,
     );
 }
 
@@ -111,6 +133,16 @@ unsafe extern "C" fn syscall_entry() {
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
     // Keep interrupts disabled during syscall handling for now
     // (enabling would require saving/restoring more state on timer IRQ)
+
+    // Log syscalls
+    serial::write_str("sc[");
+    let mut nbuf = [0u8; 10];
+    serial::write_str(crate::write_u32(&mut nbuf, nr as u32));
+    serial::write_str("](");
+    crate::write_hex_serial(a0 as usize);
+    serial::write_str(",");
+    crate::write_hex_serial(a1 as usize);
+    serial::write_str(")");
 
     let result = match nr {
         // File I/O
@@ -125,7 +157,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         11 => 0,                                   // munmap (stub)
         12 => syscall_brk(a0),                    // brk
         13 => syscall_rt_sigaction(a0, a1, a2),   // rt_sigaction
-        14 => 0,                                   // rt_sigprocmask (stub)
+        14 => syscall_rt_sigprocmask(a0, a1, a2, a3), // rt_sigprocmask
         16 => syscall_ioctl(a0, a1, a2),          // ioctl
         20 => syscall_writev(a0, a1, a2),         // writev
         21 => 0,                                   // access (stub: always OK)
@@ -169,7 +201,10 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         }
     };
 
-    // Interrupts already disabled (SFMASK clears IF on syscall entry)
+    serial::write_str("=");
+    crate::write_hex_serial(result as usize);
+    serial::write_str("\n");
+
     result
 }
 
@@ -572,22 +607,45 @@ pub extern "C" fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
 // ── Linux-specific syscall implementations ──────────────────────────
 
 /// Program break for brk() syscall.
-static mut PROGRAM_BRK: u64 = 0;
+pub static mut PROGRAM_BRK: u64 = 0;
 
 fn syscall_brk(addr: u64) -> i64 {
     unsafe {
         if PROGRAM_BRK == 0 {
-            // Initialize to a reasonable default (end of data segment area)
-            PROGRAM_BRK = 0x800000; // 8 MiB — well above typical ELF segments
+            // Should be set by load_elf_from_inode, but default to safe value
+            PROGRAM_BRK = 0x800000;
         }
         if addr == 0 {
             return PROGRAM_BRK as i64;
         }
-        if addr > PROGRAM_BRK {
-            // Grow: map new pages in the user page table
-            // For now, just track the break — pages are identity-mapped
-            // or will fault and need a proper page fault handler.
-            // TODO: actually map pages
+        if addr >= PROGRAM_BRK {
+            // Grow the break — we need to map new pages in the CURRENT
+            // user page table. For now, read the current CR3 and map pages.
+            let old_page = (PROGRAM_BRK + 0xFFF) & !0xFFF;
+            let new_page = (addr + 0xFFF) & !0xFFF;
+
+            // Allocate and map new pages
+            use rux_mm::FrameAllocator;
+            let alloc = crate::kstate::alloc();
+            let mut cr3: u64;
+            core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
+
+            for pa in (old_page..new_page).step_by(4096) {
+                let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("brk page");
+                // Zero the page
+                let ptr = frame.as_usize() as *mut u8;
+                for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+                // Map in current page table
+                // We need to walk the page table directly...
+                // For simplicity, use a PageTable4Level wrapper
+                let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+                    rux_klib::PhysAddr::new(cr3 as usize));
+                let flags = rux_mm::MappingFlags::READ
+                    .or(rux_mm::MappingFlags::WRITE)
+                    .or(rux_mm::MappingFlags::USER);
+                let _ = upt.map_4k(rux_klib::VirtAddr::new(pa as usize), frame, flags, alloc);
+            }
+
             PROGRAM_BRK = addr;
         }
         PROGRAM_BRK as i64
@@ -729,6 +787,19 @@ fn syscall_getcwd(buf: u64, size: u64) -> i64 {
     buf as i64
 }
 
+fn syscall_rt_sigprocmask(_how: u64, _set: u64, oldset: u64, sigsetsize: u64) -> i64 {
+    // Zero the old set if provided
+    if oldset != 0 && sigsetsize > 0 {
+        unsafe {
+            let ptr = oldset as *mut u8;
+            for i in 0..sigsetsize.min(128) as usize {
+                *ptr.add(i) = 0;
+            }
+        }
+    }
+    0
+}
+
 fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
     const ARCH_SET_FS: u64 = 0x1002;
     const ARCH_SET_GS: u64 = 0x1001;
@@ -739,12 +810,31 @@ fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
         match code {
             ARCH_SET_FS => {
                 // Set FS base via IA32_FS_BASE MSR (0xC0000100)
+                let lo = addr as u32;
+                let hi = (addr >> 32) as u32;
                 core::arch::asm!(
                     "wrmsr",
                     in("ecx") 0xC0000100u32,
-                    in("eax") addr as u32,
-                    in("edx") (addr >> 32) as u32,
+                    in("eax") lo,
+                    in("edx") hi,
+                    options(nostack),
                 );
+                // Verify: read it back
+                let mut v_lo: u32;
+                let mut v_hi: u32;
+                core::arch::asm!(
+                    "rdmsr",
+                    in("ecx") 0xC0000100u32,
+                    out("eax") v_lo,
+                    out("edx") v_hi,
+                    options(nostack),
+                );
+                let readback = ((v_hi as u64) << 32) | (v_lo as u64);
+                serial::write_str("  FS_BASE set=");
+                crate::write_hex_serial(addr as usize);
+                serial::write_str(" read=");
+                crate::write_hex_serial(readback as usize);
+                serial::write_str("\n");
                 0
             }
             ARCH_SET_GS => {

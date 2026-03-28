@@ -401,6 +401,20 @@ pub unsafe fn load_elf_from_inode(
     }
     let stack_top = stack_base + 4 * 4096;
 
+    // Set program break to end of last segment (for brk syscall)
+    {
+        let mut max_end: u64 = 0;
+        for i in 0..elf_info.num_segments {
+            let seg = &elf_info.segments[i];
+            let end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+            if end > max_end { max_end = end; }
+        }
+        crate::x86_64::syscall::PROGRAM_BRK = max_end;
+    }
+
+    // Unmap page 0 to catch NULL pointer dereferences
+    let _ = upt.unmap_4k(VirtAddr::new(0));
+
     // Step 4: Activate and enter user mode
     upt.activate();
     let user_sp = crate::execargs::write_to_stack(stack_top);
@@ -408,6 +422,12 @@ pub unsafe fn load_elf_from_inode(
     crate::write_hex_serial(elf_info.entry as usize);
     crate::serial::write_str(" sp=0x");
     crate::write_hex_serial(user_sp as usize);
+    // Verify stack contents
+    let sp_ptr = user_sp as *const u64;
+    crate::serial::write_str(" argc=");
+    crate::write_hex_serial(*sp_ptr as usize);
+    crate::serial::write_str(" argv0=0x");
+    crate::write_hex_serial(*sp_ptr.add(1) as usize);
     crate::serial::write_str("\n");
     crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }

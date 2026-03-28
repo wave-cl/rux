@@ -307,6 +307,10 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             crate::write_hex_serial(cr2 as usize);
             super::serial::write_str(" err=");
             crate::write_hex_serial(error_code as usize);
+            super::serial::write_str(" rcx=");
+            crate::write_hex_serial(unsafe { super::syscall::DEBUG_RCX } as usize);
+            super::serial::write_str(" fs=");
+            crate::write_hex_serial(unsafe { super::syscall::DEBUG_FS } as usize);
             super::serial::write_byte(b'\n');
             panic!("Page fault at {:#x} (error_code={:#x})", cr2, error_code);
         }

@@ -31,6 +31,11 @@ impl PageTable4Level {
         Ok(Self { root })
     }
 
+    /// Wrap an existing page table root (e.g., from CR3).
+    pub fn from_cr3(root: PhysAddr) -> Self {
+        Self { root }
+    }
+
     /// Get the root physical address (for CR3).
     pub fn root_phys(&self) -> PhysAddr {
         self.root
