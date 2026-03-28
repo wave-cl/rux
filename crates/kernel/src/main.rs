@@ -180,31 +180,61 @@ fn aarch64_init(dtb_addr: usize) {
         exit::exit_qemu(exit::EXIT_FAILURE);
     }
 
-    // ── User mode test ──────────────────────────────────────────────
-    // ── User mode test (ELF loader) ────────────────────────────────
-    serial::write_str("rux: loading ELF binary...\n");
+    // ── Shell via ramfs + vfork/exec/wait ─────────────────────────
+    unsafe { aarch64_init_ramfs_and_exec_shell(); }
+}
 
-    let elf_data: &[u8] = include_bytes!("../../../user/hello_aarch64.elf");
+/// Initialize ramfs, populate /hello, and run the shell on aarch64.
+#[cfg(target_arch = "aarch64")]
+#[inline(never)]
+unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
+    use rux_mm::FrameAllocator;
+    use rux_vfs::{FileSystem, FileName};
 
-    let elf_info = elf::parse_elf(elf_data).expect("ELF parse failed");
+    serial::write_str("rux: init ramfs...\n");
+
+    // Use fixed addresses for aarch64 (allocator at 0x43000000, ramfs after it)
+    let alloc_ptr = 0x43000000 as *mut rux_mm::frame::BuddyAllocator;
+    let alloc_size = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
+    let fs_addr = (0x43000000 + alloc_size + 0xFFF) & !0xFFF; // page-align
+    let fs_ptr = fs_addr as *mut rux_vfs::ramfs::RamFs;
+
+    // Zero the RamFs memory region
+    let fs_bytes = core::mem::size_of::<rux_vfs::ramfs::RamFs>();
+    let fs_qwords = (fs_bytes + 7) / 8;
+    for i in 0..fs_qwords {
+        core::ptr::write_volatile((fs_ptr as *mut u64).add(i), 0u64);
+    }
+    serial::write_str("rux: zeroing done\n");
+
+    // Initialize RamFs in place
+    let alloc_dyn: *mut dyn rux_mm::FrameAllocator =
+        &mut *alloc_ptr as &mut dyn rux_mm::FrameAllocator;
+    rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
+    let fs = &mut *fs_ptr;
+
+    // Populate /hello with the ELF binary
+    let hello_data: &[u8] = include_bytes!("../../../user/hello_aarch64.elf");
+    let hello_ino = fs.create(0, FileName::new(b"hello").unwrap(), 0o755).unwrap();
+    fs.write(hello_ino, 0, hello_data).unwrap();
 
     let mut buf = [0u8; 10];
-    serial::write_str("rux: ELF entry=");
-    write_hex_serial(elf_info.entry as usize);
-    serial::write_str(" segments=");
-    serial::write_str(write_u32(&mut buf, elf_info.num_segments as u32));
-    serial::write_str("\n");
+    serial::write_str("rux: ramfs: /hello (");
+    serial::write_str(write_u32(&mut buf, hello_data.len() as u32));
+    serial::write_str(" bytes)\n");
 
-    unsafe {
-        // Load segments directly to physical addresses (no MMU)
-        elf::load_segments(elf_data, &elf_info);
+    // Init kernel state
+    kstate::init(fs_ptr, alloc_ptr);
+    serial::write_str("rux: kernel state initialized\n");
 
-        // User stack
-        let user_stack = 0x42100000u64;
+    // Load and run the shell
+    serial::write_str("rux: loading shell...\n");
+    let shell_data: &[u8] = include_bytes!("../../../user/shell_aarch64.elf");
+    let shell_info = elf::parse_elf(shell_data).expect("shell parse failed");
+    elf::load_segments(shell_data, &shell_info);
 
-        serial::write_str("rux: entering user mode...\n");
-        aarch64::syscall::enter_user_mode(elf_info.entry, user_stack);
-    }
+    let user_stack = 0x42100000u64;
+    aarch64::syscall::enter_user_mode(shell_info.entry, user_stack);
 }
 
 #[cfg(target_arch = "aarch64")]

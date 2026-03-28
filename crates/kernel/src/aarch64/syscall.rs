@@ -1,14 +1,18 @@
 /// SVC syscall handler for aarch64.
 /// User code does `svc #0` which traps to EL1.
-/// Uses aarch64 Linux syscall numbers: write=64, exit=93.
+/// Uses aarch64 Linux syscall numbers: write=64, exit=93, vfork=220, execve=221, wait4=260.
 
 use super::serial;
 
+/// Exception frame layout from exception.S save_context:
+///   regs[0..30] = x0..x29  (each 8 bytes)
+///   regs[30] = x30 (lr)
+///   regs[31] = elr_el1 (user return address)
+///   regs[32] = spsr_el1
+/// Total: 34 u64s (272 bytes)
+const FRAME_REGS: usize = 34;
+
 /// Handle SVC from user mode. Called from exception_dispatch.
-///
-/// Frame layout (from exception.S save_context):
-///   [0]=x0, [8]=x1, ..., [64]=x8, ..., [240]=x30+elr, [256]=spsr
-///   Each register is 8 bytes, x0 at offset 0, x1 at offset 8, etc.
 pub fn handle_syscall(frame: *mut u8) {
     unsafe {
         let regs = frame as *mut u64;
@@ -20,8 +24,11 @@ pub fn handle_syscall(frame: *mut u8) {
         let arg2 = *regs.add(2);        // x2
 
         let result: i64 = match syscall_nr {
-            64 => syscall_write(arg0, arg1, arg2),  // write (aarch64 Linux)
-            93 => syscall_exit(arg0 as i32),         // exit (aarch64 Linux)
+            64 => syscall_write(arg0, arg1, arg2),  // write
+            93 => syscall_exit(arg0 as i32),          // exit
+            220 => syscall_vfork(regs),               // vfork
+            221 => { syscall_exec(arg0); 0 }          // execve
+            260 => syscall_wait(),                     // wait4
             _ => -38, // -ENOSYS
         };
 
@@ -44,13 +51,172 @@ fn syscall_write(fd: u64, buf: u64, len: u64) -> i64 {
     len as i64
 }
 
-/// exit(status) — terminate the user process.
+/// vfork — saves parent context, returns 0 to child.
+/// When child calls exit(), longjmp restores parent context
+/// and vfork returns the child PID to the parent.
+fn syscall_vfork(regs: *mut u64) -> i64 {
+    unsafe {
+        serial::write_str("rux: vfork()\n");
+
+        // Save the parent's entire exception frame before the child runs.
+        // The child's syscalls will overwrite this kernel stack area.
+        for i in 0..FRAME_REGS {
+            SAVED_PARENT_FRAME[i] = *regs.add(i);
+        }
+
+        // setjmp: save callee-saved registers + SP + return address
+        let val = vfork_setjmp(&raw mut VFORK_JMP);
+        if val == 0 {
+            // First return: child path. Set x0=0 in the frame.
+            *regs.add(0) = 0;
+            return 0; // eret will return to user mode as child with x0=0
+        } else {
+            // Second return (from longjmp in exit): parent path.
+            serial::write_str("rux: vfork parent resumed\n");
+
+            // Clear vfork state so exit() doesn't longjmp again
+            VFORK_JMP.sp = 0;
+
+            // Restore the parent's exception frame (child's syscalls overwrote it)
+            for i in 0..FRAME_REGS {
+                *regs.add(i) = SAVED_PARENT_FRAME[i];
+            }
+            // Set x0 in the frame to the child PID (vfork return value for parent)
+            *regs.add(0) = val as u64;
+
+            return val; // child PID
+        }
+    }
+}
+
+// setjmp/longjmp buffer: callee-saved regs + SP + LR
+#[repr(C)]
+struct JmpBuf {
+    x19: u64,
+    x20: u64,
+    x21: u64,
+    x22: u64,
+    x23: u64,
+    x24: u64,
+    x25: u64,
+    x26: u64,
+    x27: u64,
+    x28: u64,
+    x29: u64, // frame pointer
+    lr: u64,  // x30 / return address
+    sp: u64,
+}
+
+static mut VFORK_JMP: JmpBuf = JmpBuf {
+    x19: 0, x20: 0, x21: 0, x22: 0, x23: 0, x24: 0,
+    x25: 0, x26: 0, x27: 0, x28: 0, x29: 0, lr: 0, sp: 0,
+};
+
+// Saved parent exception frame (34 u64s)
+static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
+
+// setjmp/longjmp implemented in pure assembly for correctness
+core::arch::global_asm!(r#"
+// vfork_setjmp: saves callee-saved regs + SP + LR into JmpBuf.
+// Returns 0 on first call.
+// x0 = pointer to JmpBuf
+.global vfork_setjmp
+vfork_setjmp:
+    stp     x19, x20, [x0, #0]
+    stp     x21, x22, [x0, #16]
+    stp     x23, x24, [x0, #32]
+    stp     x25, x26, [x0, #48]
+    stp     x27, x28, [x0, #64]
+    stp     x29, x30, [x0, #80]   // x29=FP, x30=LR (return address)
+    mov     x2, sp
+    str     x2, [x0, #96]          // SP
+    mov     x0, #0                  // return 0
+    ret
+
+// vfork_longjmp: restores context from JmpBuf, makes setjmp return `val`.
+// x0 = pointer to JmpBuf, x1 = return value
+.global vfork_longjmp
+vfork_longjmp:
+    ldp     x19, x20, [x0, #0]
+    ldp     x21, x22, [x0, #16]
+    ldp     x23, x24, [x0, #32]
+    ldp     x25, x26, [x0, #48]
+    ldp     x27, x28, [x0, #64]
+    ldp     x29, x30, [x0, #80]   // restore FP + LR
+    ldr     x2, [x0, #96]
+    mov     sp, x2                  // restore SP
+    mov     x0, x1                  // return value
+    ret                             // jump to saved LR
+"#);
+
+extern "C" {
+    fn vfork_setjmp(buf: *mut JmpBuf) -> i64;
+    fn vfork_longjmp(buf: *mut JmpBuf, val: i64) -> !;
+}
+
+fn syscall_exec(path_ptr: u64) -> ! {
+    unsafe {
+        use rux_mm::FrameAllocator;
+        use rux_vfs::{FileSystem, InodeStat};
+
+        let fs = crate::kstate::fs();
+        let alloc = crate::kstate::alloc();
+
+        let path_cstr = path_ptr as *const u8;
+        let mut path_len = 0usize;
+        while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
+        let path = core::slice::from_raw_parts(path_cstr, path_len);
+
+        serial::write_str("rux: exec(\"");
+        serial::write_bytes(path);
+        serial::write_str("\")\n");
+
+        let ino = match rux_vfs::path::resolve_path(fs, path) {
+            Ok(ino) => ino,
+            Err(_) => { serial::write_str("rux: exec: not found\n"); loop {} }
+        };
+
+        let mut stat = core::mem::zeroed::<InodeStat>();
+        fs.stat(ino, &mut stat).unwrap();
+        let size = stat.size as usize;
+
+        // Read ELF from VFS
+        let buf_page = alloc.alloc(rux_mm::PageSize::FourK).expect("exec buf");
+        let buf = core::slice::from_raw_parts_mut(buf_page.as_usize() as *mut u8, 4096);
+        let n = fs.read(ino, 0, &mut buf[..size.min(4096)]).unwrap_or(0);
+
+        // Parse and load ELF directly to physical addresses (no MMU on aarch64)
+        let elf_info = crate::elf::parse_elf(&buf[..n]).expect("ELF parse failed");
+        crate::elf::load_segments(&buf[..n], &elf_info);
+
+        // User stack at a fixed location (different from shell's)
+        let user_stack = 0x42100000u64;
+
+        serial::write_str("rux: entering user mode...\n");
+        enter_user_mode(elf_info.entry, user_stack);
+    }
+}
+
 fn syscall_exit(status: i32) -> ! {
     serial::write_str("rux: user exit(");
     let mut buf = [0u8; 10];
     serial::write_str(crate::write_u32(&mut buf, status as u32));
     serial::write_str(")\n");
+
+    unsafe {
+        // If parent is blocked in vfork, resume it with child PID
+        if VFORK_JMP.sp != 0 {
+            vfork_longjmp(&raw mut VFORK_JMP, 42); // child PID = 42
+        }
+    }
+
     crate::aarch64::exit::exit_qemu(crate::aarch64::exit::EXIT_SUCCESS);
+}
+
+fn syscall_wait() -> i64 {
+    // vfork semantics: child already ran to completion before parent resumes.
+    serial::write_str("rux: wait() (child already exited)\n");
+    42
 }
 
 /// Enter user mode (EL0) via eret.

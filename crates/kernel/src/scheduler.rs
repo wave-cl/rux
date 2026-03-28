@@ -11,7 +11,7 @@ use rux_sched::SchedClassOps;
 use rux_sched::TaskState;
 
 /// Maximum kernel tasks.
-const MAX_TASKS: usize = 16;
+pub const MAX_TASKS: usize = 16;
 
 /// Per-task kernel state: the scheduling entity + kernel stack RSP.
 #[repr(C)]

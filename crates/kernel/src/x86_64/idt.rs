@@ -116,7 +116,9 @@ interrupt_common:
 
     call interrupt_dispatch
 
-    // Restore registers
+    // Restore registers — fork_child_return jumps here
+    .global interrupt_return
+interrupt_return:
     popq %r15
     popq %r14
     popq %r13
