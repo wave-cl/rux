@@ -19,6 +19,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             59 => { syscall_exec(arg0); 0 }
             60 => syscall_exit(arg0 as i32),
             61 => syscall_wait(),
+            78 => syscall_getdents(arg0, arg1),
             _ => -38,
         };
 
@@ -206,6 +207,38 @@ fn syscall_exit(status: i32) -> ! {
     }
 
     crate::x86_64::exit::exit_qemu(crate::x86_64::exit::EXIT_SUCCESS);
+}
+
+/// getdents(buf, bufsize) — list root directory entries into user buffer.
+/// Writes null-terminated filenames consecutively. Returns bytes written.
+fn syscall_getdents(buf_ptr: u64, bufsize: u64) -> i64 {
+    unsafe {
+        use rux_vfs::{FileSystem, DirEntry};
+
+        let fs = crate::kstate::fs();
+        let out = buf_ptr as *mut u8;
+        let mut pos = 0usize;
+        let mut offset = 0usize;
+        let limit = bufsize as usize;
+
+        loop {
+            let mut entry = core::mem::zeroed::<DirEntry>();
+            match fs.readdir(0, offset, &mut entry) {
+                Ok(true) => {
+                    let nlen = entry.name_len as usize;
+                    if pos + nlen + 1 > limit { break; }
+                    for i in 0..nlen {
+                        *out.add(pos + i) = entry.name[i];
+                    }
+                    *out.add(pos + nlen) = b'\n';
+                    pos += nlen + 1;
+                    offset += 1;
+                }
+                _ => break,
+            }
+        }
+        pos as i64
+    }
 }
 
 fn syscall_wait() -> i64 {

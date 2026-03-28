@@ -26,6 +26,7 @@ pub fn handle_syscall(frame: *mut u8) {
         let result: i64 = match syscall_nr {
             63 => syscall_read(arg0, arg1, arg2),    // read
             64 => syscall_write(arg0, arg1, arg2),  // write
+            61 => syscall_getdents(arg0, arg1),        // getdents64
             93 => syscall_exit(arg0 as i32),          // exit
             220 => syscall_vfork(regs),               // vfork
             221 => { syscall_exec(arg0); 0 }          // execve
@@ -226,6 +227,37 @@ fn syscall_exec(path_ptr: u64) -> ! {
 
         serial::write_str("rux: entering user mode...\n");
         crate::elf::load_and_exec_elf(&buf[..n], alloc);
+    }
+}
+
+/// getdents(buf, bufsize) — list root directory entries into user buffer.
+fn syscall_getdents(buf_ptr: u64, bufsize: u64) -> i64 {
+    unsafe {
+        use rux_vfs::{FileSystem, DirEntry};
+
+        let fs = crate::kstate::fs();
+        let out = buf_ptr as *mut u8;
+        let mut pos = 0usize;
+        let mut offset = 0usize;
+        let limit = bufsize as usize;
+
+        loop {
+            let mut entry = core::mem::zeroed::<DirEntry>();
+            match fs.readdir(0, offset, &mut entry) {
+                Ok(true) => {
+                    let nlen = entry.name_len as usize;
+                    if pos + nlen + 1 > limit { break; }
+                    for i in 0..nlen {
+                        *out.add(pos + i) = entry.name[i];
+                    }
+                    *out.add(pos + nlen) = b'\n';
+                    pos += nlen + 1;
+                    offset += 1;
+                }
+                _ => break,
+            }
+        }
+        pos as i64
     }
 }
 

@@ -258,12 +258,11 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     let count_ino = fs.create(0, FileName::new(b"count").unwrap(), 0o755).unwrap();
     fs.write(count_ino, 0, count_data).unwrap();
 
-    let mut buf = [0u8; 10];
-    serial::write_str("rux: ramfs: /hello (");
-    serial::write_str(write_u32(&mut buf, hello_data.len() as u32));
-    serial::write_str(" bytes), /count (");
-    serial::write_str(write_u32(&mut buf, count_data.len() as u32));
-    serial::write_str(" bytes)\n");
+    let ls_data: &[u8] = include_bytes!("../../../user/ls_aarch64.elf");
+    let ls_ino = fs.create(0, FileName::new(b"ls").unwrap(), 0o755).unwrap();
+    fs.write(ls_ino, 0, ls_data).unwrap();
+
+    serial::write_str("rux: ramfs: 3 files\n");
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
@@ -724,12 +723,11 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let count_ino = fs.create(0, FileName::new(b"count").unwrap(), 0o755).unwrap();
     fs.write(count_ino, 0, count_data).unwrap();
 
-    let mut buf = [0u8; 10];
-    serial::write_str("rux: ramfs: /hello (");
-    serial::write_str(write_u32(&mut buf, hello_data.len() as u32));
-    serial::write_str(" bytes), /count (");
-    serial::write_str(write_u32(&mut buf, count_data.len() as u32));
-    serial::write_str(" bytes)\n");
+    let ls_data: &[u8] = include_bytes!("../../../user/ls_x86_64.elf");
+    let ls_ino = fs.create(0, FileName::new(b"ls").unwrap(), 0o755).unwrap();
+    fs.write(ls_ino, 0, ls_data).unwrap();
+
+    serial::write_str("rux: ramfs: 3 files\n");
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
