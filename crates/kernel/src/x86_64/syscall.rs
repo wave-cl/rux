@@ -85,8 +85,18 @@ unsafe extern "C" fn syscall_entry() {
 
         "call {handler}",
 
-        // RAX has return value
-        "add rsp, 56",    // pop arg saves
+        // RAX has the syscall return value.
+        // Restore ALL caller-saved registers except RAX (which has return value).
+        // Linux syscall ABI: only RCX and R11 are clobbered. All others preserved.
+        // Stack: r9(sp), r8(sp+8), r10(sp+16), rdx(sp+24), rsi(sp+32), rdi(sp+40), rax(sp+48)
+        "mov [rsp + 48], rax", // store return value where rax was saved
+        "pop r9",
+        "pop r8",
+        "pop r10",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rax",        // return value (we wrote it above)
 
         // Restore callee-saved
         "pop r15",
