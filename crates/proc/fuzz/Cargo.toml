@@ -26,3 +26,8 @@ doc = false
 name = "sigqueue"
 path = "fuzz_targets/sigqueue.rs"
 doc = false
+
+[[bin]]
+name = "pidbitmap"
+path = "fuzz_targets/pidbitmap.rs"
+doc = false
