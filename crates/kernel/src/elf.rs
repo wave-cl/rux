@@ -294,3 +294,113 @@ pub unsafe fn load_and_exec_elf(
     upt.activate();
     crate::x86_64::syscall::enter_user_mode(elf_info.entry, stack_va + 0x1000);
 }
+
+/// aarch64 version: load ELF into user page table, enable, enter EL0.
+///
+/// # Safety
+/// Same preconditions as x86_64 version.
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn load_and_exec_elf(
+    elf_data: &[u8],
+    alloc: &mut dyn rux_mm::FrameAllocator,
+) -> ! {
+    use rux_klib::{PhysAddr, VirtAddr};
+    use rux_mm::{MappingFlags, PageSize};
+
+    let elf_info = parse_elf(elf_data).expect("ELF parse failed");
+
+    // Step 1: Allocate physical pages for each segment and copy data.
+    let mut seg_mappings: [(u64, PhysAddr, u32); 16] =
+        [(0, PhysAddr::new(0), 0); 16];
+    let mut map_count = 0;
+
+    for i in 0..elf_info.num_segments {
+        let seg = &elf_info.segments[i];
+        let vaddr_base = seg.vaddr & !0xFFF;
+        let vaddr_end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+        let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
+
+        let mut flags = MappingFlags::USER;
+        if seg.flags & PF_R != 0 { flags = flags.or(MappingFlags::READ); }
+        if seg.flags & PF_W != 0 { flags = flags.or(MappingFlags::WRITE); }
+        if seg.flags & PF_X != 0 { flags = flags.or(MappingFlags::EXECUTE); }
+
+        for p in 0..num_pages {
+            let va = vaddr_base + (p as u64) * 4096;
+            let phys = alloc.alloc(PageSize::FourK).expect("seg page");
+            let ptr = phys.as_usize() as *mut u8;
+            for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+            // Copy file data
+            if seg.file_offset + seg.filesz > 0 {
+                let seg_file_start = seg.vaddr;
+                let seg_file_end = seg.vaddr + seg.filesz;
+                let page_va_start = va;
+                let page_va_end = va + 4096;
+                let copy_start = page_va_start.max(seg_file_start);
+                let copy_end = page_va_end.min(seg_file_end);
+                if copy_start < copy_end {
+                    let file_off = seg.file_offset + (copy_start - seg.vaddr);
+                    let dest_off = copy_start - page_va_start;
+                    let len = (copy_end - copy_start) as usize;
+                    let src = elf_data.as_ptr().add(file_off as usize);
+                    let dst = ptr.add(dest_off as usize);
+                    for j in 0..len { *dst.add(j) = *src.add(j); }
+                }
+            }
+            if map_count < 16 {
+                seg_mappings[map_count] = (va, phys, flags.0);
+                map_count += 1;
+            }
+        }
+    }
+
+    // Step 2: Build user page table
+    let mut upt = crate::aarch64::paging::PageTable4Level::new(alloc).expect("user pt");
+
+    // Kernel identity map: 0x40000000-0x48000000 (128 MiB, RWX, no USER)
+    let kflags = MappingFlags::READ
+        .or(MappingFlags::WRITE)
+        .or(MappingFlags::EXECUTE);
+    upt.identity_map_range(PhysAddr::new(0x40000000), 128 * 1024 * 1024, kflags, alloc)
+        .expect("kernel map");
+
+    // Device mappings (GIC + UART) for interrupt handling from kernel
+    let dev_flags = MappingFlags::READ
+        .or(MappingFlags::WRITE)
+        .or(MappingFlags::NO_CACHE);
+    upt.identity_map_range(PhysAddr::new(0x08000000), 0x20000, dev_flags, alloc)
+        .expect("gic map");
+    upt.identity_map_range(PhysAddr::new(0x09000000), 0x1000, dev_flags, alloc)
+        .expect("uart map");
+
+    // Map ELF segment pages (user virtual -> physical)
+    for i in 0..map_count {
+        let (va, phys, flags_raw) = seg_mappings[i];
+        let flags = MappingFlags(flags_raw);
+        upt.map_4k(VirtAddr::new(va as usize), phys, flags, alloc)
+            .expect("map user seg");
+    }
+
+    // Map user stack
+    let stack_phys = alloc.alloc(PageSize::FourK).expect("stack page");
+    let stack_va = 0x7FFFF000u64;
+    let stack_flags = MappingFlags::READ
+        .or(MappingFlags::WRITE)
+        .or(MappingFlags::USER);
+    upt.map_4k(
+        VirtAddr::new(stack_va as usize), stack_phys, stack_flags, alloc,
+    ).expect("map stack");
+
+    // Step 3: Switch TTBR0 and enter user mode
+    // We set TTBR0_EL1 directly (MMU is already enabled from kernel init)
+    core::arch::asm!(
+        "msr ttbr0_el1, {}",
+        "isb",
+        "tlbi vmalle1is",
+        "dsb ish",
+        "isb",
+        in(reg) upt.root_phys().as_usize(),
+        options(nostack)
+    );
+    crate::aarch64::syscall::enter_user_mode(elf_info.entry, stack_va + 0x1000);
+}

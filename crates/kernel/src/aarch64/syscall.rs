@@ -74,6 +74,18 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             return 0; // eret will return to user mode as child with x0=0
         } else {
             // Second return (from longjmp in exit): parent path.
+            // Restore the parent's page table (exec replaced it)
+            if SAVED_TTBR0 != 0 {
+                core::arch::asm!(
+                    "msr ttbr0_el1, {}",
+                    "isb",
+                    "tlbi vmalle1is",
+                    "dsb ish",
+                    "isb",
+                    in(reg) SAVED_TTBR0,
+                    options(nostack)
+                );
+            }
             serial::write_str("rux: vfork parent resumed\n");
 
             // Clear vfork state so exit() doesn't longjmp again
@@ -122,6 +134,9 @@ static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
 
 // Saved parent SP_EL0 (user stack pointer) — not part of exception frame
 static mut SAVED_SP_EL0: u64 = 0;
+
+// Saved TTBR0_EL1 from before exec, so the parent can restore its page table
+static mut SAVED_TTBR0: u64 = 0;
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"
@@ -193,15 +208,11 @@ fn syscall_exec(path_ptr: u64) -> ! {
         let buf = core::slice::from_raw_parts_mut(buf_page.as_usize() as *mut u8, 4096);
         let n = fs.read(ino, 0, &mut buf[..size.min(4096)]).unwrap_or(0);
 
-        // Parse and load ELF directly to physical addresses (no MMU on aarch64)
-        let elf_info = crate::elf::parse_elf(&buf[..n]).expect("ELF parse failed");
-        crate::elf::load_segments(&buf[..n], &elf_info);
-
-        // User stack at a fixed location (different from shell's)
-        let user_stack = 0x42100000u64;
+        // Save current TTBR0 so the parent can restore its page table after exec
+        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) SAVED_TTBR0, options(nostack));
 
         serial::write_str("rux: entering user mode...\n");
-        enter_user_mode(elf_info.entry, user_stack);
+        crate::elf::load_and_exec_elf(&buf[..n], alloc);
     }
 }
 

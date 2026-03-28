@@ -108,6 +108,42 @@ fn aarch64_init(dtb_addr: usize) {
         alloc.dealloc(frame, rux_mm::PageSize::FourK);
         serial::write_str("rux: page table OK\n");
 
+        // Build kernel page tables and enable MMU
+        serial::write_str("rux: building kernel page tables...\n");
+        let rwx = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::EXECUTE);
+        let mut kpt = aarch64::paging::PageTable4Level::new(alloc).expect("kpt");
+        // QEMU virt: RAM at 0x40000000 (1 GiB). Identity map 0x40000000-0x48000000 (128 MiB)
+        // to cover kernel, BSS, stacks, allocator, and user-space ELF regions.
+        kpt.identity_map_range(
+            rux_klib::PhysAddr::new(0x40000000),
+            128 * 1024 * 1024,
+            rwx,
+            alloc,
+        ).expect("identity map");
+        // Also identity-map the GIC region (device memory) for interrupt handling
+        let dev_flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::NO_CACHE);
+        // GIC distributor at 0x08000000, CPU interface at 0x08010000
+        kpt.identity_map_range(
+            rux_klib::PhysAddr::new(0x08000000),
+            0x20000,
+            dev_flags,
+            alloc,
+        ).expect("gic map");
+        // UART at 0x09000000
+        kpt.identity_map_range(
+            rux_klib::PhysAddr::new(0x09000000),
+            0x1000,
+            dev_flags,
+            alloc,
+        ).expect("uart map");
+
+        kpt.activate();
+        serial::write_str("rux: MMU enabled, kernel page tables active!\n");
+
         // Process lifecycle
         let p = task_slab.alloc(alloc).expect("p") as *mut rux_proc::task::Task;
         core::ptr::write(p, rux_proc::task::Task::new(
@@ -233,14 +269,11 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Load and run the shell
+    // Load and run the shell (through page-table-based ELF loader)
     serial::write_str("rux: loading shell...\n");
     let shell_data: &[u8] = include_bytes!("../../../user/shell_aarch64.elf");
-    let shell_info = elf::parse_elf(shell_data).expect("shell parse failed");
-    elf::load_segments(shell_data, &shell_info);
-
-    let user_stack = 0x42100000u64;
-    aarch64::syscall::enter_user_mode(shell_info.entry, user_stack);
+    let alloc = &mut *alloc_ptr;
+    elf::load_and_exec_elf(shell_data, alloc);
 }
 
 #[cfg(target_arch = "aarch64")]
