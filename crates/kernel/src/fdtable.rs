@@ -11,13 +11,24 @@ const FD_STDERR: usize = 2;
 const FIRST_FILE_FD: usize = 3;
 
 #[derive(Clone, Copy)]
-struct OpenFile {
-    ino: u64,
-    offset: usize,
+pub struct OpenFile {
+    pub ino: u64,
+    pub offset: usize,
     active: bool,
 }
 
 static mut FD_TABLE: [OpenFile; MAX_FDS] = [OpenFile { ino: 0, offset: 0, active: false }; MAX_FDS];
+
+/// Get the inode for a file descriptor (for getdents to read directory).
+pub fn get_fd_inode(fd: usize) -> Option<u64> {
+    unsafe {
+        if fd < MAX_FDS && FD_TABLE[fd].active {
+            Some(FD_TABLE[fd].ino)
+        } else {
+            None
+        }
+    }
+}
 
 /// Open a file by path. Returns fd on success, negative errno on failure.
 pub fn sys_open(path: &[u8]) -> i64 {

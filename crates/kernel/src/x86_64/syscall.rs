@@ -117,7 +117,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Keep interrupts disabled during syscall handling for now
     // (enabling would require saving/restoring more state on timer IRQ)
 
-    // Syscall logging disabled for production
+    // Syscall logging disabled
 
     let result = match nr {
         // File I/O
@@ -145,7 +145,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         61 => syscall_wait(),                      // wait4
         63 => syscall_uname(a0),                   // uname
         72 => 0,                                   // fcntl (stub)
-        78 => syscall_getdents(a0, a1),           // getdents
+        78 => syscall_getdents64(a0, a1, a2),      // getdents
         79 => syscall_getcwd(a0, a1),             // getcwd
         80 => 0,                                   // chdir (stub)
         83 => unsafe { syscall_mkdir(a0) as i64 },// mkdir
@@ -158,7 +158,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         110 => 1,                                  // getppid
         111 => 1,                                  // getpgrp → return pid
         158 => syscall_arch_prctl(a0, a1),            // arch_prctl
-        217 => syscall_getdents(a0, a1),          // getdents64
+        217 => syscall_getdents64(a0, a1, a2),     // getdents64
         218 => 1,                                  // set_tid_address → return pid
         228 => syscall_clock_gettime(a0, a1),     // clock_gettime
         231 => unsafe { syscall_exit(a0 as i32) },// exit_group
@@ -220,7 +220,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             59 => { syscall_exec(arg0, arg1); 0 }
             60 => syscall_exit(arg0 as i32),
             61 => syscall_wait(),
-            78 => syscall_getdents(arg0, arg1),
+            78 => syscall_getdents64(arg0, arg1, arg2),
             _ => -38,
         };
 
@@ -543,32 +543,81 @@ fn syscall_exit(status: i32) -> ! {
 
 /// getdents(buf, bufsize) — list root directory entries into user buffer.
 /// Writes null-terminated filenames consecutively. Returns bytes written.
-fn syscall_getdents(buf_ptr: u64, bufsize: u64) -> i64 {
+/// Linux getdents64: write struct linux_dirent64 entries to user buffer.
+///
+/// struct linux_dirent64 {
+///     u64 d_ino;       // offset 0
+///     u64 d_off;       // offset 8 (offset to next entry)
+///     u16 d_reclen;    // offset 16
+///     u8  d_type;      // offset 18
+///     char d_name[];   // offset 19
+/// };
+fn syscall_getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
     unsafe {
-        use rux_vfs::{FileSystem, DirEntry};
+        use rux_vfs::{FileSystem, DirEntry, InodeType};
 
         let fs = crate::kstate::fs();
         let out = buf_ptr as *mut u8;
-        let mut pos = 0usize;
-        let mut offset = 0usize;
         let limit = bufsize as usize;
+        let mut pos = 0usize;
 
+        // Determine which directory inode to read from the fd
+        let dir_ino = if fd >= 3 {
+            match crate::fdtable::get_fd_inode(fd as usize) {
+                Some(ino) => ino,
+                None => return -9, // -EBADF
+            }
+        } else {
+            0 // root
+        };
+
+        // Use a static offset tracker per fd (simplified)
+        static mut DIR_OFFSET: [usize; 16] = [0; 16];
+        let off_idx = (fd as usize).min(15);
+        let mut offset = DIR_OFFSET[off_idx];
+
+        let start_pos = pos;
         loop {
             let mut entry = core::mem::zeroed::<DirEntry>();
-            match fs.readdir(0, offset, &mut entry) {
+            match fs.readdir(dir_ino, offset, &mut entry) {
                 Ok(true) => {
                     let nlen = entry.name_len as usize;
-                    if pos + nlen + 1 > limit { break; }
+                    // reclen = 19 (header) + nlen + 1 (null) + padding to 8-byte align
+                    let reclen = ((19 + nlen + 1) + 7) & !7;
+                    if pos + reclen > limit { break; }
+
+                    // d_ino
+                    *((out.add(pos)) as *mut u64) = entry.ino;
+                    // d_off (position for next readdir call)
+                    *((out.add(pos + 8)) as *mut u64) = (offset + 1) as u64;
+                    // d_reclen
+                    *((out.add(pos + 16)) as *mut u16) = reclen as u16;
+                    // d_type
+                    let dtype: u8 = match entry.kind {
+                        InodeType::File => 8,       // DT_REG
+                        InodeType::Directory => 4,  // DT_DIR
+                        InodeType::Symlink => 10,   // DT_LNK
+                        _ => 0,                     // DT_UNKNOWN
+                    };
+                    *out.add(pos + 18) = dtype;
+                    // d_name (null-terminated)
                     for i in 0..nlen {
-                        *out.add(pos + i) = entry.name[i];
+                        *out.add(pos + 19 + i) = entry.name[i];
                     }
-                    *out.add(pos + nlen) = b'\n';
-                    pos += nlen + 1;
+                    *out.add(pos + 19 + nlen) = 0;
+
+                    pos += reclen;
                     offset += 1;
                 }
                 _ => break,
             }
         }
+
+        DIR_OFFSET[off_idx] = offset;
+
+        // If we wrote nothing and there were no more entries, return 0 (end)
+        if pos == start_pos { return 0; }
+
         pos as i64
     }
 }
@@ -751,27 +800,89 @@ fn syscall_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> i64 {
     }
 }
 
-fn syscall_fstat(_fd: u64, buf: u64) -> i64 {
-    // Return a minimal stat struct (zeroed, regular file)
-    if buf != 0 {
+/// Fill a Linux struct stat (144 bytes) from VFS InodeStat.
+///
+/// Linux x86_64 struct stat layout:
+///   0:  st_dev      u64
+///   8:  st_ino      u64
+///  16:  st_nlink    u64
+///  24:  st_mode     u32
+///  28:  st_uid      u32
+///  32:  st_gid      u32
+///  36:  __pad0      u32
+///  40:  st_rdev     u64
+///  48:  st_size     i64
+///  56:  st_blksize  i64
+///  64:  st_blocks   i64
+///  72:  st_atime    u64
+///  80:  st_atime_ns u64
+///  88:  st_mtime    u64
+///  96:  st_mtime_ns u64
+/// 104:  st_ctime    u64
+/// 112:  st_ctime_ns u64
+unsafe fn fill_linux_stat(buf: u64, vfs_stat: &rux_vfs::InodeStat) {
+    let p = buf as *mut u8;
+    for i in 0..144 { *p.add(i) = 0; }
+
+    *(buf as *mut u64) = 0;                          // st_dev
+    *((buf + 8) as *mut u64) = vfs_stat.ino;         // st_ino
+    *((buf + 16) as *mut u64) = vfs_stat.nlink as u64; // st_nlink
+    *((buf + 24) as *mut u32) = vfs_stat.mode;       // st_mode
+    *((buf + 28) as *mut u32) = vfs_stat.uid;        // st_uid
+    *((buf + 32) as *mut u32) = vfs_stat.gid;        // st_gid
+    *((buf + 48) as *mut i64) = vfs_stat.size as i64; // st_size
+    *((buf + 56) as *mut i64) = 4096;                // st_blksize
+    *((buf + 64) as *mut i64) = vfs_stat.blocks as i64; // st_blocks
+}
+
+fn syscall_fstat(fd: u64, buf: u64) -> i64 {
+    if buf == 0 { return -14; } // -EFAULT
+    // For stdin/stdout/stderr, return a char device stat
+    if fd <= 2 {
         unsafe {
-            let ptr = buf as *mut u8;
-            for i in 0..144 { *ptr.add(i) = 0; } // sizeof(struct stat) = 144
-            // st_mode at offset 24: regular file + 0644
-            let mode_ptr = (buf + 24) as *mut u32;
-            *mode_ptr = 0o100644;
-            // st_blksize at offset 56
-            let blksz_ptr = (buf + 56) as *mut u64;
-            *blksz_ptr = 4096;
+            let p = buf as *mut u8;
+            for i in 0..144 { *p.add(i) = 0; }
+            *((buf + 24) as *mut u32) = 0o20666; // S_IFCHR | 0666
+            *((buf + 56) as *mut i64) = 4096;
         }
+        return 0;
+    }
+    // File fd — stat via VFS
+    // For now return generic file stat (TODO: look up inode from fd table)
+    unsafe {
+        let p = buf as *mut u8;
+        for i in 0..144 { *p.add(i) = 0; }
+        *((buf + 24) as *mut u32) = 0o100644;
+        *((buf + 56) as *mut i64) = 4096;
     }
     0
 }
 
 fn syscall_fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
-    // newfstatat: resolve path and stat it
-    // For now, treat like fstat with basic info
-    syscall_fstat(0, buf)
+    if buf == 0 { return -14; }
+    unsafe {
+        use rux_vfs::FileSystem;
+
+        // Read path string
+        let cstr = pathname as *const u8;
+        let mut len = 0usize;
+        while *cstr.add(len) != 0 && len < 256 { len += 1; }
+        let path = core::slice::from_raw_parts(cstr, len);
+
+        let fs = crate::kstate::fs();
+        let ino = match rux_vfs::path::resolve_path(fs, path) {
+            Ok(ino) => ino,
+            Err(_) => return -2, // -ENOENT
+        };
+
+        let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
+        if fs.stat(ino, &mut vfs_stat).is_err() {
+            return -2;
+        }
+
+        fill_linux_stat(buf, &vfs_stat);
+        0
+    }
 }
 
 fn syscall_openat(_dirfd: u64, pathname: u64) -> i64 {
