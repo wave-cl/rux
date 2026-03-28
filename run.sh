@@ -1,11 +1,14 @@
 #!/bin/sh
 set -e
 
+# Ensure rustup environment is loaded
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
 QEMU="${QEMU:-/opt/local/bin/qemu-system-x86_64}"
 TARGET="x86_64-unknown-none"
 KERNEL="target/${TARGET}/debug/rux-kernel"
 
-# Build
+# Build (rust-toolchain.toml selects nightly automatically)
 cargo build -p rux-kernel --target ${TARGET}
 
 # Convert to 32-bit ELF for QEMU multiboot
