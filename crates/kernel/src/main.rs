@@ -722,8 +722,8 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
 
     // Boot: exec /sbin/init via VFS (supports large binaries like busybox)
     serial::write_str("rux: exec /sbin/init\n");
-    crate::execargs::set(b"/bin/sh", b"");
-    let init_ino = rux_vfs::path::resolve_path(fs, b"/bin/sh").expect("sh not found");
+    crate::execargs::set(b"/bin/busybox", b"");
+    let init_ino = rux_vfs::path::resolve_path(fs, b"/bin/busybox").expect("busybox not found");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
     elf::load_elf_from_inode(init_ino as u64, alloc);
 }

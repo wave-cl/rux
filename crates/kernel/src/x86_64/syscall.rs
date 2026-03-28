@@ -98,21 +98,6 @@ unsafe extern "C" fn syscall_entry() {
         "pop r11",        // user RFLAGS
         "pop rcx",        // user RIP
 
-        // Debug: save RCX and read FS base to check
-        "mov [rip + {debug_rcx}], rcx",
-        // Read IA32_FS_BASE to verify it persists
-        "push rcx",
-        "push rax",
-        "push rdx",
-        "mov ecx, 0xC0000100",
-        "rdmsr",
-        "shl rdx, 32",
-        "or rax, rdx",
-        "mov [rip + {debug_fs}], rax",
-        "pop rdx",
-        "pop rax",
-        "pop rcx",
-
         // Restore user stack
         "mov rsp, [rip + {saved_user_rsp}]",
 
@@ -122,8 +107,6 @@ unsafe extern "C" fn syscall_entry() {
         saved_user_rsp = sym SAVED_USER_RSP,
         syscall_stack = sym SYSCALL_STACK,
         handler = sym syscall_dispatch_linux,
-        debug_rcx = sym DEBUG_RCX,
-        debug_fs = sym DEBUG_FS,
     );
 }
 
@@ -134,7 +117,17 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Keep interrupts disabled during syscall handling for now
     // (enabling would require saving/restoring more state on timer IRQ)
 
-    // Minimal logging (only unknown syscalls logged in the match below)
+    // Log write syscalls to trace busybox I/O
+    if nr == 1 {
+        serial::write_str("W(fd=");
+        let mut nbuf = [0u8; 10];
+        serial::write_str(crate::write_u32(&mut nbuf, a0 as u32));
+        serial::write_str(",buf=");
+        crate::write_hex_serial(a1 as usize);
+        serial::write_str(",len=");
+        serial::write_str(crate::write_u32(&mut nbuf, a2 as u32));
+        serial::write_str(")\n");
+    }
 
     let result = match nr {
         // File I/O
@@ -153,7 +146,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         16 => syscall_ioctl(a0, a1, a2),          // ioctl
         20 => syscall_writev(a0, a1, a2),         // writev
         21 => 0,                                   // access (stub: always OK)
-        33 => -38,                                 // dup2 (TODO)
+        33 => syscall_dup2(a0, a1),                // dup2
         39 => 1,                                   // getpid
         56 => { unsafe { syscall_vfork_from_linux(); } 0 } // clone (as vfork)
         57 => { unsafe { syscall_vfork_from_linux(); } 0 } // fork (as vfork)
@@ -173,6 +166,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         107 => 0,                                  // geteuid
         108 => 0,                                  // getegid
         110 => 1,                                  // getppid
+        111 => 1,                                  // getpgrp → return pid
         158 => syscall_arch_prctl(a0, a1),            // arch_prctl
         217 => syscall_getdents(a0, a1),          // getdents64
         218 => 1,                                  // set_tid_address → return pid
@@ -190,7 +184,9 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         48 => 0,                                   // shutdown (stub)
         37 => 0,                                   // alarm
         50 => -95,                                 // listen → -ENOTSUP
-        62 => 0,                                   // kill (stub: pretend it worked)
+        62 => 0,                                   // kill (stub)
+        109 => 0,                                  // setpgid (stub)
+        112 => 1,                                  // setsid → return pid
         97 => 0,                                   // getrlimit (stub)
         121 => 0,                                  // setdomainname (stub)
         131 => -38,                                // sigaltstack (stub)
@@ -268,8 +264,8 @@ fn syscall_open(path_ptr: u64) -> i64 {
 }
 
 fn syscall_write(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd == 1 || fd == 2 {
-        // stdout/stderr → serial
+    if fd <= 2 {
+        // stdin/stdout/stderr → serial (they share the same serial port)
         unsafe {
             let ptr = buf as *const u8;
             for i in 0..len as usize { serial::write_byte(*ptr.add(i)); }
@@ -827,6 +823,16 @@ fn syscall_getcwd(buf: u64, size: u64) -> i64 {
         *ptr.add(1) = 0;
     }
     buf as i64
+}
+
+fn syscall_dup2(oldfd: u64, newfd: u64) -> i64 {
+    // Simple dup2: for fd 0-2 (stdin/stdout/stderr), just return newfd
+    // For file fds, we'd need to duplicate the fd table entry
+    if oldfd <= 2 && newfd <= 2 {
+        return newfd as i64;
+    }
+    // For other fds, just pretend it worked
+    newfd as i64
 }
 
 fn syscall_rt_sigprocmask(_how: u64, _set: u64, oldset: u64, sigsetsize: u64) -> i64 {
