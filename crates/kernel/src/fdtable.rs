@@ -88,6 +88,29 @@ pub fn sys_read_fd(fd: usize, buf: *mut u8, len: usize) -> i64 {
     }
 }
 
+/// Write to a file descriptor. Returns bytes written, negative on error.
+pub fn sys_write_fd(fd: usize, buf: *const u8, len: usize) -> i64 {
+    if fd >= MAX_FDS {
+        return -9;
+    }
+    unsafe {
+        if !FD_TABLE[fd].active {
+            return -9;
+        }
+        let f = &mut FD_TABLE[fd];
+        let fs = crate::kstate::fs();
+
+        let user_buf = core::slice::from_raw_parts(buf, len);
+        match fs.write(f.ino, f.offset as u64, user_buf) {
+            Ok(n) => {
+                f.offset += n;
+                n as i64
+            }
+            Err(_) => -5,
+        }
+    }
+}
+
 /// Reset the fd table (called on exec to give child a clean slate).
 pub fn reset() {
     unsafe {

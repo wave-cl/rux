@@ -16,7 +16,9 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             1 => syscall_write(arg0, arg1, arg2),
             2 => syscall_open(arg0),
             3 => crate::fdtable::sys_close(arg0 as usize),
+            8 => syscall_creat(arg0), // creat
             39 => 1, // getpid
+            96 => super::pit::ticks() as i64, // gettimeofday → ticks
             57 => syscall_vfork(regs),
             59 => { syscall_exec(arg0, arg1); 0 }
             60 => syscall_exit(arg0 as i32),
@@ -55,12 +57,44 @@ fn syscall_open(path_ptr: u64) -> i64 {
 }
 
 fn syscall_write(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd != 1 && fd != 2 { return -9; }
-    unsafe {
-        let ptr = buf as *const u8;
-        for i in 0..len as usize { serial::write_byte(*ptr.add(i)); }
+    if fd == 1 || fd == 2 {
+        // stdout/stderr → serial
+        unsafe {
+            let ptr = buf as *const u8;
+            for i in 0..len as usize { serial::write_byte(*ptr.add(i)); }
+        }
+        return len as i64;
     }
-    len as i64
+    // File fd
+    crate::fdtable::sys_write_fd(fd as usize, buf as *const u8, len as usize)
+}
+
+fn syscall_creat(path_ptr: u64) -> i64 {
+    unsafe {
+        use rux_vfs::{FileSystem, FileName};
+
+        let cstr = path_ptr as *const u8;
+        let mut len = 0usize;
+        while *cstr.add(len) != 0 && len < 256 { len += 1; }
+
+        // Extract filename from path (skip leading '/')
+        let name_start = if len > 0 && *cstr == b'/' { 1 } else { 0 };
+        let name = core::slice::from_raw_parts(cstr.add(name_start), len - name_start);
+
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) {
+            Ok(f) => f,
+            Err(_) => return -22, // -EINVAL
+        };
+
+        match fs.create(0, fname, 0o644) {
+            Ok(ino) => {
+                // Auto-open the created file
+                crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
+            }
+            Err(_) => -17, // -EEXIST or other error
+        }
+    }
 }
 
 /// vfork — saves parent context, returns 0 to child.

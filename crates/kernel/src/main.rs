@@ -268,6 +268,18 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     let cat_ino = fs.create(0, FileName::new(b"cat").unwrap(), 0o755).unwrap();
     fs.write(cat_ino, 0, cat_data).unwrap();
 
+    let uname_data: &[u8] = include_bytes!("../../../user/uname_aarch64.elf");
+    let uname_ino = fs.create(0, FileName::new(b"uname").unwrap(), 0o755).unwrap();
+    fs.write(uname_ino, 0, uname_data).unwrap();
+
+    let uptime_data: &[u8] = include_bytes!("../../../user/uptime_aarch64.elf");
+    let uptime_ino = fs.create(0, FileName::new(b"uptime").unwrap(), 0o755).unwrap();
+    fs.write(uptime_ino, 0, uptime_data).unwrap();
+
+    let echo_data: &[u8] = include_bytes!("../../../user/echo_aarch64.elf");
+    let echo_ino = fs.create(0, FileName::new(b"echo").unwrap(), 0o755).unwrap();
+    fs.write(echo_ino, 0, echo_data).unwrap();
+
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
     let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
     fs.write(rm_ino, 0, readme).unwrap();
@@ -740,6 +752,18 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let cat_data: &[u8] = include_bytes!("../../../user/cat_x86_64.elf");
     let cat_ino = fs.create(0, FileName::new(b"cat").unwrap(), 0o755).unwrap();
     fs.write(cat_ino, 0, cat_data).unwrap();
+
+    let uname_data: &[u8] = include_bytes!("../../../user/uname_x86_64.elf");
+    let uname_ino = fs.create(0, FileName::new(b"uname").unwrap(), 0o755).unwrap();
+    fs.write(uname_ino, 0, uname_data).unwrap();
+
+    let uptime_data: &[u8] = include_bytes!("../../../user/uptime_x86_64.elf");
+    let uptime_ino = fs.create(0, FileName::new(b"uptime").unwrap(), 0o755).unwrap();
+    fs.write(uptime_ino, 0, uptime_data).unwrap();
+
+    let echo_data: &[u8] = include_bytes!("../../../user/echo_x86_64.elf");
+    let echo_ino = fs.create(0, FileName::new(b"echo").unwrap(), 0o755).unwrap();
+    fs.write(echo_ino, 0, echo_data).unwrap();
 
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
     let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
