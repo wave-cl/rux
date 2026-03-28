@@ -224,18 +224,17 @@ const _: () = assert!(core::mem::size_of::<InodeStat>() == 80);
 // ── DirEntry (readdir) — written in place, not returned ─────────────────
 
 /// Directory entry for readdir. Written in place via `&mut DirEntry`.
-/// Name buffer is 64 bytes (covers >99% of real filenames without
-/// wasting 256 bytes of stack per call).
+/// Name buffer matches NAME_MAX (255) + 1 null = 256 bytes.
 #[repr(C)]
 pub struct DirEntry {
     pub ino: InodeId,
     pub kind: InodeType,
     pub name_len: u8,
     pub _pad: [u8; 6],
-    pub name: [u8; 64],
+    pub name: [u8; 256],
 }
 
-const _: () = assert!(core::mem::size_of::<DirEntry>() == 80);
+const _: () = assert!(core::mem::size_of::<DirEntry>() == 272);
 
 // ── Inode traits ────────────────────────────────────────────────────────
 
