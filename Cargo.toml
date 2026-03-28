@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["crates/sched/fuzz", "crates/proc/fuzz", "crates/mm/fuzz", "crates/boot-image"]
+exclude = ["crates/sched/fuzz", "crates/proc/fuzz", "crates/mm/fuzz", "crates/vfs/fuzz", "crates/boot-image"]
 default-members = ["crates/*"]
 
 [profile.release]

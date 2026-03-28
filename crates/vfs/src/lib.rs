@@ -1,5 +1,8 @@
 #![no_std]
 
+pub mod ramfs;
+pub mod path;
+
 // ── POSIX constants ─────────────────────────────────────────────────────
 
 pub const PATH_MAX: usize = 4096;
@@ -163,7 +166,7 @@ pub type InodeId = u64;
 /// A validated file name component (no '/', no '\0', length ≤ NAME_MAX).
 /// Created once at the syscall boundary, then passed through the VFS
 /// without re-validation. Zero-cost: just a &[u8] with an invariant.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileName<'a> {
     bytes: &'a [u8],
 }
@@ -335,4 +338,125 @@ pub trait FileSystem {
     // ── Attribute operations ────────────────────────────────────────
     fn chmod(&mut self, ino: InodeId, mode: u32) -> Result<(), VfsError>;
     fn chown(&mut self, ino: InodeId, uid: u32, gid: u32) -> Result<(), VfsError>;
+}
+
+// ── Contract tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inode_type_to_mode_roundtrip() {
+        let types = [
+            InodeType::File,
+            InodeType::Directory,
+            InodeType::Symlink,
+            InodeType::CharDevice,
+            InodeType::BlockDevice,
+            InodeType::Pipe,
+            InodeType::Socket,
+        ];
+        for &t in &types {
+            let mode = t.to_mode();
+            let back = InodeType::from_mode(mode).unwrap();
+            assert_eq!(back, t);
+        }
+    }
+
+    #[test]
+    fn inode_type_from_mode_invalid() {
+        assert!(InodeType::from_mode(0).is_none());
+        assert!(InodeType::from_mode(0o170000).is_none()); // exact S_IFMT mask
+    }
+
+    #[test]
+    fn open_flags_or_and_contains() {
+        let flags = OpenFlags::CREAT.or(OpenFlags::RDWR);
+        assert!(flags.contains(OpenFlags::CREAT));
+        assert!(flags.contains(OpenFlags::RDWR));
+        assert!(!flags.contains(OpenFlags::TRUNC));
+        let masked = flags.and(OpenFlags::CREAT);
+        assert!(masked.contains(OpenFlags::CREAT));
+    }
+
+    #[test]
+    fn open_flags_access_mode() {
+        assert!(OpenFlags::RDONLY.is_read());
+        assert!(!OpenFlags::RDONLY.is_write());
+        assert!(!OpenFlags::WRONLY.is_read());
+        assert!(OpenFlags::WRONLY.is_write());
+        assert!(OpenFlags::RDWR.is_read());
+        assert!(OpenFlags::RDWR.is_write());
+    }
+
+    #[test]
+    fn filename_valid() {
+        assert!(FileName::new(b"hello.txt").is_ok());
+        assert!(FileName::new(b".").is_ok());
+        assert!(FileName::new(b"..").is_ok());
+    }
+
+    #[test]
+    fn filename_empty_rejected() {
+        assert_eq!(FileName::new(b""), Err(VfsError::NameTooLong));
+    }
+
+    #[test]
+    fn filename_slash_rejected() {
+        assert_eq!(FileName::new(b"a/b"), Err(VfsError::InvalidPath));
+    }
+
+    #[test]
+    fn filename_null_rejected() {
+        assert_eq!(FileName::new(b"a\0b"), Err(VfsError::InvalidPath));
+    }
+
+    #[test]
+    fn filename_too_long_rejected() {
+        let long = [b'a'; NAME_MAX + 1];
+        assert_eq!(FileName::new(&long), Err(VfsError::NameTooLong));
+    }
+
+    #[test]
+    fn vfs_error_as_errno_coverage() {
+        // Ensure every variant has a non-zero errno.
+        let errors = [
+            VfsError::NotFound,
+            VfsError::PermissionDenied,
+            VfsError::NotADirectory,
+            VfsError::NotAFile,
+            VfsError::IsADirectory,
+            VfsError::AlreadyExists,
+            VfsError::DirectoryNotEmpty,
+            VfsError::ReadOnly,
+            VfsError::NoSpace,
+            VfsError::InvalidPath,
+            VfsError::TooManySymlinks,
+            VfsError::IoError,
+            VfsError::NameTooLong,
+            VfsError::TooManyOpenFiles,
+            VfsError::NotSupported,
+            VfsError::Busy,
+            VfsError::CrossDevice,
+            VfsError::NoDevice,
+        ];
+        for e in &errors {
+            assert!(e.as_errno() > 0, "{:?} has non-positive errno", e);
+        }
+        // Spot-check known values.
+        assert_eq!(VfsError::NotFound.as_errno(), 2);
+        assert_eq!(VfsError::PermissionDenied.as_errno(), 13);
+        assert_eq!(VfsError::NoSpace.as_errno(), 28);
+    }
+
+    #[test]
+    fn inode_stat_size() {
+        assert_eq!(core::mem::size_of::<InodeStat>(), 80);
+    }
+
+    #[test]
+    fn dir_entry_size() {
+        assert_eq!(core::mem::size_of::<DirEntry>(), 272);
+    }
 }

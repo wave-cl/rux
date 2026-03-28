@@ -1,0 +1,18 @@
+[package]
+name = "rux-vfs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+rux-vfs = { path = ".." }
+
+[[bin]]
+name = "ramfs"
+path = "fuzz_targets/ramfs.rs"
+doc = false
