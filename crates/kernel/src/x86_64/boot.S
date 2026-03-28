@@ -83,10 +83,10 @@ _start:
     orl  $(1 << 5), %eax
     movl %eax, %cr4
 
-    /* Enable long mode (EFER.LME = bit 8) */
+    /* Enable long mode (EFER.LME = bit 8) + NX (EFER.NXE = bit 11) */
     movl $0xC0000080, %ecx       /* IA32_EFER MSR */
     rdmsr
-    orl  $(1 << 8), %eax
+    orl  $((1 << 8) | (1 << 11)), %eax
     wrmsr
 
     /* Enable paging (CR0.PG = bit 31) — this activates long mode */

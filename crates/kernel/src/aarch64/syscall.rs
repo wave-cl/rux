@@ -63,6 +63,8 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
         for i in 0..FRAME_REGS {
             SAVED_PARENT_FRAME[i] = *regs.add(i);
         }
+        // Save SP_EL0 (not part of exception frame, but enter_user_mode overwrites it)
+        core::arch::asm!("mrs {}, sp_el0", out(reg) SAVED_SP_EL0, options(nostack));
 
         // setjmp: save callee-saved registers + SP + return address
         let val = vfork_setjmp(&raw mut VFORK_JMP);
@@ -76,6 +78,9 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
 
             // Clear vfork state so exit() doesn't longjmp again
             VFORK_JMP.sp = 0;
+
+            // Restore SP_EL0 (enter_user_mode set it to the child's stack)
+            core::arch::asm!("msr sp_el0, {}", in(reg) SAVED_SP_EL0, options(nostack));
 
             // Restore the parent's exception frame (child's syscalls overwrote it)
             for i in 0..FRAME_REGS {
@@ -114,6 +119,9 @@ static mut VFORK_JMP: JmpBuf = JmpBuf {
 
 // Saved parent exception frame (34 u64s)
 static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
+
+// Saved parent SP_EL0 (user stack pointer) — not part of exception frame
+static mut SAVED_SP_EL0: u64 = 0;
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"
