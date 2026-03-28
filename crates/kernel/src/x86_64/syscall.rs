@@ -151,11 +151,11 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         21 => 0,                                   // access (stub: always OK)
         33 => syscall_dup2(a0, a1),                // dup2
         39 => 1,                                   // getpid
-        56 => { unsafe { syscall_vfork_from_linux(); } 0 } // clone (as vfork)
-        57 => { unsafe { syscall_vfork_from_linux(); } 0 } // fork (as vfork)
+        56 => syscall_vfork_linux(),                 // clone (as vfork)
+        57 => syscall_vfork_linux(),                 // fork (as vfork)
         59 => { unsafe { syscall_exec(a0, a1); } 0 } // execve
         60 => unsafe { syscall_exit(a0 as i32) }, // exit
-        61 => syscall_wait(),                      // wait4
+        61 => syscall_wait4(a0, a1, a2, a3),                      // wait4
         63 => syscall_uname(a0),                   // uname
         72 => 0,                                   // fcntl (stub)
         78 => syscall_getdents64(a0, a1, a2),      // getdents
@@ -232,7 +232,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             57 => syscall_vfork(regs),
             59 => { syscall_exec(arg0, arg1); 0 }
             60 => syscall_exit(arg0 as i32),
-            61 => syscall_wait(),
+            61 => syscall_wait4(arg0, arg1, arg2, 0),
             78 => syscall_getdents64(arg0, arg1, arg2),
             _ => -38,
         };
@@ -490,7 +490,7 @@ static mut SAVED_CR3: u64 = 0;
 // The child's syscalls overwrite the kernel stack, so we must save/restore the parent's frame.
 static mut SAVED_PARENT_FRAME: [u64; 22] = [0; 22];
 
-fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
+fn syscall_exec(path_ptr: u64, argv_ptr: u64) -> ! {
     unsafe {
         use rux_mm::FrameAllocator;
         use rux_vfs::{FileSystem, InodeStat};
@@ -503,18 +503,8 @@ fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
         while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
         let path = core::slice::from_raw_parts(path_cstr, path_len);
 
-        // Read optional argument
-        let arg = if arg_ptr != 0 {
-            let arg_cstr = arg_ptr as *const u8;
-            let mut arg_len = 0usize;
-            while *arg_cstr.add(arg_len) != 0 && arg_len < 256 { arg_len += 1; }
-            core::slice::from_raw_parts(arg_cstr, arg_len)
-        } else {
-            &[]
-        };
-
-        // Store path + arg for the new process's stack
-        crate::execargs::set(path, arg);
+        // Read full argv[] and envp[] from user memory
+        crate::execargs::set_from_user(path, argv_ptr, 0);
 
         serial::write_str("rux: exec(\"");
         serial::write_bytes(path);
@@ -545,6 +535,9 @@ fn syscall_exit(status: i32) -> ! {
     serial::write_str(")\n");
 
     unsafe {
+        // Save exit status for wait4
+        LAST_CHILD_EXIT = status;
+
         // If parent is blocked in vfork, resume it with child PID
         if VFORK_JMP.rsp != 0 {
             vfork_longjmp(&raw mut VFORK_JMP, 42); // child PID = 42
@@ -635,10 +628,19 @@ fn syscall_getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
     }
 }
 
-fn syscall_wait() -> i64 {
+/// Track child exit status for wait4.
+static mut LAST_CHILD_EXIT: i32 = 0;
+
+fn syscall_wait4(pid: u64, wstatus_ptr: u64, _options: u64, _rusage: u64) -> i64 {
     // vfork semantics: child already ran to completion before parent resumes.
-    // The child PID was returned by vfork. Nothing to wait for.
-    serial::write_str("rux: wait() (child already exited)\n");
+    unsafe {
+        // Write exit status in Linux wait format: (exit_code << 8) for normal exit
+        if wstatus_ptr != 0 {
+            let status = (LAST_CHILD_EXIT as u32) << 8; // WEXITSTATUS format
+            *(wstatus_ptr as *mut u32) = status;
+        }
+    }
+    // Return the child PID (from vfork return)
     42
 }
 
@@ -1023,10 +1025,76 @@ fn syscall_clock_gettime(_clockid: u64, tp: u64) -> i64 {
 
 /// vfork entry from the SYSCALL instruction path.
 /// This is trickier because we need to save/restore the syscall frame.
-unsafe fn syscall_vfork_from_linux() -> i64 {
-    // For now, just return -38 (ENOSYS) since the busybox shell
-    // will fall back to fork behavior. We'll implement this properly
-    // once basic busybox execution is confirmed.
-    // TODO: proper vfork from syscall context
-    -38
+/// vfork from the SYSCALL instruction path.
+///
+/// The SYSCALL asm entry pushes: RCX(user_rip), R11(user_rflags), RBX, RBP,
+/// R12-R15, then RAX, RDI, RSI, RDX, R10, R8, R9 (15 total).
+/// After `call handler`, the handler returns and the asm pops everything.
+///
+/// For vfork, we need to preserve these across the child's execution.
+/// The setjmp/longjmp saves callee-saved regs + RSP + return address,
+/// which is enough to return from this function back to the dispatch,
+/// which returns to the asm, which pops and sysretqs.
+///
+/// The trick: the asm pops from SYSCALL_STACK. The child's syscalls use
+/// the SAME SYSCALL_STACK and overwrite the parent's saved registers.
+/// So we must save the ENTIRE SYSCALL_STACK content and restore it.
+/// For vfork parent resume: directly sysretq with saved values instead of
+/// going through the normal return path (which has stale stack values).
+static mut VFORK_PARENT_RCX: u64 = 0; // saved user RIP
+static mut VFORK_PARENT_R11: u64 = 0; // saved user RFLAGS
+static mut VFORK_PARENT_RSP: u64 = 0; // saved user RSP
+static mut VFORK_PARENT_RDI: u64 = 0; // saved RDI (for register restore)
+
+#[inline(never)]
+fn syscall_vfork_linux() -> i64 {
+    unsafe {
+        serial::write_str("rux: vfork()\n");
+
+        // Read the parent's saved user RIP (RCX) and RFLAGS (R11) from the
+        // SYSCALL_STACK. These were pushed first by the asm entry.
+        // Stack layout: [TOP-8]=RCX, [TOP-16]=R11, [TOP-24]=RBX, ...
+        let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
+        VFORK_PARENT_RCX = *stack_top.sub(1); // RCX (user RIP) - pushed first
+        VFORK_PARENT_R11 = *stack_top.sub(2); // R11 (user RFLAGS)
+        VFORK_PARENT_RSP = SAVED_USER_RSP;
+        // Save RDI (arg0) — at offset 15-6=9 from top (pushed as 6th of 7 arg pushes)
+        // pushes: rcx r11 rbx rbp r12 r13 r14 r15 rax rdi rsi rdx r10 r8 r9
+        //         -1  -2  -3  -4  -5  -6  -7  -8  -9  -10 -11 -12 -13 -14 -15
+        VFORK_PARENT_RDI = *stack_top.sub(10); // RDI
+
+        let val = vfork_setjmp(&raw mut VFORK_JMP);
+        if val == 0 {
+            return 0; // child
+        } else {
+            // Parent resumed
+            if SAVED_CR3 != 0 {
+                core::arch::asm!("mov cr3, {}", in(reg) SAVED_CR3, options(nostack));
+            }
+            serial::write_str("rux: vfork parent resumed\n");
+            VFORK_JMP.rsp = 0;
+
+            serial::write_str("rux: sysretq to ");
+            crate::write_hex_serial(VFORK_PARENT_RCX as usize);
+            serial::write_str(" rsp=");
+            crate::write_hex_serial(VFORK_PARENT_RSP as usize);
+            serial::write_byte(b'\n');
+            // Directly sysretq to the parent's saved user state.
+            // We bypass the normal return path because the SYSCALL_STACK
+            // was overwritten by the child's syscalls.
+            // Direct sysretq with explicit registers.
+            // Load RSP via a temp register since it can't be an asm operand.
+            let rsp_val = VFORK_PARENT_RSP;
+            core::arch::asm!(
+                "mov rsp, {tmp}",
+                "sysretq",
+                tmp = in(reg) rsp_val,
+                in("rcx") VFORK_PARENT_RCX,      // user RIP
+                in("r11") VFORK_PARENT_R11,       // user RFLAGS
+                in("rdi") VFORK_PARENT_RDI,       // restore RDI
+                in("rax") val as u64,             // return value = child PID
+                options(noreturn)
+            );
+        }
+    }
 }
