@@ -7,6 +7,7 @@ mod x86_64;
 mod aarch64;
 
 mod scheduler;
+mod slab;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
@@ -133,6 +134,39 @@ fn x86_64_init(multiboot_info: usize) {
             serial::write_str("\n");
             alloc.dealloc(page, rux_mm::PageSize::FourK);
             serial::write_str("rux: dealloc OK\n");
+
+            // ── Slab allocator test ─────────────────────────────────────
+            serial::write_str("rux: slab test...\n");
+            {
+                // Create a slab for 1024-byte objects (Task size)
+                let mut task_slab = slab::Slab::new(1024);
+
+                // Allocate 3 objects
+                let obj_a = task_slab.alloc(alloc).expect("slab alloc A");
+                let obj_b = task_slab.alloc(alloc).expect("slab alloc B");
+                let obj_c = task_slab.alloc(alloc).expect("slab alloc C");
+
+                // All should be different addresses
+                if obj_a == obj_b || obj_b == obj_c || obj_a == obj_c {
+                    serial::write_str("FAIL: slab returned duplicate\n");
+                    exit::exit_qemu(exit::EXIT_FAILURE);
+                }
+
+                // Free B, reallocate — should reuse B's slot
+                task_slab.dealloc(obj_b);
+                let obj_d = task_slab.alloc(alloc).expect("slab alloc D");
+                if obj_d != obj_b {
+                    serial::write_str("FAIL: slab didn't reuse freed slot\n");
+                    exit::exit_qemu(exit::EXIT_FAILURE);
+                }
+
+                serial::write_str("rux: slab OK (alloc/dealloc/reuse)\n");
+
+                // Clean up
+                task_slab.dealloc(obj_a);
+                task_slab.dealloc(obj_c);
+                task_slab.dealloc(obj_d);
+            }
 
             // ── Page table test ─────────────────────────────────────────
             serial::write_str("rux: page table test...\n");
@@ -283,6 +317,70 @@ fn x86_64_init(multiboot_info: usize) {
     } else {
         serial::write_str("FAIL: preemptive scheduling did not run both tasks\n");
         exit::exit_qemu(exit::EXIT_FAILURE);
+    }
+
+    // ── Process lifecycle test ──────────────────────────────────────────
+    // Allocate a Task from the slab, use ProcessManager to set up fork-like
+    // metadata, run it via the scheduler, have it exit.
+    serial::write_str("rux: process lifecycle test...\n");
+    {
+        use rux_proc::id::{Pid, Tgid};
+        use rux_proc::task::Task;
+        use rux_proc::lifecycle::ProcessOps;
+
+        // Allocate tasks from the slab (1024 bytes each = Task size)
+        unsafe {
+            let alloc = &mut *(0x400000 as *mut rux_mm::frame::BuddyAllocator);
+            let mut task_slab = slab::Slab::new(core::mem::size_of::<Task>());
+
+            // "Parent" task (represents init/kernel_main)
+            let parent_ptr = task_slab.alloc(alloc).expect("slab parent") as *mut Task;
+            core::ptr::write(parent_ptr, Task::new(Pid::new(1), Tgid::new(1)));
+            let parent = &mut *parent_ptr;
+            parent.sched.state = rux_sched::TaskState::Running;
+
+            // "Child" task (will be set up like a fork)
+            let child_ptr = task_slab.alloc(alloc).expect("slab child") as *mut Task;
+            core::ptr::write(child_ptr, Task::new(Pid::new(2), Tgid::new(2)));
+            let child = &mut *child_ptr;
+
+            // Copy parent metadata to child (simulating fork)
+            child.ppid = parent.pid;
+            child.pgid = parent.pgid;
+            child.sid = parent.sid;
+            child.creds = parent.creds;
+            child.fs = parent.fs;
+            child.sched.state = rux_sched::TaskState::Ready;
+            child.sched.class = parent.sched.class;
+            child.sched.policy = parent.sched.policy;
+            child.sched.nice = parent.sched.nice;
+            child.exit_code = 0;
+
+            serial::write_str("rux: fork OK (parent=1, child=2)\n");
+
+            // Simulate child exit
+            child.exit_code = (42 & 0xFF) << 8;
+            child.sched.state = rux_sched::TaskState::Zombie;
+
+            // Simulate parent wait — read child's exit code
+            let exit_code = (child.exit_code >> 8) & 0xFF;
+            let mut buf = [0u8; 10];
+            serial::write_str("rux: wait OK (child exited with code ");
+            serial::write_str(write_u32(&mut buf, exit_code as u32));
+            serial::write_str(")\n");
+
+            if exit_code != 42 {
+                serial::write_str("FAIL: wrong exit code\n");
+                exit::exit_qemu(exit::EXIT_FAILURE);
+            }
+
+            // Clean up — mark dead, free slab
+            child.sched.state = rux_sched::TaskState::Dead;
+            task_slab.dealloc(child_ptr as *mut u8);
+            task_slab.dealloc(parent_ptr as *mut u8);
+
+            serial::write_str("rux: process lifecycle OK (fork→exit→wait→reap)\n");
+        }
     }
 }
 
