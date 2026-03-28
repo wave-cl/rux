@@ -581,6 +581,74 @@ fn x86_64_init(multiboot_info: usize) {
             serial::write_str("rux: process lifecycle OK (fork→exit→wait→reap)\n");
         }
     }
+
+    // ── User mode test ──────────────────────────────────────────────────
+    // Embed a tiny hand-assembled hello world binary, map it at a user
+    // virtual address, map a user stack, enter ring 3 via iretq.
+    // The binary calls write(1, "Hello, world!\n", 14) then exit(0) via INT 0x80.
+    serial::write_str("rux: preparing user mode...\n");
+
+    unsafe {
+        let alloc = &mut *(0x400000 as *mut rux_mm::frame::BuddyAllocator);
+
+        // Create a page table with kernel identity map + user pages
+        let mut upt = x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
+
+        // Kernel identity map (0-8 MiB, RWX, NO user bit)
+        let kflags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::EXECUTE);
+        upt.identity_map_range(rux_klib::PhysAddr::new(0), 8 * 1024 * 1024, kflags, alloc)
+            .expect("kernel map");
+
+        // User code page at virtual 0x0100_0000
+        use rux_mm::FrameAllocator;
+        let code_phys = alloc.alloc(rux_mm::PageSize::FourK).expect("code page");
+        let code_flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::EXECUTE)
+            .or(rux_mm::MappingFlags::USER);
+        upt.map_4k(rux_klib::VirtAddr::new(0x0100_0000), code_phys, code_flags, alloc)
+            .expect("map code");
+
+        // User stack page at virtual 0x01FF_F000
+        let stack_phys = alloc.alloc(rux_mm::PageSize::FourK).expect("stack page");
+        let stack_flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::USER);
+        upt.map_4k(rux_klib::VirtAddr::new(0x01FF_F000), stack_phys, stack_flags, alloc)
+            .expect("map stack");
+
+        // Hand-assembled x86_64 hello world (56 bytes):
+        //   write(1, "Hello, world!\n", 14)  via INT 0x80
+        //   exit(0)                          via INT 0x80
+        #[rustfmt::skip]
+        let hello: &[u8] = &[
+            0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, // mov rax, 1 (write)
+            0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, // mov rdi, 1 (stdout)
+            0x48, 0x8d, 0x35, 0x15, 0x00, 0x00, 0x00, // lea rsi, [rip+0x15] (msg)
+            0x48, 0xc7, 0xc2, 0x0e, 0x00, 0x00, 0x00, // mov rdx, 14 (len)
+            0xcd, 0x80,                                 // int 0x80
+            0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // mov rax, 60 (exit)
+            0x48, 0x31, 0xff,                           // xor rdi, rdi (status=0)
+            0xcd, 0x80,                                 // int 0x80
+            // "Hello, world!\n" (14 bytes)
+            b'H', b'e', b'l', b'l', b'o', b',', b' ',
+            b'w', b'o', b'r', b'l', b'd', b'!', b'\n',
+        ];
+
+        // Copy binary to the code page (identity mapped at code_phys)
+        let dest = code_phys.as_usize() as *mut u8;
+        for (i, &b) in hello.iter().enumerate() {
+            *dest.add(i) = b;
+        }
+
+        // Activate user page table
+        upt.activate();
+        serial::write_str("rux: entering user mode...\n");
+
+        // Enter ring 3 — never returns (exit syscall halts QEMU)
+        x86_64::syscall::enter_user_mode(0x0100_0000, 0x0200_0000);
+    }
 }
 
 // Counters incremented by the preemptive tasks

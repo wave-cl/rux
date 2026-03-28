@@ -37,6 +37,19 @@ impl IdtEntry {
         }
     }
 
+    /// Create a trap gate callable from user mode (DPL=3).
+    fn trap_gate_user(handler: u64, cs: u16, ist: u8) -> Self {
+        Self {
+            offset_low: handler as u16,
+            selector: cs,
+            ist,
+            type_attr: 0xEF, // P=1, DPL=3, type=0xF (trap gate, user-callable)
+            offset_mid: (handler >> 16) as u16,
+            offset_high: (handler >> 32) as u32,
+            reserved: 0,
+        }
+    }
+
     /// Create a trap gate (does NOT clear IF on entry).
     fn trap_gate(handler: u64, cs: u16, ist: u8) -> Self {
         Self {
@@ -204,6 +217,9 @@ isr_stub!(no_err, 45);
 isr_stub!(no_err, 46);
 isr_stub!(no_err, 47);
 
+// Software interrupt for syscalls
+isr_stub!(no_err, 128); // INT 0x80
+
 // Stub addresses — used to fill the IDT
 extern "C" {
     fn isr_stub_0(); fn isr_stub_1(); fn isr_stub_2(); fn isr_stub_3();
@@ -218,6 +234,7 @@ extern "C" {
     fn isr_stub_36(); fn isr_stub_37(); fn isr_stub_38(); fn isr_stub_39();
     fn isr_stub_40(); fn isr_stub_41(); fn isr_stub_42(); fn isr_stub_43();
     fn isr_stub_44(); fn isr_stub_45(); fn isr_stub_46(); fn isr_stub_47();
+    fn isr_stub_128();
 }
 
 /// Get the address of an ISR stub by vector number.
@@ -257,6 +274,9 @@ pub unsafe fn init() {
         IDT[i] = IdtEntry::interrupt_gate(isr_stub_addr(i), KERNEL_CS, 0);
     }
 
+    // INT 0x80 — syscall trap gate, DPL=3 (callable from user space)
+    IDT[128] = IdtEntry::trap_gate_user(isr_stub_128 as u64, KERNEL_CS, 0);
+
     // Load IDT
     let idt_ptr = IdtPtr {
         limit: (core::mem::size_of::<[IdtEntry; IDT_ENTRIES]>() - 1) as u16,
@@ -272,7 +292,7 @@ pub unsafe fn init() {
 
 /// Rust dispatch function called from the assembly common handler.
 #[no_mangle]
-pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, _frame: *const u8) {
+pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {
     match vector {
         0 => panic!("Division by zero"),
         6 => panic!("Invalid opcode"),
@@ -294,8 +314,11 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, _frame: *cons
                 sched.tick(1_000_000);
             }
         }
+        128 => {
+            // INT 0x80 — syscall from user space
+            super::syscall::handle_syscall(vector, error_code, frame);
+        }
         _ => {
-            // Unhandled vector — print and continue
             crate::x86_64::serial::write_str("INT: vector=");
             let mut buf = [0u8; 10];
             crate::x86_64::serial::write_str(crate::write_u32(&mut buf, vector as u32));
