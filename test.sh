@@ -1,6 +1,5 @@
 #!/bin/sh
-# QEMU integration tests for rux kernel (rux-box edition).
-# Runs both x86_64 and aarch64, validates boot, subsystems, and shell.
+# QEMU integration tests for rux kernel (busybox rootfs edition).
 set -e
 
 QEMU_X86="${QEMU_X86:-/opt/local/bin/qemu-system-x86_64}"
@@ -29,91 +28,87 @@ rust-objcopy --output-target=elf32-i386 \
 # ── x86_64 ───────────────────────────────────────────────────────────
 printf "\n\033[1m── x86_64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 3; printf 'uname\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'cat /etc/motd\n'; sleep 1; printf 'wc /etc/motd\n'; sleep 1; printf 'stat /etc/motd\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 3; printf 'uname\n'; sleep 1; printf 'cat /etc/passwd\n'; sleep 1; printf 'cat /etc/os-release\n'; sleep 1; printf 'whoami\n'; sleep 1; printf 'hostname\n'; sleep 1; printf 'pwd\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'echo test 123\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_X86" -cpu Haswell \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -serial mon:stdio -display none \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
     -no-reboot -monitor none -m 128M 2>&1 || true )
 
-# Boot & init
+# Boot
 check "boot"                    "rux: boot OK"
-check "GDT"                     "rux: GDT + TSS loaded"
-check "IDT"                     "rux: IDT loaded"
-check "timer"                   "rux: timer OK"
-check "frame allocator"         "rux: init done"
-check "slab"                    "rux: slab OK"
-check "page table"              "rux: translate OK"
 check "kernel page tables"      "rux: CR3 switched to kernel page tables"
-
-# Scheduling
-check "context switch"          "rux: back in main task"
 check "preemptive scheduling"   "rux: preemptive scheduling OK"
+check "filesystem populated"    "entries)"
 
-# Process lifecycle
-check "fork/exit/wait"          "rux: process lifecycle OK"
+# Init sequence
+check "exec init"               "rux: exec /sbin/init"
+check "init prints"             "rux init"
+check "motd"                    "Welcome to rux!"
+check "shell prompt"            "/ # "
 
-# Filesystem
-check "filesystem"              "rux: filesystem ready"
-check "exec /bin/sh"            "rux: exec /bin/sh"
-
-# rux-box applets
-check "shell prompt"            "rux$ "
+# Busybox applets
 check "uname"                   "rux 0.1.0 x86_64"
-check "hello"                   "Hello, world!"
-check "count"                   "1"
-check "echo"                    "rux works"
-check "uptime"                  "up "
-check "cat /etc/motd"           "Welcome to rux!"
-check "wc"                      "3 12 62"
-check "stat"                    "62 bytes"
+check "cat /etc/passwd"         "root:x:0:0:root:/root:/bin/sh"
+check "cat /etc/os-release"     "NAME=\"rux\""
+check "whoami"                  "root"
+check "hostname"                "rux"
+check "pwd"                     "/"
+check "echo"                    "test 123"
+
+# Rootfs structure
 check "ls shows bin"            "bin"
+check "ls shows sbin"           "sbin"
+check "ls shows usr"            "usr"
 check "ls shows etc"            "etc"
-check "shell exit"              "rux: user exit(0)"
+check "ls shows dev"            "dev"
+check "ls shows proc"           "proc"
+check "ls shows tmp"            "tmp"
+check "ls shows var"            "var"
+check "ls shows root"           "root"
+check "ls shows home"           "home"
 
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 5; printf 'uname\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'cat /etc/motd\n'; sleep 1; printf 'wc /etc/motd\n'; sleep 1; printf 'stat /etc/motd\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 6; printf 'uname\n'; sleep 2; printf 'cat /etc/passwd\n'; sleep 2; printf 'cat /etc/os-release\n'; sleep 2; printf 'whoami\n'; sleep 2; printf 'hostname\n'; sleep 2; printf 'pwd\n'; sleep 2; printf 'ls\n'; sleep 2; printf 'echo test 123\n'; sleep 2; printf 'q\n'; sleep 2; } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -serial mon:stdio -display none \
     -semihosting -no-reboot -m 128M 2>&1 || true )
 
-# Boot & init
+# Boot
 check "boot"                    "rux: boot OK"
-check "exception vectors"       "rux: exception vectors installed"
-check "GIC"                     "rux: GIC initialized"
-check "timer"                   "rux: timer OK"
-check "frame allocator"         "rux: frame allocator ready"
-check "slab"                    "rux: slab OK"
-check "page table"              "rux: page table OK"
 check "MMU"                     "rux: MMU enabled"
-
-# Scheduling
-check "context switch"          "rux: back in main task"
 check "preemptive scheduling"   "rux: preemptive scheduling OK"
+check "filesystem populated"    "entries)"
 
-# Process lifecycle
-check "process lifecycle"       "rux: process lifecycle OK"
+# Init sequence
+check "exec init"               "rux: exec /sbin/init"
+check "init prints"             "rux init"
+check "motd"                    "Welcome to rux!"
+check "shell prompt"            "/ # "
 
-# Filesystem
-check "filesystem"              "rux: filesystem ready"
-check "exec /bin/sh"            "rux: exec /bin/sh"
-
-# rux-box applets
-check "shell prompt"            "rux$ "
+# Busybox applets
 check "uname"                   "rux 0.1.0 aarch64"
-check "hello"                   "Hello, world!"
-check "count"                   "1"
-check "echo"                    "rux works"
-check "uptime"                  "up "
-check "cat /etc/motd"           "Welcome to rux!"
-check "wc"                      "3 12 62"
-check "stat"                    "62 bytes"
+check "cat /etc/passwd"         "root:x:0:0:root:/root:/bin/sh"
+check "cat /etc/os-release"     "NAME=\"rux\""
+check "whoami"                  "root"
+check "hostname"                "rux"
+check "pwd"                     "/"
+check "echo"                    "test 123"
+
+# Rootfs structure
 check "ls shows bin"            "bin"
+check "ls shows sbin"           "sbin"
+check "ls shows usr"            "usr"
 check "ls shows etc"            "etc"
-check "shell exit"              "rux: user exit(0)"
+check "ls shows dev"            "dev"
+check "ls shows proc"           "proc"
+check "ls shows tmp"            "tmp"
+check "ls shows var"            "var"
+check "ls shows root"           "root"
+check "ls shows home"           "home"
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"

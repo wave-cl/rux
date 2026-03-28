@@ -324,8 +324,11 @@ fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
         // Save current CR3 so the parent can restore its page table after exec
         core::arch::asm!("mov {}, cr3", out(reg) SAVED_CR3, options(nostack));
 
-        // Free previous child's pages before allocating new ones
-        crate::pgtrack::begin_child(alloc);
+        // Free previous child's pages — but NOT if inside a vfork,
+        // because the parent's page table must be preserved for resume.
+        if VFORK_JMP.rsp == 0 {
+            crate::pgtrack::begin_child(alloc);
+        }
 
         // Allocate 8 contiguous pages (32KB) for the ELF buffer
         const ELF_BUF_PAGES: usize = 8;

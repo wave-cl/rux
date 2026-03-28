@@ -210,8 +210,10 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
                 core::arch::asm!(
                     "msr ttbr0_el1, {}",
                     "isb",
-                    "tlbi vmalle1is",
-                    "dsb ish",
+                    "tlbi vmalle1",
+                    "dsb nsh",
+                    "ic iallu",
+                    "dsb nsh",
                     "isb",
                     in(reg) SAVED_TTBR0,
                     options(nostack)
@@ -349,8 +351,10 @@ fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
         // Save current TTBR0 so the parent can restore its page table after exec
         core::arch::asm!("mrs {}, ttbr0_el1", out(reg) SAVED_TTBR0, options(nostack));
 
-        // Free previous child's pages before allocating new ones
-        crate::pgtrack::begin_child(alloc);
+        // Free previous child's pages — but NOT if inside a vfork
+        if VFORK_JMP.sp == 0 {
+            crate::pgtrack::begin_child(alloc);
+        }
 
         // Read ELF from VFS
         const ELF_BUF_PAGES: usize = 8;

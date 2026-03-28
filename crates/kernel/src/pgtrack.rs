@@ -1,3 +1,11 @@
+/// Saved kernel page table root (CR3/TTBR0) for switching back before freeing pages.
+static mut KERNEL_PT_ROOT: u64 = 0;
+
+/// Store the kernel page table root. Called once after kernel page tables are set up.
+pub fn set_kernel_pt(root: u64) {
+    unsafe { KERNEL_PT_ROOT = root; }
+}
+
 /// Track pages allocated for user processes to prevent leaks.
 ///
 /// Two-level tracking: parent (shell) pages and child (exec'd) pages.
@@ -38,9 +46,21 @@ pub fn track(phys: PhysAddr) {
 }
 
 /// Mark that subsequent allocations are for a child process.
-/// Frees any previous child's pages first.
+/// Switches to kernel page table and frees any previous child's pages.
 pub fn begin_child(alloc: &mut dyn FrameAllocator) {
     unsafe {
+        // Switch to kernel page table before freeing child pages,
+        // because the child's page table pages are about to be freed.
+        if KERNEL_PT_ROOT != 0 {
+            #[cfg(target_arch = "x86_64")]
+            core::arch::asm!("mov cr3, {}", in(reg) KERNEL_PT_ROOT, options(nostack));
+            #[cfg(target_arch = "aarch64")]
+            core::arch::asm!(
+                "msr ttbr0_el1, {}", "isb", "tlbi vmalle1is", "dsb ish", "isb",
+                in(reg) KERNEL_PT_ROOT, options(nostack)
+            );
+        }
+
         // Free previous child's pages
         for i in 0..CHILD_COUNT {
             if CHILD_PAGES[i] != 0 {

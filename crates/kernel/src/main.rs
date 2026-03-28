@@ -13,6 +13,7 @@ mod kstate;
 pub mod fdtable;
 pub mod execargs;
 pub mod pgtrack;
+pub mod rootfs;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
@@ -145,6 +146,7 @@ fn aarch64_init(dtb_addr: usize) {
         ).expect("uart map");
 
         kpt.activate();
+        pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
         serial::write_str("rux: MMU enabled, kernel page tables active!\n");
 
         // Process lifecycle
@@ -252,34 +254,17 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    // ── Filesystem hierarchy ──────────────────────────────────────
-    let bin = fs.mkdir(0, FileName::new(b"bin").unwrap(), 0o755).unwrap();
-    let etc = fs.mkdir(0, FileName::new(b"etc").unwrap(), 0o755).unwrap();
-
+    // Populate full busybox-compatible rootfs
     let box_data: &[u8] = include_bytes!("../../../user/rux-box_aarch64.elf");
-    let box_ino = fs.create(bin, FileName::new(b"rux-box").unwrap(), 0o755).unwrap();
-    fs.write(box_ino, 0, box_data).unwrap();
-
-    for name in [
-        b"sh" as &[u8], b"ls", b"cat", b"echo", b"wc", b"stat",
-        b"rm", b"mkfile", b"uname", b"uptime", b"hello", b"count",
-    ] {
-        fs.symlink(bin, FileName::new(name).unwrap(), b"rux-box").unwrap();
-    }
-
-    let motd = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
-    let motd_ino = fs.create(etc, FileName::new(b"motd").unwrap(), 0o644).unwrap();
-    fs.write(motd_ino, 0, motd).unwrap();
-
-    serial::write_str("rux: filesystem ready\n");
+    rootfs::populate(fs, box_data);
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Load and run /bin/sh
-    serial::write_str("rux: exec /bin/sh\n");
-    crate::execargs::set(b"/bin/sh", b"");
+    // Boot: exec /sbin/init
+    serial::write_str("rux: exec /sbin/init\n");
+    crate::execargs::set(b"/sbin/init", b"");
     let alloc = &mut *alloc_ptr;
     elf::load_and_exec_elf(box_data, alloc);
 }
@@ -540,6 +525,7 @@ fn x86_64_init(multiboot_info: usize) {
 
             // Activate — switch CR3 to our page tables
             kpt.activate();
+            pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
             serial::write_str("rux: CR3 switched to kernel page tables!\n");
         }
     }
@@ -723,43 +709,18 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    // ── Filesystem hierarchy ──────────────────────────────────────
-    // /bin/rux-box          (the multi-call binary)
-    // /bin/sh → rux-box     (symlinks for each applet)
-    // /etc/motd             (message of the day)
-
-    let bin = fs.mkdir(0, FileName::new(b"bin").unwrap(), 0o755).unwrap();
-    let etc = fs.mkdir(0, FileName::new(b"etc").unwrap(), 0o755).unwrap();
-
-    // Write rux-box binary into /bin/
+    // Populate full busybox-compatible rootfs
     let box_data: &[u8] = include_bytes!("../../../user/rux-box_x86_64.elf");
-    let box_ino = fs.create(bin, FileName::new(b"rux-box").unwrap(), 0o755).unwrap();
-    fs.write(box_ino, 0, box_data).unwrap();
-
-    // Symlink all applet names to rux-box
-    for name in [
-        b"sh" as &[u8], b"ls", b"cat", b"echo", b"wc", b"stat",
-        b"rm", b"mkfile", b"uname", b"uptime", b"hello", b"count",
-    ] {
-        fs.symlink(bin, FileName::new(name).unwrap(), b"rux-box").unwrap();
-    }
-
-    // /etc/motd
-    let motd = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
-    let motd_ino = fs.create(etc, FileName::new(b"motd").unwrap(), 0o644).unwrap();
-    fs.write(motd_ino, 0, motd).unwrap();
-
-    serial::write_str("rux: filesystem ready\n");
+    rootfs::populate(fs, box_data);
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Load and run /bin/sh (→ rux-box, dispatches to shell applet)
-    serial::write_str("rux: exec /bin/sh\n");
-    crate::execargs::set(b"/bin/sh", b"");
+    // Boot: exec /sbin/init
+    serial::write_str("rux: exec /sbin/init\n");
+    crate::execargs::set(b"/sbin/init", b"");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
-    // Read rux-box and exec it
     elf::load_and_exec_elf(box_data, alloc);
 }
 
