@@ -4,7 +4,8 @@ pub mod exception;
 pub mod gic;
 pub mod timer;
 pub mod context;
+pub mod devicetree;
+pub mod paging;
 
-// Include boot assembly + exception vector table
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("exception.S"));

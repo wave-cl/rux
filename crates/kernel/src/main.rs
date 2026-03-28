@@ -26,38 +26,105 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
     x86_64_init(arg);
 
     #[cfg(target_arch = "aarch64")]
-    aarch64_init();
+    aarch64_init(arg);
 
     serial::write_str("rux: all checks passed\n");
     exit::exit_qemu(exit::EXIT_SUCCESS);
 }
 
 #[cfg(target_arch = "aarch64")]
-fn aarch64_init() {
+fn aarch64_init(dtb_addr: usize) {
     serial::write_str("rux: aarch64 running in EL1\n");
 
-    // Exception vectors
     unsafe { aarch64::exception::init(); }
     serial::write_str("rux: exception vectors installed\n");
 
-    // GIC interrupt controller
     unsafe { aarch64::gic::init(); }
     serial::write_str("rux: GIC initialized\n");
 
-    // Generic timer at 1000 Hz
     unsafe { aarch64::timer::init(1000); }
     serial::write_str("rux: timer initialized (1000 Hz)\n");
 
-    // Enable IRQs
     unsafe { aarch64::gic::enable_irqs(); }
     serial::write_str("rux: interrupts enabled\n");
 
-    // Wait for timer ticks
     let start = aarch64::timer::ticks();
     while aarch64::timer::ticks() < start + 10 {
         core::hint::spin_loop();
     }
     serial::write_str("rux: timer OK\n");
+
+    // ── Frame allocator (hardcoded for QEMU virt -m 128M) ────────────
+    // QEMU virt: RAM at 0x40000000. Kernel + BSS uses ~3 MiB.
+    // Place allocator struct at 0x43000000, frames start at 0x44000000.
+    serial::write_str("rux: init frame allocator...\n");
+    unsafe {
+        let alloc_ptr = 0x43000000 as *mut u8;
+        let alloc_qwords = core::mem::size_of::<rux_mm::frame::BuddyAllocator>() / 8;
+        for i in 0..alloc_qwords {
+            core::ptr::write_volatile((alloc_ptr as *mut u64).add(i), 0u64);
+        }
+        let alloc = &mut *(alloc_ptr as *mut rux_mm::frame::BuddyAllocator);
+        alloc.init(rux_klib::PhysAddr::new(0x44000000), 4096);
+        serial::write_str("rux: frame allocator ready (4096 frames)\n");
+
+        use rux_mm::FrameAllocator;
+        let page = alloc.alloc(rux_mm::PageSize::FourK).expect("alloc");
+        alloc.dealloc(page, rux_mm::PageSize::FourK);
+        serial::write_str("rux: alloc/dealloc OK\n");
+
+        // Slab test
+        let mut task_slab = crate::slab::Slab::new(1024);
+        let a = task_slab.alloc(alloc).expect("slab A");
+        let b = task_slab.alloc(alloc).expect("slab B");
+        task_slab.dealloc(b);
+        let c = task_slab.alloc(alloc).expect("slab C");
+        if c != b {
+            serial::write_str("FAIL: slab\n");
+            exit::exit_qemu(exit::EXIT_FAILURE);
+        }
+        task_slab.dealloc(a);
+        task_slab.dealloc(c);
+        serial::write_str("rux: slab OK\n");
+
+        // Page table map/translate/unmap
+        let mut pt = aarch64::paging::PageTable4Level::new(alloc).expect("pt");
+        let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("frame");
+        let virt = rux_klib::VirtAddr::new(0xA000_0000);
+        let flags = rux_mm::MappingFlags::READ.or(rux_mm::MappingFlags::WRITE);
+        pt.map_4k(virt, frame, flags, alloc).expect("map");
+        let t = pt.translate(virt).expect("translate");
+        if t.as_usize() != frame.as_usize() {
+            serial::write_str("FAIL: translate\n");
+            exit::exit_qemu(exit::EXIT_FAILURE);
+        }
+        pt.unmap_4k(virt).expect("unmap");
+        if pt.translate(virt).is_ok() {
+            serial::write_str("FAIL: unmap\n");
+            exit::exit_qemu(exit::EXIT_FAILURE);
+        }
+        alloc.dealloc(frame, rux_mm::PageSize::FourK);
+        serial::write_str("rux: page table OK\n");
+
+        // Process lifecycle
+        let p = task_slab.alloc(alloc).expect("p") as *mut rux_proc::task::Task;
+        core::ptr::write(p, rux_proc::task::Task::new(
+            rux_proc::id::Pid::new(1), rux_proc::id::Tgid::new(1)));
+        let ch = task_slab.alloc(alloc).expect("ch") as *mut rux_proc::task::Task;
+        core::ptr::write(ch, rux_proc::task::Task::new(
+            rux_proc::id::Pid::new(2), rux_proc::id::Tgid::new(2)));
+        (*ch).ppid = (*p).pid;
+        (*ch).exit_code = (42 & 0xFF) << 8;
+        (*ch).sched.state = rux_sched::TaskState::Zombie;
+        let code = ((*ch).exit_code >> 8) & 0xFF;
+        if code != 42 {
+            serial::write_str("FAIL: exit code\n");
+            exit::exit_qemu(exit::EXIT_FAILURE);
+        }
+        task_slab.dealloc(p as *mut u8);
+        task_slab.dealloc(ch as *mut u8);
+        serial::write_str("rux: process lifecycle OK\n");
+    }
 
     // ── Context switch test ─────────────────────────────────────────
     serial::write_str("rux: context switch test...\n");
