@@ -8,8 +8,8 @@ QEMU="${QEMU:-/opt/local/bin/qemu-system-x86_64}"
 TARGET="x86_64-unknown-none"
 KERNEL="target/${TARGET}/debug/rux-kernel"
 
-# Build (rust-toolchain.toml selects nightly automatically)
-cargo build -p rux-kernel --target ${TARGET}
+# Build with nightly toolchain
+rustup run nightly cargo build -p rux-kernel --target ${TARGET}
 
 # Convert to 32-bit ELF for QEMU multiboot
 rust-objcopy --output-target=elf32-i386 ${KERNEL} ${KERNEL}.elf32
