@@ -1,0 +1,12 @@
+[package]
+name = "rux-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rux-klib = { path = "../klib" }
+rux-arch = { path = "../arch" }
+rux-boot = { path = "../boot" }
+rux-mm = { path = "../mm" }
+rux-sched = { path = "../sched" }
+rux-proc = { path = "../proc" }
