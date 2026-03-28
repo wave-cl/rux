@@ -33,14 +33,37 @@ pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
 
     // Wait for some timer ticks
     let start = x86_64::pit::ticks();
-    while x86_64::pit::ticks() < start + 100 {
+    while x86_64::pit::ticks() < start + 10 {
         core::hint::spin_loop();
     }
-    let elapsed = x86_64::pit::ticks() - start;
-    serial::write_str("rux: timer test OK (");
-    let mut buf = [0u8; 10];
-    serial::write_str(write_u32(&mut buf, elapsed as u32));
-    serial::write_str(" ticks)\n");
+    serial::write_str("rux: timer OK\n");
+
+    // ── Context switch test ─────────────────────────────────────────────
+    // Create a second kernel task on a separate stack. Switch to it,
+    // it prints a message, switches back. Proves context_switch works.
+    serial::write_str("rux: context switch test...\n");
+
+    unsafe {
+        // Allocate a 16K stack for task B (use a static buffer)
+        static mut TASK_B_STACK: [u8; 16384] = [0; 16384];
+        let stack_top = TASK_B_STACK.as_ptr() as u64 + 16384;
+
+        // Initialize task B's stack to "return" to task_b_entry(0x42)
+        let task_b_rsp = x86_64::context::init_task_stack(
+            stack_top,
+            task_b_entry as u64,
+            0x42,
+        );
+
+        // Switch to task B (saves our RSP in the module-level MAIN_RSP)
+        x86_64::context::context_switch(
+            &raw mut MAIN_RSP,
+            task_b_rsp,
+        );
+
+        // We're back! Task B switched back to us.
+        serial::write_str("rux: back in main task\n");
+    }
 
     serial::write_str("rux: all checks passed\n");
     exit::exit_qemu(exit::EXIT_SUCCESS);
@@ -62,6 +85,42 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         serial::write_str("\n");
     }
     exit::exit_qemu(exit::EXIT_FAILURE);
+}
+
+/// Task B entry point — runs on its own stack.
+extern "C" fn task_b_entry() {
+    serial::write_str("rux: task B running!\n");
+
+    // Switch back to main task
+    unsafe {
+        static mut TASK_B_RSP: u64 = 0;
+        // MAIN_RSP was set by the switch that got us here
+        x86_64::context::context_switch(
+            &raw mut TASK_B_RSP,
+            MAIN_RSP,
+        );
+    }
+    // Should not reach here
+    loop { core::hint::spin_loop(); }
+}
+
+/// Reference to main task's saved RSP (set during context switch).
+/// Task B reads this to switch back.
+static mut MAIN_RSP: u64 = 0;
+
+fn write_hex_buf(buf: &mut [u8; 16], mut n: usize) {
+    if n == 0 {
+        serial::write_str("0");
+        return;
+    }
+    let mut i = 16;
+    while n > 0 && i > 0 {
+        i -= 1;
+        let digit = (n & 0xF) as u8;
+        buf[i] = if digit < 10 { b'0' + digit } else { b'a' + digit - 10 };
+        n >>= 4;
+    }
+    serial::write_bytes(&buf[i..]);
 }
 
 pub fn write_u32(buf: &mut [u8; 10], mut n: u32) -> &str {
