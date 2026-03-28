@@ -1,5 +1,8 @@
 .global _start
 _start:
+    mov $2, %r12            # loop counter: run 2 commands
+
+shell_loop:
     # write(1, "rux$ ", 5)
     mov $1, %rax
     mov $1, %rdi
@@ -7,28 +10,30 @@ _start:
     mov $5, %rdx
     int $0x80
 
-    # fork()
+    # vfork()
     mov $57, %rax
     int $0x80
-    # RAX = child PID (parent) or 0 (child)
 
     test %rax, %rax
     jz child
 
 parent:
-    # wait(child_pid, NULL, 0)
-    mov %rax, %rdi        # pid = child PID
-    mov $61, %rax         # syscall: wait
-    xor %rsi, %rsi        # wstatus = NULL
-    xor %rdx, %rdx        # options = 0
+    # wait(child_pid)
+    mov %rax, %rdi
+    mov $61, %rax
+    xor %rsi, %rsi
+    xor %rdx, %rdx
     int $0x80
 
-    # write(1, "rux$ done\n", 10)
+    # write(1, "done\n", 5)
     mov $1, %rax
     mov $1, %rdi
     lea done_msg(%rip), %rsi
-    mov $10, %rdx
+    mov $5, %rdx
     int $0x80
+
+    dec %r12
+    jnz shell_loop
 
     # exit(0)
     mov $60, %rax
@@ -49,5 +54,5 @@ child:
     int $0x80
 
 prompt:     .ascii "rux$ "
-done_msg:   .ascii "rux$ done\n"
+done_msg:   .ascii "done\n"
 hello_path: .asciz "/hello"
