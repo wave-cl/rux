@@ -540,7 +540,7 @@ fn syscall_exit(status: i32) -> ! {
 
         // If parent is blocked in vfork, resume it with child PID
         if VFORK_JMP.rsp != 0 {
-            vfork_longjmp(&raw mut VFORK_JMP, 42); // child PID = 42
+            vfork_longjmp(&raw mut VFORK_JMP, 42);
         }
     }
 
@@ -631,17 +631,27 @@ fn syscall_getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
 /// Track child exit status for wait4.
 static mut LAST_CHILD_EXIT: i32 = 0;
 
-fn syscall_wait4(pid: u64, wstatus_ptr: u64, _options: u64, _rusage: u64) -> i64 {
-    // vfork semantics: child already ran to completion before parent resumes.
+/// Track whether there's a child to collect.
+static mut CHILD_AVAILABLE: bool = false;
+
+fn syscall_wait4(pid: u64, wstatus_ptr: u64, options: u64, _rusage: u64) -> i64 {
     unsafe {
-        // Write exit status in Linux wait format: (exit_code << 8) for normal exit
+        // WNOHANG = 1
+        let wnohang = options & 1 != 0;
+
+        if !CHILD_AVAILABLE {
+            return -10; // -ECHILD (no child processes)
+        }
+
+        // Collect the child
+        CHILD_AVAILABLE = false;
+
         if wstatus_ptr != 0 {
             let status = (LAST_CHILD_EXIT as u32) << 8; // WEXITSTATUS format
             *(wstatus_ptr as *mut u32) = status;
         }
+        42 // child PID
     }
-    // Return the child PID (from vfork return)
-    42
 }
 
 #[unsafe(naked)]
@@ -1057,9 +1067,46 @@ fn syscall_vfork_linux() -> i64 {
         }
         VFORK_PARENT_USER_RSP = SAVED_USER_RSP;
 
+        CHILD_AVAILABLE = true;
+
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {
-            return 0; // child
+            // Child path: give it a COPY of the parent's stack so it doesn't
+            // corrupt the parent's stack between fork-return and execve.
+            use rux_mm::FrameAllocator;
+            let alloc = crate::kstate::alloc();
+
+            // Allocate a child stack page and copy the top of the parent's stack
+            let child_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
+            let parent_rsp = SAVED_USER_RSP;
+            // Parent stack page base (page containing RSP)
+            let parent_page_base = parent_rsp & !0xFFF;
+            let child_page = child_frame.as_usize() as *mut u8;
+            let parent_page = parent_page_base as *const u8;
+            // Copy the entire page
+            for j in 0..4096 {
+                *child_page.add(j) = *parent_page.add(j);
+            }
+
+            // Map child stack at a different virtual address so it doesn't
+            // conflict with the parent's. Use 0x7FFFB000 (one page below parent).
+            let child_va = 0x7FFFB000u64;
+            let mut cr3: u64;
+            core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
+            let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+                rux_klib::PhysAddr::new(cr3 as usize));
+            let flags = rux_mm::MappingFlags::READ
+                .or(rux_mm::MappingFlags::WRITE)
+                .or(rux_mm::MappingFlags::USER);
+            let _ = upt.unmap_4k(rux_klib::VirtAddr::new(child_va as usize));
+            let _ = upt.map_4k(rux_klib::VirtAddr::new(child_va as usize), child_frame, flags, alloc);
+
+            // Adjust SAVED_USER_RSP to point to the child stack
+            // Same offset within the page, but at the new VA
+            let offset_in_page = parent_rsp - parent_page_base;
+            SAVED_USER_RSP = child_va + offset_in_page;
+
+            return 0; // child gets fork return 0, runs on child stack
         } else {
             // Parent resumed
             if SAVED_CR3 != 0 {
