@@ -252,66 +252,36 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    // Populate /hello and /count
-    let hello_data: &[u8] = include_bytes!("../../../user/hello_aarch64.elf");
-    let hello_ino = fs.create(0, FileName::new(b"hello").unwrap(), 0o755).unwrap();
-    fs.write(hello_ino, 0, hello_data).unwrap();
+    // ── Filesystem hierarchy ──────────────────────────────────────
+    let bin = fs.mkdir(0, FileName::new(b"bin").unwrap(), 0o755).unwrap();
+    let etc = fs.mkdir(0, FileName::new(b"etc").unwrap(), 0o755).unwrap();
 
-    let count_data: &[u8] = include_bytes!("../../../user/count_aarch64.elf");
-    let count_ino = fs.create(0, FileName::new(b"count").unwrap(), 0o755).unwrap();
-    fs.write(count_ino, 0, count_data).unwrap();
+    let box_data: &[u8] = include_bytes!("../../../user/rux-box_aarch64.elf");
+    let box_ino = fs.create(bin, FileName::new(b"rux-box").unwrap(), 0o755).unwrap();
+    fs.write(box_ino, 0, box_data).unwrap();
 
-    let ls_data: &[u8] = include_bytes!("../../../user/ls_aarch64.elf");
-    let ls_ino = fs.create(0, FileName::new(b"ls").unwrap(), 0o755).unwrap();
-    fs.write(ls_ino, 0, ls_data).unwrap();
+    for name in [
+        b"sh" as &[u8], b"ls", b"cat", b"echo", b"wc", b"stat",
+        b"rm", b"mkfile", b"uname", b"uptime", b"hello", b"count",
+    ] {
+        fs.symlink(bin, FileName::new(name).unwrap(), b"rux-box").unwrap();
+    }
 
-    let cat_data: &[u8] = include_bytes!("../../../user/cat_aarch64.elf");
-    let cat_ino = fs.create(0, FileName::new(b"cat").unwrap(), 0o755).unwrap();
-    fs.write(cat_ino, 0, cat_data).unwrap();
+    let motd = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
+    let motd_ino = fs.create(etc, FileName::new(b"motd").unwrap(), 0o644).unwrap();
+    fs.write(motd_ino, 0, motd).unwrap();
 
-    let uname_data: &[u8] = include_bytes!("../../../user/uname_aarch64.elf");
-    let uname_ino = fs.create(0, FileName::new(b"uname").unwrap(), 0o755).unwrap();
-    fs.write(uname_ino, 0, uname_data).unwrap();
-
-    let uptime_data: &[u8] = include_bytes!("../../../user/uptime_aarch64.elf");
-    let uptime_ino = fs.create(0, FileName::new(b"uptime").unwrap(), 0o755).unwrap();
-    fs.write(uptime_ino, 0, uptime_data).unwrap();
-
-    let echo_data: &[u8] = include_bytes!("../../../user/echo_aarch64.elf");
-    let echo_ino = fs.create(0, FileName::new(b"echo").unwrap(), 0o755).unwrap();
-    fs.write(echo_ino, 0, echo_data).unwrap();
-
-    let mkfile_data: &[u8] = include_bytes!("../../../user/mkfile_aarch64.elf");
-    let mkfile_ino = fs.create(0, FileName::new(b"mkfile").unwrap(), 0o755).unwrap();
-    fs.write(mkfile_ino, 0, mkfile_data).unwrap();
-
-    let rm_data: &[u8] = include_bytes!("../../../user/rm_aarch64.elf");
-    let rm_prog_ino = fs.create(0, FileName::new(b"rm").unwrap(), 0o755).unwrap();
-    fs.write(rm_prog_ino, 0, rm_data).unwrap();
-
-    let wc_data: &[u8] = include_bytes!("../../../user/wc_aarch64.elf");
-    let wc_ino = fs.create(0, FileName::new(b"wc").unwrap(), 0o755).unwrap();
-    fs.write(wc_ino, 0, wc_data).unwrap();
-
-    let stat_data: &[u8] = include_bytes!("../../../user/stat_aarch64.elf");
-    let stat_ino = fs.create(0, FileName::new(b"stat").unwrap(), 0o755).unwrap();
-    fs.write(stat_ino, 0, stat_data).unwrap();
-
-    let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
-    let readme_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
-    fs.write(readme_ino, 0, readme).unwrap();
-
-    serial::write_str("rux: ramfs ready\n");
+    serial::write_str("rux: filesystem ready\n");
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Load and run the shell (through page-table-based ELF loader)
-    serial::write_str("rux: loading shell...\n");
-    let shell_data: &[u8] = include_bytes!("../../../user/shell_aarch64.elf");
+    // Load and run /bin/sh
+    serial::write_str("rux: exec /bin/sh\n");
+    crate::execargs::set(b"/bin/sh", b"");
     let alloc = &mut *alloc_ptr;
-    elf::load_and_exec_elf(shell_data, alloc);
+    elf::load_and_exec_elf(box_data, alloc);
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -753,66 +723,44 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    // Populate /hello and /count
-    let hello_data: &[u8] = include_bytes!("../../../user/hello_x86_64.elf");
-    let hello_ino = fs.create(0, FileName::new(b"hello").unwrap(), 0o755).unwrap();
-    fs.write(hello_ino, 0, hello_data).unwrap();
+    // ── Filesystem hierarchy ──────────────────────────────────────
+    // /bin/rux-box          (the multi-call binary)
+    // /bin/sh → rux-box     (symlinks for each applet)
+    // /etc/motd             (message of the day)
 
-    let count_data: &[u8] = include_bytes!("../../../user/count_x86_64.elf");
-    let count_ino = fs.create(0, FileName::new(b"count").unwrap(), 0o755).unwrap();
-    fs.write(count_ino, 0, count_data).unwrap();
+    let bin = fs.mkdir(0, FileName::new(b"bin").unwrap(), 0o755).unwrap();
+    let etc = fs.mkdir(0, FileName::new(b"etc").unwrap(), 0o755).unwrap();
 
-    let ls_data: &[u8] = include_bytes!("../../../user/ls_x86_64.elf");
-    let ls_ino = fs.create(0, FileName::new(b"ls").unwrap(), 0o755).unwrap();
-    fs.write(ls_ino, 0, ls_data).unwrap();
+    // Write rux-box binary into /bin/
+    let box_data: &[u8] = include_bytes!("../../../user/rux-box_x86_64.elf");
+    let box_ino = fs.create(bin, FileName::new(b"rux-box").unwrap(), 0o755).unwrap();
+    fs.write(box_ino, 0, box_data).unwrap();
 
-    let cat_data: &[u8] = include_bytes!("../../../user/cat_x86_64.elf");
-    let cat_ino = fs.create(0, FileName::new(b"cat").unwrap(), 0o755).unwrap();
-    fs.write(cat_ino, 0, cat_data).unwrap();
+    // Symlink all applet names to rux-box
+    for name in [
+        b"sh" as &[u8], b"ls", b"cat", b"echo", b"wc", b"stat",
+        b"rm", b"mkfile", b"uname", b"uptime", b"hello", b"count",
+    ] {
+        fs.symlink(bin, FileName::new(name).unwrap(), b"rux-box").unwrap();
+    }
 
-    let uname_data: &[u8] = include_bytes!("../../../user/uname_x86_64.elf");
-    let uname_ino = fs.create(0, FileName::new(b"uname").unwrap(), 0o755).unwrap();
-    fs.write(uname_ino, 0, uname_data).unwrap();
+    // /etc/motd
+    let motd = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
+    let motd_ino = fs.create(etc, FileName::new(b"motd").unwrap(), 0o644).unwrap();
+    fs.write(motd_ino, 0, motd).unwrap();
 
-    let uptime_data: &[u8] = include_bytes!("../../../user/uptime_x86_64.elf");
-    let uptime_ino = fs.create(0, FileName::new(b"uptime").unwrap(), 0o755).unwrap();
-    fs.write(uptime_ino, 0, uptime_data).unwrap();
-
-    let echo_data: &[u8] = include_bytes!("../../../user/echo_x86_64.elf");
-    let echo_ino = fs.create(0, FileName::new(b"echo").unwrap(), 0o755).unwrap();
-    fs.write(echo_ino, 0, echo_data).unwrap();
-
-    let mkfile_data: &[u8] = include_bytes!("../../../user/mkfile_x86_64.elf");
-    let mkfile_ino = fs.create(0, FileName::new(b"mkfile").unwrap(), 0o755).unwrap();
-    fs.write(mkfile_ino, 0, mkfile_data).unwrap();
-
-    let rm_data: &[u8] = include_bytes!("../../../user/rm_x86_64.elf");
-    let rm_prog_ino = fs.create(0, FileName::new(b"rm").unwrap(), 0o755).unwrap();
-    fs.write(rm_prog_ino, 0, rm_data).unwrap();
-
-    let wc_data: &[u8] = include_bytes!("../../../user/wc_x86_64.elf");
-    let wc_ino = fs.create(0, FileName::new(b"wc").unwrap(), 0o755).unwrap();
-    fs.write(wc_ino, 0, wc_data).unwrap();
-
-    let stat_data: &[u8] = include_bytes!("../../../user/stat_x86_64.elf");
-    let stat_ino = fs.create(0, FileName::new(b"stat").unwrap(), 0o755).unwrap();
-    fs.write(stat_ino, 0, stat_data).unwrap();
-
-    let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
-    let readme_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
-    fs.write(readme_ino, 0, readme).unwrap();
-
-    serial::write_str("rux: ramfs ready\n");
+    serial::write_str("rux: filesystem ready\n");
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Load and run the shell
-    serial::write_str("rux: loading shell...\n");
-    let shell_data: &[u8] = include_bytes!("../../../user/shell_x86_64.elf");
+    // Load and run /bin/sh (→ rux-box, dispatches to shell applet)
+    serial::write_str("rux: exec /bin/sh\n");
+    crate::execargs::set(b"/bin/sh", b"");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
-    elf::load_and_exec_elf(shell_data, alloc);
+    // Read rux-box and exec it
+    elf::load_and_exec_elf(box_data, alloc);
 }
 
 // Counters incremented by the preemptive tasks

@@ -17,6 +17,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             2 => syscall_open(arg0),
             3 => crate::fdtable::sys_close(arg0 as usize),
             8 => syscall_creat(arg0), // creat
+            83 => syscall_mkdir(arg0), // mkdir
             87 => syscall_unlink(arg0), // unlink
             39 => 1, // getpid
             96 => super::pit::ticks() as i64, // gettimeofday → ticks
@@ -70,30 +71,83 @@ fn syscall_write(fd: u64, buf: u64, len: u64) -> i64 {
     crate::fdtable::sys_write_fd(fd as usize, buf as *const u8, len as usize)
 }
 
+/// Resolve a path to (parent_inode, basename).
+/// E.g. "/bin/ls" → (inode_of_bin, b"ls"), "/foo" → (root, b"foo")
+unsafe fn resolve_parent_and_name(path_ptr: u64) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
+    use rux_vfs::FileSystem;
+    let cstr = path_ptr as *const u8;
+    let mut len = 0usize;
+    while *cstr.add(len) != 0 && len < 256 { len += 1; }
+    let path = core::slice::from_raw_parts(cstr, len);
+
+    // Find the last '/' to split into parent path and basename
+    let mut last_slash = 0;
+    for j in 0..len {
+        if path[j] == b'/' { last_slash = j; }
+    }
+
+    let fs = crate::kstate::fs();
+    if last_slash == 0 {
+        // Path like "/foo" — parent is root, name is everything after '/'
+        let name = &path[1..];
+        Ok((fs.root_inode(), name))
+    } else {
+        // Path like "/bin/ls" — resolve parent "/bin", name is "ls"
+        let parent_path = &path[..last_slash];
+        let name = &path[last_slash + 1..];
+        match rux_vfs::path::resolve_path(fs, parent_path) {
+            Ok(parent_ino) => Ok((parent_ino, name)),
+            Err(_) => Err(-2), // -ENOENT
+        }
+    }
+}
+
 fn syscall_creat(path_ptr: u64) -> i64 {
     unsafe {
         use rux_vfs::{FileSystem, FileName};
 
-        let cstr = path_ptr as *const u8;
-        let mut len = 0usize;
-        while *cstr.add(len) != 0 && len < 256 { len += 1; }
-
-        // Extract filename from path (skip leading '/')
-        let name_start = if len > 0 && *cstr == b'/' { 1 } else { 0 };
-        let name = core::slice::from_raw_parts(cstr.add(name_start), len - name_start);
+        let (dir_ino, name) = match resolve_parent_and_name(path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
             Ok(f) => f,
-            Err(_) => return -22, // -EINVAL
+            Err(_) => return -22,
         };
 
-        match fs.create(0, fname, 0o644) {
-            Ok(ino) => {
+        match fs.create(dir_ino, fname, 0o644) {
+            Ok(_ino) => {
                 // Auto-open the created file
+                let cstr = path_ptr as *const u8;
+                let mut len = 0usize;
+                while *cstr.add(len) != 0 && len < 256 { len += 1; }
                 crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
             }
-            Err(_) => -17, // -EEXIST or other error
+            Err(_) => -17,
+        }
+    }
+}
+
+fn syscall_mkdir(path_ptr: u64) -> i64 {
+    unsafe {
+        use rux_vfs::{FileSystem, FileName};
+
+        let (dir_ino, name) = match resolve_parent_and_name(path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) {
+            Ok(f) => f,
+            Err(_) => return -22,
+        };
+
+        match fs.mkdir(dir_ino, fname, 0o755) {
+            Ok(_) => 0,
+            Err(_) => -17,
         }
     }
 }
@@ -102,12 +156,10 @@ fn syscall_unlink(path_ptr: u64) -> i64 {
     unsafe {
         use rux_vfs::{FileSystem, FileName};
 
-        let cstr = path_ptr as *const u8;
-        let mut len = 0usize;
-        while *cstr.add(len) != 0 && len < 256 { len += 1; }
-
-        let name_start = if len > 0 && *cstr == b'/' { 1 } else { 0 };
-        let name = core::slice::from_raw_parts(cstr.add(name_start), len - name_start);
+        let (dir_ino, name) = match resolve_parent_and_name(path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
@@ -115,7 +167,7 @@ fn syscall_unlink(path_ptr: u64) -> i64 {
             Err(_) => return -22,
         };
 
-        match fs.unlink(0, fname) {
+        match fs.unlink(dir_ino, fname) {
             Ok(()) => 0,
             Err(_) => -2, // -ENOENT
         }
@@ -269,15 +321,29 @@ fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
         fs.stat(ino, &mut stat).unwrap();
         let size = stat.size as usize;
 
-        let buf_page = alloc.alloc(rux_mm::PageSize::FourK).expect("exec buf");
-        let buf = core::slice::from_raw_parts_mut(buf_page.as_usize() as *mut u8, 4096);
-        let n = fs.read(ino, 0, &mut buf[..size.min(4096)]).unwrap_or(0);
-
         // Save current CR3 so the parent can restore its page table after exec
         core::arch::asm!("mov {}, cr3", out(reg) SAVED_CR3, options(nostack));
 
         // Free previous child's pages before allocating new ones
         crate::pgtrack::begin_child(alloc);
+
+        // Allocate 8 contiguous pages (32KB) for the ELF buffer
+        const ELF_BUF_PAGES: usize = 8;
+        const ELF_BUF_SIZE: usize = ELF_BUF_PAGES * 4096;
+        let buf_base = alloc.alloc(rux_mm::PageSize::FourK).expect("exec buf");
+        for _ in 1..ELF_BUF_PAGES {
+            alloc.alloc(rux_mm::PageSize::FourK).expect("exec buf page");
+        }
+        let buf = core::slice::from_raw_parts_mut(buf_base.as_usize() as *mut u8, ELF_BUF_SIZE);
+        // Read the full ELF file
+        let read_size = size.min(ELF_BUF_SIZE);
+        let mut total_read = 0;
+        while total_read < read_size {
+            let n = fs.read(ino, total_read as u64, &mut buf[total_read..read_size]).unwrap_or(0);
+            if n == 0 { break; }
+            total_read += n;
+        }
+        let n = total_read;
 
         serial::write_str("rux: entering user mode...\n");
         crate::elf::load_and_exec_elf(&buf[..n], alloc);

@@ -283,19 +283,22 @@ pub unsafe fn load_and_exec_elf(
             .expect("map user seg");
     }
 
-    // Map user stack
-    let stack_phys = alloc.alloc(PageSize::FourK).expect("stack page");
-    let stack_va = 0x7FFFF000u64;
+    // Map user stack (4 pages = 16KB)
     let stack_flags = MappingFlags::READ
         .or(MappingFlags::WRITE)
         .or(MappingFlags::USER);
-    upt.map_4k(
-        VirtAddr::new(stack_va as usize), stack_phys, stack_flags, alloc,
-    ).expect("map stack");
+    let stack_base = 0x7FFFC000u64;
+    for p in 0..4u64 {
+        let sp = alloc.alloc(PageSize::FourK).expect("stack page");
+        upt.map_4k(
+            VirtAddr::new((stack_base + p * 4096) as usize), sp, stack_flags, alloc,
+        ).expect("map stack");
+    }
+    let stack_top = stack_base + 4 * 4096; // 0x80000000
 
     // Step 3: Activate and enter user mode
     upt.activate();
-    let user_sp = crate::execargs::write_to_stack(stack_va + 0x1000);
+    let user_sp = crate::execargs::write_to_stack(stack_top);
     crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }
 
@@ -388,15 +391,18 @@ pub unsafe fn load_and_exec_elf(
             .expect("map user seg");
     }
 
-    // Map user stack
-    let stack_phys = alloc.alloc(PageSize::FourK).expect("stack page");
-    let stack_va = 0x7FFFF000u64;
+    // Map user stack (4 pages = 16KB)
     let stack_flags = MappingFlags::READ
         .or(MappingFlags::WRITE)
         .or(MappingFlags::USER);
-    upt.map_4k(
-        VirtAddr::new(stack_va as usize), stack_phys, stack_flags, alloc,
-    ).expect("map stack");
+    let stack_base = 0x7FFFC000u64;
+    for p in 0..4u64 {
+        let sp = alloc.alloc(PageSize::FourK).expect("stack page");
+        upt.map_4k(
+            VirtAddr::new((stack_base + p * 4096) as usize), sp, stack_flags, alloc,
+        ).expect("map stack");
+    }
+    let stack_top = stack_base + 4 * 4096;
 
     // Step 3: Switch TTBR0 and enter user mode
     // We set TTBR0_EL1 directly (MMU is already enabled from kernel init)
@@ -409,6 +415,6 @@ pub unsafe fn load_and_exec_elf(
         in(reg) upt.root_phys().as_usize(),
         options(nostack)
     );
-    let user_sp = crate::execargs::write_to_stack(stack_va + 0x1000);
+    let user_sp = crate::execargs::write_to_stack(stack_top);
     crate::aarch64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }

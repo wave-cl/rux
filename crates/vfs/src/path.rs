@@ -1,16 +1,28 @@
-use crate::{FileSystem, FileName, InodeId, VfsError};
+use crate::{FileSystem, FileName, InodeId, InodeStat, InodeType, VfsError, S_IFMT, S_IFLNK};
 
 /// Maximum depth for parent tracking during path resolution.
 const MAX_DEPTH: usize = 64;
+
+/// Maximum symlink hops before returning ELOOP.
+const SYMLOOP_MAX: usize = 8;
 
 /// Resolve an absolute path to an inode ID.
 ///
 /// - Path must start with `b'/'` (absolute).
 /// - Handles `.` (current), `..` (parent), and normal components.
+/// - Follows symlinks (up to SYMLOOP_MAX hops).
 /// - Trailing slashes are ignored.
 /// - Empty path returns `InvalidPath`.
 #[inline]
 pub fn resolve_path<F: FileSystem>(fs: &F, path: &[u8]) -> Result<InodeId, VfsError> {
+    resolve_path_inner(fs, path, SYMLOOP_MAX)
+}
+
+fn resolve_path_inner<F: FileSystem>(
+    fs: &F,
+    path: &[u8],
+    symlinks_left: usize,
+) -> Result<InodeId, VfsError> {
     if path.is_empty() {
         return Err(VfsError::InvalidPath);
     }
@@ -22,7 +34,6 @@ pub fn resolve_path<F: FileSystem>(fs: &F, path: &[u8]) -> Result<InodeId, VfsEr
     let mut current = root;
 
     // Stack tracks the chain of parents for ".." handling.
-    // parent_stack[i] is the parent of the directory at depth i.
     let mut parent_stack = [root; MAX_DEPTH];
     let mut depth: usize = 0;
 
@@ -48,12 +59,10 @@ pub fn resolve_path<F: FileSystem>(fs: &F, path: &[u8]) -> Result<InodeId, VfsEr
         }
 
         if component == b".." {
-            // Go to parent: pop from stack.
             if depth > 0 {
                 current = parent_stack[depth - 1];
                 depth -= 1;
             } else {
-                // At root, ".." stays at root.
                 current = root;
             }
             continue;
@@ -62,7 +71,6 @@ pub fn resolve_path<F: FileSystem>(fs: &F, path: &[u8]) -> Result<InodeId, VfsEr
         // Normal component: lookup in current directory.
         let name = FileName::new(component)?;
 
-        // Push current onto parent stack before descending.
         if depth < MAX_DEPTH {
             parent_stack[depth] = current;
             depth += 1;
@@ -71,9 +79,53 @@ pub fn resolve_path<F: FileSystem>(fs: &F, path: &[u8]) -> Result<InodeId, VfsEr
         }
 
         current = fs.lookup(current, name)?;
+
+        // Follow symlinks
+        if is_symlink(fs, current) {
+            if symlinks_left == 0 {
+                return Err(VfsError::TooManySymlinks);
+            }
+
+            let mut link_buf = [0u8; 256];
+            let link_len = fs.readlink(current, &mut link_buf)?;
+            let target = &link_buf[..link_len];
+
+            if !target.is_empty() && target[0] == b'/' {
+                // Absolute symlink: rebuild full path = target + remaining
+                let remaining = &path[i..];
+                let mut full = [0u8; 512];
+                let mut fp = 0;
+                for &b in target { if fp < 512 { full[fp] = b; fp += 1; } }
+                for &b in remaining { if fp < 512 { full[fp] = b; fp += 1; } }
+                return resolve_path_inner(fs, &full[..fp], symlinks_left - 1);
+            } else {
+                // Relative symlink: look up target in the parent directory.
+                // Parent is parent_stack[depth-1] (we pushed before lookup).
+                let parent = if depth > 0 { parent_stack[depth - 1] } else { root };
+                let target_name = FileName::new(target)?;
+                current = fs.lookup(parent, target_name)?;
+                // Don't increment depth — we're replacing the symlink inode
+                // with the target inode at the same depth level.
+                // If there are remaining path components, continue resolving.
+                // (current might itself be a symlink — will be caught on next iteration)
+            }
+        }
     }
 
     Ok(current)
+}
+
+/// Check if an inode is a symlink by reading its stat.
+fn is_symlink<F: FileSystem>(fs: &F, ino: InodeId) -> bool {
+    let mut stat = InodeStat {
+        ino: 0, mode: 0, nlink: 0, uid: 0, gid: 0, size: 0,
+        blocks: 0, blksize: 0, _pad0: 0, atime: 0, mtime: 0, ctime: 0,
+        dev: 0, rdev: 0,
+    };
+    if fs.stat(ino, &mut stat).is_err() {
+        return false;
+    }
+    (stat.mode & S_IFMT) == S_IFLNK
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────

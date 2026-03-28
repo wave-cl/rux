@@ -1,5 +1,5 @@
 #!/bin/sh
-# QEMU integration tests for rux kernel.
+# QEMU integration tests for rux kernel (rux-box edition).
 # Runs both x86_64 and aarch64, validates boot, subsystems, and shell.
 set -e
 
@@ -29,7 +29,7 @@ rust-objcopy --output-target=elf32-i386 \
 # ── x86_64 ───────────────────────────────────────────────────────────
 printf "\n\033[1m── x86_64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 3; printf 'uname\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'mkfile test\n'; sleep 1; printf 'testing 123\n'; sleep 1; printf 'cat test\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'wc readme\n'; sleep 1; printf 'mkfile tmp\n'; sleep 1; printf 'test data\n'; sleep 1; printf 'rm tmp\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 3; printf 'uname\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'cat /etc/motd\n'; sleep 1; printf 'wc /etc/motd\n'; sleep 1; printf 'stat /etc/motd\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_X86" -cpu Haswell \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -serial mon:stdio -display none \
@@ -53,33 +53,28 @@ check "preemptive scheduling"   "rux: preemptive scheduling OK"
 # Process lifecycle
 check "fork/exit/wait"          "rux: process lifecycle OK"
 
-# VFS
-check "ramfs"                   "rux: ramfs ready"
+# Filesystem
+check "filesystem"              "rux: filesystem ready"
+check "exec /bin/sh"            "rux: exec /bin/sh"
 
-# Interactive shell + exec
+# rux-box applets
 check "shell prompt"            "rux$ "
 check "uname"                   "rux 0.1.0 x86_64"
-check "uptime"                  "up "
+check "hello"                   "Hello, world!"
+check "count"                   "1"
 check "echo"                    "rux works"
-check "mkfile creates"          "ok"
-check "cat reads created"       "testing 123"
-check "ls lists hello"          "hello"
-check "ls lists count"          "count"
-check "ls lists cat"            "cat"
-check "ls lists mkfile"         "mkfile"
-check "ls lists test"           "test"
-check "exec /hello"             "Hello, world!"
-check "exec /count"             "1"
-check "cat reads file"          "Welcome to rux!"
-check "cat file content"        "Type 'ls' to list commands."
-check "wc counts"               "3 12 62 readme"
-check "mkfile + rm"             "ok"
+check "uptime"                  "up "
+check "cat /etc/motd"           "Welcome to rux!"
+check "wc"                      "3 12 62"
+check "stat"                    "62 bytes"
+check "ls shows bin"            "bin"
+check "ls shows etc"            "etc"
 check "shell exit"              "rux: user exit(0)"
 
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 5; printf 'uname\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'mkfile test\n'; sleep 1; printf 'testing 123\n'; sleep 1; printf 'cat test\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'wc readme\n'; sleep 1; printf 'mkfile tmp\n'; sleep 1; printf 'test data\n'; sleep 1; printf 'rm tmp\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 5; printf 'uname\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'cat /etc/motd\n'; sleep 1; printf 'wc /etc/motd\n'; sleep 1; printf 'stat /etc/motd\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -serial mon:stdio -display none \
@@ -102,27 +97,22 @@ check "preemptive scheduling"   "rux: preemptive scheduling OK"
 # Process lifecycle
 check "process lifecycle"       "rux: process lifecycle OK"
 
-# VFS
-check "ramfs"                   "rux: ramfs ready"
+# Filesystem
+check "filesystem"              "rux: filesystem ready"
+check "exec /bin/sh"            "rux: exec /bin/sh"
 
-# Interactive shell + exec
+# rux-box applets
 check "shell prompt"            "rux$ "
 check "uname"                   "rux 0.1.0 aarch64"
-check "uptime"                  "up "
+check "hello"                   "Hello, world!"
+check "count"                   "1"
 check "echo"                    "rux works"
-check "mkfile creates"          "ok"
-check "cat reads created"       "testing 123"
-check "ls lists hello"          "hello"
-check "ls lists count"          "count"
-check "ls lists cat"            "cat"
-check "ls lists mkfile"         "mkfile"
-check "ls lists test"           "test"
-check "exec /hello"             "Hello, world!"
-check "exec /count"             "1"
-check "cat reads file"          "Welcome to rux!"
-check "cat file content"        "Type 'ls' to list commands."
-check "wc counts"               "3 12 62 readme"
-check "mkfile + rm"             "ok"
+check "uptime"                  "up "
+check "cat /etc/motd"           "Welcome to rux!"
+check "wc"                      "3 12 62"
+check "stat"                    "62 bytes"
+check "ls shows bin"            "bin"
+check "ls shows etc"            "etc"
 check "shell exit"              "rux: user exit(0)"
 
 # ── Summary ──────────────────────────────────────────────────────────

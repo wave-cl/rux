@@ -1,0 +1,17 @@
+[package]
+name = "rux-box"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rux-box"
+path = "src/main.rs"
+
+[dependencies]
+rux-rt = { path = "../rustrt" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
