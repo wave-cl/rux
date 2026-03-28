@@ -1,0 +1,28 @@
+[package]
+name = "rux-proc-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+rux-proc = { path = "..", features = ["fuzzing"] }
+
+[[bin]]
+name = "fdtable"
+path = "fuzz_targets/fdtable.rs"
+doc = false
+
+[[bin]]
+name = "signals"
+path = "fuzz_targets/signals.rs"
+doc = false
+
+[[bin]]
+name = "sigqueue"
+path = "fuzz_targets/sigqueue.rs"
+doc = false
