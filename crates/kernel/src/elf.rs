@@ -302,6 +302,111 @@ pub unsafe fn load_and_exec_elf(
     crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }
 
+/// Load an ELF binary from a VFS inode into a fresh user page table.
+/// Handles arbitrarily large binaries by reading segment data page-by-page
+/// directly from the filesystem instead of buffering the entire file.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn load_elf_from_inode(
+    ino: u64,
+    alloc: &mut dyn rux_mm::FrameAllocator,
+) -> ! {
+    use rux_klib::{PhysAddr, VirtAddr};
+    use rux_mm::{MappingFlags, PageSize};
+    use rux_vfs::FileSystem;
+
+    let mut talloc = crate::pgtrack::TrackingAllocator::new(alloc);
+    let alloc: &mut dyn rux_mm::FrameAllocator = &mut talloc;
+
+    let fs = crate::kstate::fs();
+
+    // Read ELF header (first 4KB is enough for header + program headers)
+    let mut hdr_buf = [0u8; 4096];
+    let _n = fs.read(ino, 0, &mut hdr_buf).unwrap_or(0);
+    let elf_info = parse_elf(&hdr_buf).expect("ELF parse failed");
+
+    // Step 1: Build user page table first (so we can map pages as we go)
+    let mut upt = crate::x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
+
+    // Kernel identity map (0-8 MiB, RWX, no USER)
+    let kflags = MappingFlags::READ
+        .or(MappingFlags::WRITE)
+        .or(MappingFlags::EXECUTE);
+    upt.identity_map_range(PhysAddr::new(0), 8 * 1024 * 1024, kflags, alloc)
+        .expect("kernel map");
+
+    // Step 2: Load each segment page-by-page from VFS
+    let mut tmp_buf = [0u8; 4096]; // reusable read buffer
+    for i in 0..elf_info.num_segments {
+        let seg = &elf_info.segments[i];
+        let vaddr_base = seg.vaddr & !0xFFF;
+        let vaddr_end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+        let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
+
+        let mut flags = MappingFlags::USER;
+        if seg.flags & PF_R != 0 { flags = flags.or(MappingFlags::READ); }
+        if seg.flags & PF_W != 0 { flags = flags.or(MappingFlags::WRITE); }
+        if seg.flags & PF_X != 0 { flags = flags.or(MappingFlags::EXECUTE); }
+
+        for p in 0..num_pages {
+            let va = vaddr_base + (p as u64) * 4096;
+            let phys = alloc.alloc(PageSize::FourK).expect("seg page");
+            let page_ptr = phys.as_usize() as *mut u8;
+
+            // Zero the page
+            for j in 0..4096 { core::ptr::write_volatile(page_ptr.add(j), 0); }
+
+            // Copy file data that falls within this page
+            let page_va_start = va;
+            let page_va_end = va + 4096;
+            let seg_file_start = seg.vaddr;
+            let seg_file_end = seg.vaddr + seg.filesz;
+            let copy_start = page_va_start.max(seg_file_start);
+            let copy_end = page_va_end.min(seg_file_end);
+
+            if copy_start < copy_end {
+                let file_off = seg.file_offset + (copy_start - seg.vaddr);
+                let dest_off = (copy_start - page_va_start) as usize;
+                let len = (copy_end - copy_start) as usize;
+
+                // Read from VFS in chunks via tmp_buf
+                let mut read_pos = 0;
+                while read_pos < len {
+                    let chunk = (len - read_pos).min(4096);
+                    let n = fs.read(ino, file_off + read_pos as u64, &mut tmp_buf[..chunk]).unwrap_or(0);
+                    if n == 0 { break; }
+                    for j in 0..n {
+                        *page_ptr.add(dest_off + read_pos + j) = tmp_buf[j];
+                    }
+                    read_pos += n;
+                }
+            }
+
+            // Map the page (unmap first if kernel identity map conflicts)
+            let va_addr = VirtAddr::new(va as usize);
+            let _ = upt.unmap_4k(va_addr); // ignore error if not mapped
+            upt.map_4k(va_addr, phys, flags, alloc).expect("map seg");
+        }
+    }
+
+    // Step 3: Map user stack (4 pages = 16KB)
+    let stack_flags = MappingFlags::READ
+        .or(MappingFlags::WRITE)
+        .or(MappingFlags::USER);
+    let stack_base = 0x7FFFC000u64;
+    for p in 0..4u64 {
+        let sp = alloc.alloc(PageSize::FourK).expect("stack page");
+        upt.map_4k(
+            VirtAddr::new((stack_base + p * 4096) as usize), sp, stack_flags, alloc,
+        ).expect("map stack");
+    }
+    let stack_top = stack_base + 4 * 4096;
+
+    // Step 4: Activate and enter user mode
+    upt.activate();
+    let user_sp = crate::execargs::write_to_stack(stack_top);
+    crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
+}
+
 /// aarch64 version: load ELF into user page table, enable, enter EL0.
 ///
 /// # Safety

@@ -115,33 +115,40 @@ pub fn populate(
         }
     }
 
-    // Phase 2: Write /bin/rux-box
+    // Phase 2: Write /bin/busybox (the main binary)
     let bin = fs.lookup(root, FileName::new(b"bin").unwrap()).unwrap();
-    let box_ino = fs.create(bin, FileName::new(b"rux-box").unwrap(), 0o755).unwrap();
-    fs.write(box_ino, 0, elf_data).unwrap();
+    let box_ino = fs.create(bin, FileName::new(b"busybox").unwrap(), 0o755).unwrap();
+    // Write the binary in chunks (may be >1MB)
+    let mut offset = 0u64;
+    while (offset as usize) < elf_data.len() {
+        let chunk = &elf_data[offset as usize..];
+        let n = fs.write(box_ino, offset, chunk).unwrap_or(0);
+        if n == 0 { break; }
+        offset += n as u64;
+    }
 
     // Phase 3: Create symlinks
     // /bin/* → rux-box (relative, same directory)
     let bin_ino = bin;
     for &name in BIN_CMDS {
-        fs.symlink(bin_ino, FileName::new(name).unwrap(), b"rux-box").unwrap();
+        fs.symlink(bin_ino, FileName::new(name).unwrap(), b"busybox").unwrap();
     }
 
     // /sbin/*, /usr/bin/*, /usr/sbin/* → /bin/rux-box (absolute, different dir)
     let sbin = fs.lookup(root, FileName::new(b"sbin").unwrap()).unwrap();
     for &name in SBIN_CMDS {
-        fs.symlink(sbin, FileName::new(name).unwrap(), b"/bin/rux-box").unwrap();
+        fs.symlink(sbin, FileName::new(name).unwrap(), b"/bin/busybox").unwrap();
     }
 
     let usr = fs.lookup(root, FileName::new(b"usr").unwrap()).unwrap();
     let usr_bin = fs.lookup(usr, FileName::new(b"bin").unwrap()).unwrap();
     for &name in USR_BIN_CMDS {
-        fs.symlink(usr_bin, FileName::new(name).unwrap(), b"/bin/rux-box").unwrap();
+        fs.symlink(usr_bin, FileName::new(name).unwrap(), b"/bin/busybox").unwrap();
     }
 
     let usr_sbin = fs.lookup(usr, FileName::new(b"sbin").unwrap()).unwrap();
     for &name in USR_SBIN_CMDS {
-        fs.symlink(usr_sbin, FileName::new(name).unwrap(), b"/bin/rux-box").unwrap();
+        fs.symlink(usr_sbin, FileName::new(name).unwrap(), b"/bin/busybox").unwrap();
     }
 
     // Phase 4: Create config files

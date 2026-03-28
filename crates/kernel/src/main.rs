@@ -341,6 +341,9 @@ fn x86_64_init(multiboot_info: usize) {
     unsafe { x86_64::idt::init(); }
     serial::write_str("rux: IDT loaded\n");
 
+    // Initialize SYSCALL/SYSRET MSRs for Linux ABI
+    unsafe { x86_64::syscall::init_syscall_msrs(); }
+
     // Initialize PIT timer at 1000 Hz
     unsafe { x86_64::pit::init(1000); }
     serial::write_str("rux: PIT timer initialized (1000 Hz)\n");
@@ -710,18 +713,19 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let fs = &mut *fs_ptr;
 
     // Populate full busybox-compatible rootfs
-    let box_data: &[u8] = include_bytes!("../../../user/rux-box_x86_64.elf");
+    let box_data: &[u8] = include_bytes!("../../../user/busybox_x86_64");
     rootfs::populate(fs, box_data);
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Boot: exec /sbin/init
+    // Boot: exec /sbin/init via VFS (supports large binaries like busybox)
     serial::write_str("rux: exec /sbin/init\n");
     crate::execargs::set(b"/sbin/init", b"");
+    let init_ino = rux_vfs::path::resolve_path(fs, b"/sbin/init").expect("init not found");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
-    elf::load_and_exec_elf(box_data, alloc);
+    elf::load_elf_from_inode(init_ino as u64, alloc);
 }
 
 // Counters incremented by the preemptive tasks
