@@ -693,27 +693,29 @@ fn syscall_brk(addr: u64) -> i64 {
     }
 }
 
-fn syscall_mmap(addr: u64, len: u64, _prot: u64, flags: u64, _fd: u64) -> i64 {
+fn syscall_mmap(addr: u64, len: u64, _prot: u64, mmap_flags: u64, _fd: u64) -> i64 {
     unsafe {
         use rux_mm::FrameAllocator;
         static mut MMAP_BASE: u64 = 0x10000000;
 
-        // MAP_ANONYMOUS = 0x20
-        if flags & 0x20 == 0 {
+        // MAP_ANONYMOUS = 0x20, MAP_FIXED = 0x10
+        if mmap_flags & 0x20 == 0 {
             return -12; // -ENOMEM (no file-backed mmap yet)
         }
 
         let aligned_len = (len + 0xFFF) & !0xFFF;
+
+        // Allocate from counter (MAP_FIXED will be handled separately later)
         let result = MMAP_BASE;
         MMAP_BASE += aligned_len;
 
-        // Actually allocate and map pages
+        // Allocate and map pages
         let alloc = crate::kstate::alloc();
         let mut cr3: u64;
         core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
         let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
             rux_klib::PhysAddr::new(cr3 as usize));
-        let flags = rux_mm::MappingFlags::READ
+        let pg_flags = rux_mm::MappingFlags::READ
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::USER);
 
@@ -722,9 +724,8 @@ fn syscall_mmap(addr: u64, len: u64, _prot: u64, flags: u64, _fd: u64) -> i64 {
             let ptr = frame.as_usize() as *mut u8;
             for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
             let va = rux_klib::VirtAddr::new((result + offset) as usize);
-            if upt.map_4k(va, frame, flags, alloc).is_err() {
-                serial::write_str("MMAP MAP FAIL!\n");
-            }
+            let _ = upt.unmap_4k(va); // allow overwriting existing mappings
+            let _ = upt.map_4k(va, frame, pg_flags, alloc);
         }
 
         result as i64
