@@ -213,14 +213,20 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    // Populate /hello with the ELF binary
+    // Populate /hello and /count
     let hello_data: &[u8] = include_bytes!("../../../user/hello_aarch64.elf");
     let hello_ino = fs.create(0, FileName::new(b"hello").unwrap(), 0o755).unwrap();
     fs.write(hello_ino, 0, hello_data).unwrap();
 
+    let count_data: &[u8] = include_bytes!("../../../user/count_aarch64.elf");
+    let count_ino = fs.create(0, FileName::new(b"count").unwrap(), 0o755).unwrap();
+    fs.write(count_ino, 0, count_data).unwrap();
+
     let mut buf = [0u8; 10];
     serial::write_str("rux: ramfs: /hello (");
     serial::write_str(write_u32(&mut buf, hello_data.len() as u32));
+    serial::write_str(" bytes), /count (");
+    serial::write_str(write_u32(&mut buf, count_data.len() as u32));
     serial::write_str(" bytes)\n");
 
     // Init kernel state
@@ -676,14 +682,20 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    // Populate /hello with the ELF binary
+    // Populate /hello and /count
     let hello_data: &[u8] = include_bytes!("../../../user/hello_x86_64.elf");
     let hello_ino = fs.create(0, FileName::new(b"hello").unwrap(), 0o755).unwrap();
     fs.write(hello_ino, 0, hello_data).unwrap();
 
+    let count_data: &[u8] = include_bytes!("../../../user/count_x86_64.elf");
+    let count_ino = fs.create(0, FileName::new(b"count").unwrap(), 0o755).unwrap();
+    fs.write(count_ino, 0, count_data).unwrap();
+
     let mut buf = [0u8; 10];
     serial::write_str("rux: ramfs: /hello (");
     serial::write_str(write_u32(&mut buf, hello_data.len() as u32));
+    serial::write_str(" bytes), /count (");
+    serial::write_str(write_u32(&mut buf, count_data.len() as u32));
     serial::write_str(" bytes)\n");
 
     // Init kernel state

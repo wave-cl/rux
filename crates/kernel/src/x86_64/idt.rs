@@ -303,6 +303,11 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
         14 => {
             let cr2: u64;
             unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nostack)); }
+            super::serial::write_str("PAGE FAULT: addr=");
+            crate::write_hex_serial(cr2 as usize);
+            super::serial::write_str(" err=");
+            crate::write_hex_serial(error_code as usize);
+            super::serial::write_byte(b'\n');
             panic!("Page fault at {:#x} (error_code={:#x})", cr2, error_code);
         }
         32 => {
