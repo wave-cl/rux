@@ -1,0 +1,61 @@
+[build]
+target = "x86_64-unknown-none"
+
+# ── x86_64 ────────────────────────────────────────────────────────────────
+#
+# target-cpu=haswell: Haswell scheduling model for instruction-level
+#   parallelism tuning. Haswell implies BMI1/BMI2/POPCNT/LZCNT/MOVBE
+#   (all GPR-only, safe in kernel) plus SSE through AVX2 (unsafe — see below).
+#
+# target-feature: We explicitly re-enable the GPR extensions and suppress
+#   ALL xmm/ymm/mm register usage:
+#   - +soft-float: soft-float ABI, no SSE for parameter passing or float ops
+#   - -mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2: kill all SSE tiers
+#   - -avx,-avx2,-fma: kill all AVX tiers
+#   target-cpu=haswell re-enables SSE/SSE2/SSE3/MMX (they're Haswell baseline).
+#   Without explicit suppression, LLVM will generate movdqu/movaps for struct
+#   copies and memcpy, touching xmm registers. If an interrupt fires mid-copy,
+#   the current task's FPU context is silently corrupted.
+#
+# code-model=kernel: all code lives in the top 2GB of virtual address space
+#   (0xFFFFFFFF80000000+). Every global reference uses 32-bit sign-extended
+#   addressing — saves instruction bytes on every static, global, and function
+#   pointer load. This is -mcmodel=kernel in GCC/Clang.
+#
+# Linker: lld with --icf=all (merge identical functions) and --gc-sections
+#   (remove unreferenced sections). Both reduce code size → better I-cache.
+[target.x86_64-unknown-none]
+rustflags = [
+    "-C", "target-cpu=haswell",
+    "-C", "target-feature=+bmi1,+bmi2,+popcnt,+lzcnt,+soft-float,-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,-fma",
+    "-C", "code-model=kernel",
+    "-C", "force-frame-pointers=no",
+    "-C", "linker-flavor=ld.lld",
+    "-C", "link-arg=-z", "-C", "link-arg=max-page-size=4096",
+    "-C", "link-arg=--icf=all",
+    "-C", "link-arg=--gc-sections",
+]
+
+# ── aarch64 ───────────────────────────────────────────────────────────────
+#
+# target-cpu=apple-m1: ARMv8.5-A + LSE atomics + Apple-tuned scheduling.
+#
+# NEON is architecturally mandatory on AArch64 — it cannot be suppressed.
+# The kernel must save/restore NEON/FP state (fpsimd_save_state) on every
+# context switch regardless. There is no +soft-float equivalent; the
+# AArch64 calling convention requires V0-V7 for float/SIMD arguments.
+#
+# No kernel-specific code model exists on aarch64 — PC-relative addressing
+# is native to the architecture (ADRP+ADD, ±4GB range).
+#
+# max-page-size=16384: Apple Silicon uses 16KB pages. Setting 4096 would
+# misalign ELF loadable segments, causing page faults or boot failure.
+[target.aarch64-unknown-none]
+rustflags = [
+    "-C", "target-cpu=apple-m1",
+    "-C", "force-frame-pointers=no",
+    "-C", "linker-flavor=ld.lld",
+    "-C", "link-arg=-z", "-C", "link-arg=max-page-size=16384",
+    "-C", "link-arg=--icf=all",
+    "-C", "link-arg=--gc-sections",
+]

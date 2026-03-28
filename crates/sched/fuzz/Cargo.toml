@@ -1,0 +1,28 @@
+[package]
+name = "rux-sched-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+rux-sched = { path = "..", features = ["fuzzing"] }
+
+[[bin]]
+name = "rbtree"
+path = "fuzz_targets/rbtree.rs"
+doc = false
+
+[[bin]]
+name = "cfs"
+path = "fuzz_targets/cfs.rs"
+doc = false
+
+[[bin]]
+name = "eevdf"
+path = "fuzz_targets/eevdf.rs"
+doc = false
