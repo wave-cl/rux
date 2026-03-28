@@ -26,15 +26,7 @@ pub fn sys_open(path: &[u8]) -> i64 {
 
         let ino = match rux_vfs::path::resolve_path(fs, path) {
             Ok(ino) => ino,
-            Err(e) => {
-                crate::serial::write_str("  fdtable: open failed: ");
-                crate::serial::write_bytes(path);
-                crate::serial::write_str(" err=");
-                let mut b = [0u8; 10];
-                crate::serial::write_str(crate::write_u32(&mut b, e as u32));
-                crate::serial::write_str("\n");
-                return -2;
-            }
+            Err(_) => return -2, // -ENOENT
         };
 
         // Find a free fd slot

@@ -117,17 +117,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Keep interrupts disabled during syscall handling for now
     // (enabling would require saving/restoring more state on timer IRQ)
 
-    // Log all syscalls with first 2 args
-    {
-        let mut nbuf = [0u8; 10];
-        serial::write_str("sc[");
-        serial::write_str(crate::write_u32(&mut nbuf, nr as u32));
-        serial::write_str("](");
-        crate::write_hex_serial(a0 as usize);
-        serial::write_str(",");
-        crate::write_hex_serial(a1 as usize);
-        serial::write_str(")\n");
-    }
+    // Syscall logging disabled for production
 
     let result = match nr {
         // File I/O
@@ -205,12 +195,6 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         }
     };
 
-    // Log return value
-    {
-        serial::write_str("  =");
-        crate::write_hex_serial(result as usize);
-        serial::write_str("\n");
-    }
     result
 }
 
@@ -265,9 +249,6 @@ fn syscall_open(path_ptr: u64) -> i64 {
         let mut len = 0usize;
         while *cstr.add(len) != 0 && len < 256 { len += 1; }
         let path = core::slice::from_raw_parts(cstr, len);
-        serial::write_str("  open(\"");
-        serial::write_bytes(path);
-        serial::write_str("\")\n");
         crate::fdtable::sys_open(path)
     }
 }
@@ -876,22 +857,6 @@ fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
                     in("edx") hi,
                     options(nostack),
                 );
-                // Verify: read it back
-                let mut v_lo: u32;
-                let mut v_hi: u32;
-                core::arch::asm!(
-                    "rdmsr",
-                    in("ecx") 0xC0000100u32,
-                    out("eax") v_lo,
-                    out("edx") v_hi,
-                    options(nostack),
-                );
-                let readback = ((v_hi as u64) << 32) | (v_lo as u64);
-                serial::write_str("  FS_BASE set=");
-                crate::write_hex_serial(addr as usize);
-                serial::write_str(" read=");
-                crate::write_hex_serial(readback as usize);
-                serial::write_str("\n");
                 0
             }
             ARCH_SET_GS => {

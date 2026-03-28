@@ -716,23 +716,12 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let box_data: &[u8] = include_bytes!("../../../user/busybox_x86_64");
     rootfs::populate(fs, box_data);
 
-    // Verify paths resolve
-    match rux_vfs::path::resolve_path(fs, b"/etc/passwd") {
-        Ok(ino) => {
-            serial::write_str("rux: /etc/passwd = inode ");
-            let mut b = [0u8; 10];
-            serial::write_str(write_u32(&mut b, ino as u32));
-            serial::write_str("\n");
-        }
-        Err(_) => serial::write_str("rux: ERROR: /etc/passwd NOT FOUND!\n"),
-    }
-
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
     serial::write_str("rux: exec /sbin/init\n");
-    crate::execargs::set(b"/bin/cat", b"/etc/passwd");
+    crate::execargs::set(b"/bin/cat", b"/etc/os-release");
     let init_ino = rux_vfs::path::resolve_path(fs, b"/bin/busybox").expect("busybox not found");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
     elf::load_elf_from_inode(init_ino as u64, alloc);
