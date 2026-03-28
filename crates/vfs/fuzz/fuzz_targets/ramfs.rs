@@ -3,8 +3,51 @@
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 
-use rux_vfs::ramfs::RamFs;
+use rux_vfs::ramfs::{RamFs, PAGE_SIZE};
 use rux_vfs::{DirEntry, FileName, FileSystem, InodeStat, InodeType};
+
+use rux_klib::PhysAddr;
+use rux_mm::{FrameAllocator, MemoryError, PageSize};
+
+/// Simple mock allocator for fuzzing. Hands out heap-backed pages.
+struct MockAllocator {
+    pages: Vec<*mut [u8; PAGE_SIZE]>,
+}
+
+impl MockAllocator {
+    fn new() -> Self {
+        Self { pages: Vec::new() }
+    }
+}
+
+impl FrameAllocator for MockAllocator {
+    fn alloc(&mut self, _size: PageSize) -> Result<PhysAddr, MemoryError> {
+        let page = Box::new([0u8; PAGE_SIZE]);
+        let ptr = Box::into_raw(page);
+        self.pages.push(ptr);
+        Ok(PhysAddr::new(ptr as usize))
+    }
+
+    fn dealloc(&mut self, addr: PhysAddr, _size: PageSize) {
+        let ptr = addr.as_usize() as *mut [u8; PAGE_SIZE];
+        if let Some(pos) = self.pages.iter().position(|&p| p == ptr) {
+            self.pages.swap_remove(pos);
+        }
+        unsafe { drop(Box::from_raw(ptr)); }
+    }
+
+    fn available_frames(&self, _size: PageSize) -> usize {
+        usize::MAX
+    }
+}
+
+impl Drop for MockAllocator {
+    fn drop(&mut self) {
+        for &ptr in &self.pages {
+            unsafe { drop(Box::from_raw(ptr)); }
+        }
+    }
+}
 
 /// Fuzz operations that exercise the RamFs FileSystem trait.
 #[derive(Debug, Arbitrary)]
@@ -36,7 +79,9 @@ fn make_name(seed: u8) -> [u8; 4] {
 }
 
 fuzz_target!(|ops: Vec<FsOp>| {
-    let mut fs = Box::new(RamFs::new());
+    let mut alloc = Box::new(MockAllocator::new());
+    let alloc_ptr: *mut dyn FrameAllocator = &mut *alloc as &mut dyn FrameAllocator;
+    let mut fs = unsafe { Box::new(RamFs::new(alloc_ptr)) };
     let mut stat_buf = InodeStat {
         ino: 0, mode: 0, nlink: 0, uid: 0, gid: 0,
         size: 0, blocks: 0, blksize: 0, _pad0: 0,
@@ -133,4 +178,8 @@ fuzz_target!(|ops: Vec<FsOp>| {
         // Invariant: root inode is always valid and a directory.
         assert!(fs.stat(0, &mut stat_buf).is_ok());
     }
+
+    // Drop fs before alloc so the allocator is still valid during fs drop (if needed).
+    drop(fs);
+    drop(alloc);
 });

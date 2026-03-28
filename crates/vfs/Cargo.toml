@@ -3,5 +3,9 @@ name = "rux-vfs"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+rux-klib = { path = "../klib" }
+rux-mm = { path = "../mm" }
+
 [features]
 alloc = []

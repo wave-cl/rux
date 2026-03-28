@@ -7,8 +7,54 @@ use rux_vfs::ramfs::{RamFs, PAGE_SIZE};
 use rux_vfs::path::resolve_path;
 use rux_vfs::{DirEntry, FileName, FileSystem, InodeStat, InodeType};
 
-fn new_fs() -> Box<RamFs> {
-    Box::new(RamFs::new())
+use rux_klib::PhysAddr;
+use rux_mm::{FrameAllocator, MemoryError, PageSize};
+
+/// Simple mock allocator for benchmarks.
+struct MockAllocator {
+    pages: Vec<*mut [u8; PAGE_SIZE]>,
+}
+
+impl MockAllocator {
+    fn new() -> Self {
+        Self { pages: Vec::new() }
+    }
+}
+
+impl FrameAllocator for MockAllocator {
+    fn alloc(&mut self, _size: PageSize) -> Result<PhysAddr, MemoryError> {
+        let page = Box::new([0u8; PAGE_SIZE]);
+        let ptr = Box::into_raw(page);
+        self.pages.push(ptr);
+        Ok(PhysAddr::new(ptr as usize))
+    }
+
+    fn dealloc(&mut self, addr: PhysAddr, _size: PageSize) {
+        let ptr = addr.as_usize() as *mut [u8; PAGE_SIZE];
+        if let Some(pos) = self.pages.iter().position(|&p| p == ptr) {
+            self.pages.swap_remove(pos);
+        }
+        unsafe { drop(Box::from_raw(ptr)); }
+    }
+
+    fn available_frames(&self, _size: PageSize) -> usize {
+        usize::MAX
+    }
+}
+
+impl Drop for MockAllocator {
+    fn drop(&mut self) {
+        for &ptr in &self.pages {
+            unsafe { drop(Box::from_raw(ptr)); }
+        }
+    }
+}
+
+fn new_fs() -> (Box<MockAllocator>, Box<RamFs>) {
+    let mut alloc = Box::new(MockAllocator::new());
+    let alloc_ptr: *mut dyn FrameAllocator = &mut *alloc as &mut dyn FrameAllocator;
+    let fs = unsafe { Box::new(RamFs::new(alloc_ptr)) };
+    (alloc, fs)
 }
 
 fn zeroed_stat() -> InodeStat {
@@ -28,7 +74,7 @@ fn zeroed_dirent() -> DirEntry {
 
 #[bench]
 fn bench_lookup(b: &mut Bencher) {
-    let mut fs = new_fs();
+    let (_alloc, mut fs) = new_fs();
     // Create 32 files so lookup has to scan
     for i in 0..32u8 {
         let name_bytes = [b'f', b'0' + i / 10, b'0' + i % 10];
@@ -44,7 +90,7 @@ fn bench_lookup(b: &mut Bencher) {
 
 #[bench]
 fn bench_create(b: &mut Bencher) {
-    let mut fs = new_fs();
+    let (_alloc, mut fs) = new_fs();
     let mut idx = 0u32;
     b.iter(|| {
         let mut buf = [0u8; 16];
@@ -58,7 +104,7 @@ fn bench_create(b: &mut Bencher) {
 
 #[bench]
 fn bench_read_4k(b: &mut Bencher) {
-    let mut fs = new_fs();
+    let (_alloc, mut fs) = new_fs();
     let name = FileName::new(b"bigfile").unwrap();
     let ino = fs.create(0, name, 0o644).unwrap();
     let data = [0xABu8; PAGE_SIZE];
@@ -73,7 +119,7 @@ fn bench_read_4k(b: &mut Bencher) {
 
 #[bench]
 fn bench_write_4k(b: &mut Bencher) {
-    let mut fs = new_fs();
+    let (_alloc, mut fs) = new_fs();
     let name = FileName::new(b"wrfile").unwrap();
     let ino = fs.create(0, name, 0o644).unwrap();
     let data = [0xCDu8; PAGE_SIZE];
@@ -85,7 +131,7 @@ fn bench_write_4k(b: &mut Bencher) {
 
 #[bench]
 fn bench_readdir(b: &mut Bencher) {
-    let mut fs = new_fs();
+    let (_alloc, mut fs) = new_fs();
     for i in 0..32u8 {
         let name_bytes = [b'f', b'0' + i / 10, b'0' + i % 10];
         let name = FileName::new(&name_bytes[..3]).unwrap();
@@ -104,7 +150,7 @@ fn bench_readdir(b: &mut Bencher) {
 
 #[bench]
 fn bench_stat(b: &mut Bencher) {
-    let mut fs = new_fs();
+    let (_alloc, mut fs) = new_fs();
     let name = FileName::new(b"statme").unwrap();
     let ino = fs.create(0, name, 0o644).unwrap();
     let mut st = zeroed_stat();
@@ -117,7 +163,7 @@ fn bench_stat(b: &mut Bencher) {
 
 #[bench]
 fn bench_path_resolve(b: &mut Bencher) {
-    let mut fs = new_fs();
+    let (_alloc, mut fs) = new_fs();
     let foo = fs.mkdir(0, FileName::new(b"foo").unwrap(), 0o755).unwrap();
     let bar = fs.mkdir(foo, FileName::new(b"bar").unwrap(), 0o755).unwrap();
     fs.create(bar, FileName::new(b"baz").unwrap(), 0o644).unwrap();

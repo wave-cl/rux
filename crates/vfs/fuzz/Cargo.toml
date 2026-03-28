@@ -11,6 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 rux-vfs = { path = ".." }
+rux-klib = { path = "../../klib" }
+rux-mm = { path = "../../mm" }
 
 [[bin]]
 name = "ramfs"

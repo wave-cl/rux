@@ -82,12 +82,50 @@ pub fn resolve_path<F: FileSystem>(fs: &F, path: &[u8]) -> Result<InodeId, VfsEr
 mod tests {
     extern crate alloc;
     use alloc::boxed::Box;
+    use alloc::vec::Vec;
     use super::*;
-    use crate::ramfs::RamFs;
+    use crate::ramfs::{RamFs, PAGE_SIZE};
     use crate::{FileSystem, FileName, VfsError};
+    use rux_klib::PhysAddr;
+    use rux_mm::{FrameAllocator, MemoryError, PageSize};
 
-    fn setup() -> Box<RamFs> {
-        let mut fs = RamFs::new_boxed();
+    struct MockAllocator {
+        pages: Vec<*mut [u8; PAGE_SIZE]>,
+    }
+
+    impl MockAllocator {
+        fn new() -> Self { Self { pages: Vec::new() } }
+    }
+
+    impl FrameAllocator for MockAllocator {
+        fn alloc(&mut self, _size: PageSize) -> Result<PhysAddr, MemoryError> {
+            let page = Box::new([0u8; PAGE_SIZE]);
+            let ptr = Box::into_raw(page);
+            self.pages.push(ptr);
+            Ok(PhysAddr::new(ptr as usize))
+        }
+        fn dealloc(&mut self, addr: PhysAddr, _size: PageSize) {
+            let ptr = addr.as_usize() as *mut [u8; PAGE_SIZE];
+            if let Some(pos) = self.pages.iter().position(|&p| p == ptr) {
+                self.pages.swap_remove(pos);
+            }
+            unsafe { drop(Box::from_raw(ptr)); }
+        }
+        fn available_frames(&self, _size: PageSize) -> usize { usize::MAX }
+    }
+
+    impl Drop for MockAllocator {
+        fn drop(&mut self) {
+            for &ptr in &self.pages {
+                unsafe { drop(Box::from_raw(ptr)); }
+            }
+        }
+    }
+
+    fn setup() -> (Box<MockAllocator>, Box<RamFs>) {
+        let mut alloc = Box::new(MockAllocator::new());
+        let alloc_ptr: *mut dyn FrameAllocator = &mut *alloc as &mut dyn FrameAllocator;
+        let mut fs = unsafe { RamFs::new_boxed(alloc_ptr) };
         // /foo (dir)
         let foo = fs.mkdir(0, FileName::new(b"foo").unwrap(), 0o755).unwrap();
         // /foo/bar (dir)
@@ -96,18 +134,18 @@ mod tests {
         fs.create(bar, FileName::new(b"baz.txt").unwrap(), 0o644).unwrap();
         // /hello.txt (file)
         fs.create(0, FileName::new(b"hello.txt").unwrap(), 0o644).unwrap();
-        fs
+        (alloc, fs)
     }
 
     #[test]
     fn resolve_root() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         assert_eq!(resolve_path(&*fs, b"/").unwrap(), 0);
     }
 
     #[test]
     fn resolve_simple_file() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         let ino = resolve_path(&*fs, b"/hello.txt").unwrap();
         let expected = fs.lookup(0, FileName::new(b"hello.txt").unwrap()).unwrap();
         assert_eq!(ino, expected);
@@ -115,7 +153,7 @@ mod tests {
 
     #[test]
     fn resolve_nested() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         let ino = resolve_path(&*fs, b"/foo/bar/baz.txt").unwrap();
         let foo = fs.lookup(0, FileName::new(b"foo").unwrap()).unwrap();
         let bar = fs.lookup(foo, FileName::new(b"bar").unwrap()).unwrap();
@@ -125,7 +163,7 @@ mod tests {
 
     #[test]
     fn resolve_dot() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         let ino = resolve_path(&*fs, b"/foo/./bar").unwrap();
         let foo = fs.lookup(0, FileName::new(b"foo").unwrap()).unwrap();
         let expected = fs.lookup(foo, FileName::new(b"bar").unwrap()).unwrap();
@@ -134,7 +172,7 @@ mod tests {
 
     #[test]
     fn resolve_dotdot() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         // /foo/bar/.. => /foo
         let ino = resolve_path(&*fs, b"/foo/bar/..").unwrap();
         let expected = fs.lookup(0, FileName::new(b"foo").unwrap()).unwrap();
@@ -143,14 +181,14 @@ mod tests {
 
     #[test]
     fn resolve_dotdot_at_root() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         // /.. => / (stays at root)
         assert_eq!(resolve_path(&*fs, b"/..").unwrap(), 0);
     }
 
     #[test]
     fn resolve_nonexistent() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         assert_eq!(
             resolve_path(&*fs, b"/nonexistent"),
             Err(VfsError::NotFound)
@@ -159,19 +197,19 @@ mod tests {
 
     #[test]
     fn resolve_empty_path() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         assert_eq!(resolve_path(&*fs, b""), Err(VfsError::InvalidPath));
     }
 
     #[test]
     fn resolve_relative_path_fails() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         assert_eq!(resolve_path(&*fs, b"foo"), Err(VfsError::InvalidPath));
     }
 
     #[test]
     fn resolve_trailing_slash() {
-        let fs = setup();
+        let (_alloc, fs) = setup();
         let ino = resolve_path(&*fs, b"/foo/").unwrap();
         let expected = fs.lookup(0, FileName::new(b"foo").unwrap()).unwrap();
         assert_eq!(ino, expected);
