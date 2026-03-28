@@ -964,13 +964,12 @@ fn syscall_dup2(oldfd: u64, newfd: u64) -> i64 {
 }
 
 fn syscall_rt_sigprocmask(_how: u64, _set: u64, oldset: u64, sigsetsize: u64) -> i64 {
-    // Zero the old set if provided
-    if oldset != 0 && sigsetsize > 0 {
+    // Write the old signal mask (all zeros = no signals blocked)
+    // Only write exactly sigsetsize bytes (typically 8 on Linux x86_64)
+    if oldset != 0 && sigsetsize > 0 && sigsetsize <= 8 {
         unsafe {
-            let ptr = oldset as *mut u8;
-            for i in 0..sigsetsize.min(128) as usize {
-                *ptr.add(i) = 0;
-            }
+            let ptr = oldset as *mut u64;
+            *ptr = 0; // 64-bit mask, all zeros
         }
     }
     0
