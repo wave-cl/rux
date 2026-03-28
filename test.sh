@@ -29,7 +29,7 @@ rust-objcopy --output-target=elf32-i386 \
 # ── x86_64 ───────────────────────────────────────────────────────────
 printf "\n\033[1m── x86_64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 3; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat\n'; sleep 1; printf 'readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 3; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_X86" -cpu Haswell \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -serial mon:stdio -display none \
@@ -70,7 +70,7 @@ check "shell exit"              "rux: user exit(0)"
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 5; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat\n'; sleep 1; printf 'readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 5; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -serial mon:stdio -display none \

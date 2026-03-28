@@ -292,7 +292,8 @@ pub unsafe fn load_and_exec_elf(
 
     // Step 3: Activate and enter user mode
     upt.activate();
-    crate::x86_64::syscall::enter_user_mode(elf_info.entry, stack_va + 0x1000);
+    let user_sp = crate::execargs::write_to_stack(stack_va + 0x1000);
+    crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }
 
 /// aarch64 version: load ELF into user page table, enable, enter EL0.
@@ -402,5 +403,6 @@ pub unsafe fn load_and_exec_elf(
         in(reg) upt.root_phys().as_usize(),
         options(nostack)
     );
-    crate::aarch64::syscall::enter_user_mode(elf_info.entry, stack_va + 0x1000);
+    let user_sp = crate::execargs::write_to_stack(stack_va + 0x1000);
+    crate::aarch64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }

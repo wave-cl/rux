@@ -31,7 +31,7 @@ pub fn handle_syscall(frame: *mut u8) {
             64 => syscall_write(arg0, arg1, arg2),  // write
             93 => syscall_exit(arg0 as i32),          // exit
             220 => syscall_vfork(regs),               // vfork
-            221 => { syscall_exec(arg0); 0 }          // execve
+            221 => { syscall_exec(arg0, arg1); 0 }     // execve
             260 => syscall_wait(),                     // wait4
             _ => -38, // -ENOSYS
         };
@@ -205,7 +205,7 @@ extern "C" {
     fn vfork_longjmp(buf: *mut JmpBuf, val: i64) -> !;
 }
 
-fn syscall_exec(path_ptr: u64) -> ! {
+fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
     unsafe {
         use rux_mm::FrameAllocator;
         use rux_vfs::{FileSystem, InodeStat};
@@ -217,6 +217,18 @@ fn syscall_exec(path_ptr: u64) -> ! {
         let mut path_len = 0usize;
         while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
         let path = core::slice::from_raw_parts(path_cstr, path_len);
+
+        // Read optional argument
+        let arg = if arg_ptr != 0 {
+            let arg_cstr = arg_ptr as *const u8;
+            let mut arg_len = 0usize;
+            while *arg_cstr.add(arg_len) != 0 && arg_len < 256 { arg_len += 1; }
+            core::slice::from_raw_parts(arg_cstr, arg_len)
+        } else {
+            &[]
+        };
+
+        crate::execargs::set(path, arg);
 
         serial::write_str("rux: exec(\"");
         serial::write_bytes(path);

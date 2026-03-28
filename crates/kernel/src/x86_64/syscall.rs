@@ -18,7 +18,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             3 => crate::fdtable::sys_close(arg0 as usize),
             39 => 1, // getpid
             57 => syscall_vfork(regs),
-            59 => { syscall_exec(arg0); 0 }
+            59 => { syscall_exec(arg0, arg1); 0 }
             60 => syscall_exit(arg0 as i32),
             61 => syscall_wait(),
             78 => syscall_getdents(arg0, arg1),
@@ -171,7 +171,7 @@ static mut SAVED_CR3: u64 = 0;
 // The child's syscalls overwrite the kernel stack, so we must save/restore the parent's frame.
 static mut SAVED_PARENT_FRAME: [u64; 22] = [0; 22];
 
-fn syscall_exec(path_ptr: u64) -> ! {
+fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
     unsafe {
         use rux_mm::FrameAllocator;
         use rux_vfs::{FileSystem, InodeStat};
@@ -183,6 +183,19 @@ fn syscall_exec(path_ptr: u64) -> ! {
         let mut path_len = 0usize;
         while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
         let path = core::slice::from_raw_parts(path_cstr, path_len);
+
+        // Read optional argument
+        let arg = if arg_ptr != 0 {
+            let arg_cstr = arg_ptr as *const u8;
+            let mut arg_len = 0usize;
+            while *arg_cstr.add(arg_len) != 0 && arg_len < 256 { arg_len += 1; }
+            core::slice::from_raw_parts(arg_cstr, arg_len)
+        } else {
+            &[]
+        };
+
+        // Store path + arg for the new process's stack
+        crate::execargs::set(path, arg);
 
         serial::write_str("rux: exec(\"");
         serial::write_bytes(path);

@@ -1,17 +1,33 @@
 .global _start
 _start:
-    // Print "file: "
+    // Check argc: [sp+0]=argc, [sp+16]=argv[1]
+    ldr x0, [sp, #0]           // argc
+    cmp x0, #2
+    b.lt prompt_mode
+
+    // argv[1] is filename — construct "/filename" in pathbuf
+    ldr x5, [sp, #16]          // argv[1] pointer
+    adr x6, pathbuf
+    add x6, x6, #1             // skip leading '/'
+copy_argv:
+    ldrb w4, [x5]
+    strb w4, [x6]
+    cbz w4, open_file
+    add x5, x5, #1
+    add x6, x6, #1
+    b copy_argv
+
+prompt_mode:
+    // No argument — prompt for filename
     mov x8, #64
     mov x0, #1
     adr x1, file_prompt
     mov x2, #6
     svc #0
 
-    // Read filename (up to newline)
     adr x19, pathbuf
-    add x19, x19, #1           // skip leading '/'
-    mov x20, #0                // length
-
+    add x19, x19, #1
+    mov x20, #0
 read_name:
     mov x8, #63
     mov x0, #0
@@ -24,7 +40,6 @@ read_name:
     b.eq name_done
     cmp w4, #0x0D
     b.eq name_done
-    // echo
     mov x8, #64
     mov x0, #1
     adr x1, tmpbyte
@@ -36,24 +51,23 @@ read_name:
     add x19, x19, #1
     add x20, x20, #1
     b read_name
-
 name_done:
     mov w4, #0
-    strb w4, [x19]             // null-terminate
-    // echo newline
+    strb w4, [x19]
     mov x8, #64
     mov x0, #1
     adr x1, newline
     mov x2, #1
     svc #0
 
-    // open(pathbuf) — syscall 56 (openat, we just use path in x0)
+open_file:
+    // open(pathbuf)
     mov x8, #56
     adr x0, pathbuf
     svc #0
     cmp x0, #0
     b.lt err_open
-    mov x21, x0                // save fd
+    mov x21, x0
 
 read_file:
     mov x8, #63
@@ -63,9 +77,7 @@ read_file:
     svc #0
     cmp x0, #0
     b.le done_read
-
-    // write what we read
-    mov x2, x0                 // len
+    mov x2, x0
     mov x8, #64
     mov x0, #1
     adr x1, filebuf
@@ -73,12 +85,9 @@ read_file:
     b read_file
 
 done_read:
-    // close(fd)
     mov x8, #57
     mov x0, x21
     svc #0
-
-    // exit(0)
     mov x8, #93
     mov x0, #0
     svc #0
@@ -98,7 +107,7 @@ file_prompt: .ascii "file: "
 newline:     .ascii "\n"
 err_msg:     .ascii "not found\n"
 pathbuf:     .byte '/'
-             .space 16, 0
+             .space 31, 0
 tmpbyte:     .byte 0
 
 .bss

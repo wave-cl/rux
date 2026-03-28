@@ -11,6 +11,7 @@ mod slab;
 mod elf;
 mod kstate;
 pub mod fdtable;
+pub mod execargs;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
