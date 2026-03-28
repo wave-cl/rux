@@ -11,11 +11,23 @@ use x86_64::{serial, exit};
 #[no_mangle]
 pub extern "C" fn kernel_main(_multiboot_info: usize) -> ! {
     unsafe { serial::init(); }
-
     serial::write_str("rux: boot OK\n");
-    serial::write_str("rux: serial output working\n");
-    serial::write_str("rux: all checks passed\n");
 
+    // Initialize GDT with TSS
+    // The boot stack top is defined in boot.S. We use 0x104000 + 16384 = 0x108000
+    // (bss starts at ~0x104000, boot_stack is 16K after page tables)
+    unsafe { x86_64::gdt::init(0x108000); }
+    serial::write_str("rux: GDT + TSS loaded\n");
+
+    // Initialize IDT with all exception/IRQ handlers
+    unsafe { x86_64::idt::init(); }
+    serial::write_str("rux: IDT loaded\n");
+
+    // Test: enable interrupts briefly (should not crash since no IRQs are unmasked)
+    // unsafe { core::arch::asm!("sti"); }
+    // serial::write_str("rux: interrupts enabled\n");
+
+    serial::write_str("rux: all checks passed\n");
     exit::exit_qemu(exit::EXIT_SUCCESS);
 }
 
@@ -30,15 +42,14 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         serial::write_str(s);
     }
     serial::write_str("\n");
-
-    #[cfg(target_arch = "x86_64")]
+    if let Some(msg) = info.message().as_str() {
+        serial::write_str(msg);
+        serial::write_str("\n");
+    }
     exit::exit_qemu(exit::EXIT_FAILURE);
-
-    #[allow(unreachable_code)]
-    loop { core::hint::spin_loop(); }
 }
 
-fn write_u32(buf: &mut [u8; 10], mut n: u32) -> &str {
+pub fn write_u32(buf: &mut [u8; 10], mut n: u32) -> &str {
     if n == 0 {
         buf[0] = b'0';
         return unsafe { core::str::from_utf8_unchecked(&buf[..1]) };
