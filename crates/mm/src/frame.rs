@@ -19,7 +19,8 @@ const PCP_SIZE: usize = 64;
 const PCP_HIGH: usize = 48;
 
 /// Number of pages to drain/refill in one batch.
-const PCP_BATCH: usize = 16;
+/// Larger batch = fewer bitmap scans, amortized over more allocs.
+const PCP_BATCH: usize = 48;
 
 /// Per-"CPU" page cache for order-0 fast path.
 /// In a real SMP kernel, there would be one per CPU. For now, single.
@@ -216,20 +217,61 @@ impl BuddyAllocator {
 
     // ── Page cache (pcplist) operations ─────────────────────────────────
 
-    /// Refill the page cache from the buddy allocator (batch).
+    /// Refill the page cache by harvesting free bits directly from the
+    /// order-0 bitmap. Scans once, extracts multiple pages per u64 word
+    /// using bit manipulation — O(1) per page amortized.
     fn pcp_refill(&mut self) {
-        for _ in 0..PCP_BATCH {
-            if self.pcp.count as usize >= PCP_SIZE {
-                break;
+        let space = PCP_SIZE - self.pcp.count as usize;
+        let target = space.min(PCP_BATCH);
+        let mut harvested = 0usize;
+
+        // If order-0 bitmap has too few free bits, shatter a higher-order
+        // block into individual order-0 pages. This produces 2^N free pages
+        // from one order-N block — enough to fill the cache in one scan.
+        while self.find_free(0).is_none() {
+            // Find the lowest non-empty higher order
+            let mut found = false;
+            for level in 1..=MAX_BUDDY_ORDER {
+                if let Some(idx) = self.find_free(level) {
+                    self.clear_free(level, idx);
+                    // Mark ALL 2^level constituent pages as free at order 0
+                    let base_frame = idx << level;
+                    let count = 1usize << level;
+                    for f in base_frame..base_frame + count {
+                        self.set_free(0, f);
+                    }
+                    found = true;
+                    break;
+                }
             }
-            if let Ok(addr) = self.buddy_alloc(0) {
-                // buddy_alloc already decremented free_frames, but we'll
-                // account for it when pcp.pop is called, so add it back.
-                self.free_frames += 1;
+            if !found { break; } // truly out of memory
+        }
+
+        // Harvest free bits from the order-0 bitmap
+        let start = self.hints[0] as usize;
+        let max_words = self.bitmaps[0].len();
+
+        let mut word_idx = start;
+        while harvested < target && word_idx < max_words {
+            let mut word = self.bitmaps[0][word_idx];
+            if word == 0 {
+                word_idx += 1;
+                continue;
+            }
+            while word != 0 && harvested < target {
+                let bit = word.trailing_zeros() as usize;
+                word &= word - 1;
+                let frame_idx = word_idx * 64 + bit;
+                let addr = PhysAddr::new(self.base.as_usize() + frame_idx * 4096);
                 self.pcp.push(addr);
-            } else {
-                break;
+                harvested += 1;
             }
+            self.bitmaps[0][word_idx] = word;
+            word_idx += 1;
+        }
+
+        if harvested > 0 {
+            self.hints[0] = word_idx.saturating_sub(1) as u16;
         }
     }
 
