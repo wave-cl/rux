@@ -1039,29 +1039,24 @@ fn syscall_clock_gettime(_clockid: u64, tp: u64) -> i64 {
 /// The trick: the asm pops from SYSCALL_STACK. The child's syscalls use
 /// the SAME SYSCALL_STACK and overwrite the parent's saved registers.
 /// So we must save the ENTIRE SYSCALL_STACK content and restore it.
-/// For vfork parent resume: directly sysretq with saved values instead of
-/// going through the normal return path (which has stale stack values).
-static mut VFORK_PARENT_RCX: u64 = 0; // saved user RIP
-static mut VFORK_PARENT_R11: u64 = 0; // saved user RFLAGS
-static mut VFORK_PARENT_RSP: u64 = 0; // saved user RSP
-static mut VFORK_PARENT_RDI: u64 = 0; // saved RDI (for register restore)
+/// Saved parent register state from SYSCALL_STACK for vfork resume.
+/// All 15 pushed registers + user RSP.
+static mut VFORK_PARENT_REGS: [u64; 15] = [0; 15];
+static mut VFORK_PARENT_USER_RSP: u64 = 0;
 
 #[inline(never)]
 fn syscall_vfork_linux() -> i64 {
     unsafe {
         serial::write_str("rux: vfork()\n");
 
-        // Read the parent's saved user RIP (RCX) and RFLAGS (R11) from the
-        // SYSCALL_STACK. These were pushed first by the asm entry.
-        // Stack layout: [TOP-8]=RCX, [TOP-16]=R11, [TOP-24]=RBX, ...
+        // Save ALL 15 pushed registers from SYSCALL_STACK entry.
+        // Push order: rcx r11 rbx rbp r12 r13 r14 r15 rax rdi rsi rdx r10 r8 r9
+        // Index:       0   1   2   3   4   5   6   7   8   9  10  11  12  13  14
         let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
-        VFORK_PARENT_RCX = *stack_top.sub(1); // RCX (user RIP) - pushed first
-        VFORK_PARENT_R11 = *stack_top.sub(2); // R11 (user RFLAGS)
-        VFORK_PARENT_RSP = SAVED_USER_RSP;
-        // Save RDI (arg0) — at offset 15-6=9 from top (pushed as 6th of 7 arg pushes)
-        // pushes: rcx r11 rbx rbp r12 r13 r14 r15 rax rdi rsi rdx r10 r8 r9
-        //         -1  -2  -3  -4  -5  -6  -7  -8  -9  -10 -11 -12 -13 -14 -15
-        VFORK_PARENT_RDI = *stack_top.sub(10); // RDI
+        for i in 0..15 {
+            VFORK_PARENT_REGS[i] = *stack_top.sub(i + 1);
+        }
+        VFORK_PARENT_USER_RSP = SAVED_USER_RSP;
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {
@@ -1074,25 +1069,44 @@ fn syscall_vfork_linux() -> i64 {
             serial::write_str("rux: vfork parent resumed\n");
             VFORK_JMP.rsp = 0;
 
-            serial::write_str("rux: sysretq to ");
-            crate::write_hex_serial(VFORK_PARENT_RCX as usize);
-            serial::write_str(" rsp=");
-            crate::write_hex_serial(VFORK_PARENT_RSP as usize);
-            serial::write_byte(b'\n');
-            // Directly sysretq to the parent's saved user state.
-            // We bypass the normal return path because the SYSCALL_STACK
-            // was overwritten by the child's syscalls.
-            // Direct sysretq with explicit registers.
-            // Load RSP via a temp register since it can't be an asm operand.
-            let rsp_val = VFORK_PARENT_RSP;
+            // Restore ALL user registers by writing them back to SYSCALL_STACK
+            // and then using the normal asm pop path.
+            // Write saved regs back to the SYSCALL_STACK top area.
+            let stack_top = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+            for i in 0..15 {
+                *stack_top.sub(i + 1) = VFORK_PARENT_REGS[i];
+            }
+            // Override RAX slot with child PID (return value)
+            *stack_top.sub(9) = val as u64; // index 8 = RAX slot
+            SAVED_USER_RSP = VFORK_PARENT_USER_RSP;
+
+            // Now switch to SYSCALL_STACK at the point after all 15 pushes,
+            // and execute the pop sequence + sysretq from the normal asm path.
+            let pop_rsp = stack_top.sub(15) as u64;
             core::arch::asm!(
-                "mov rsp, {tmp}",
+                "mov rsp, {rsp}",
+                // Pop args (reverse of push: r9, r8, r10, rdx, rsi, rdi, rax)
+                "pop r9",
+                "pop r8",
+                "pop r10",
+                "pop rdx",
+                "pop rsi",
+                "pop rdi",
+                "pop rax",   // child PID return value
+                // Pop callee-saved (reverse: r15, r14, r13, r12, rbp, rbx, r11, rcx)
+                "pop r15",
+                "pop r14",
+                "pop r13",
+                "pop r12",
+                "pop rbp",
+                "pop rbx",
+                "pop r11",   // user RFLAGS
+                "pop rcx",   // user RIP
+                // Restore user RSP
+                "mov rsp, [{saved_user_rsp}]",
                 "sysretq",
-                tmp = in(reg) rsp_val,
-                in("rcx") VFORK_PARENT_RCX,      // user RIP
-                in("r11") VFORK_PARENT_R11,       // user RFLAGS
-                in("rdi") VFORK_PARENT_RDI,       // restore RDI
-                in("rax") val as u64,             // return value = child PID
+                rsp = in(reg) pop_rsp,
+                saved_user_rsp = sym SAVED_USER_RSP,
                 options(noreturn)
             );
         }
