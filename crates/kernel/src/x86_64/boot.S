@@ -78,10 +78,16 @@ _start:
     movl $pml4, %eax
     movl %eax, %cr3
 
-    /* Enable PAE (CR4.PAE = bit 5) */
+    /* Enable PAE (CR4.PAE = bit 5) + SSE (OSFXSR bit 9, OSXMMEXCPT bit 10) */
     movl %cr4, %eax
-    orl  $(1 << 5), %eax
+    orl  $((1 << 5) | (1 << 9) | (1 << 10)), %eax
     movl %eax, %cr4
+
+    /* Enable SSE: clear CR0.EM (bit 2), set CR0.MP (bit 1) */
+    movl %cr0, %eax
+    andl $~(1 << 2), %eax
+    orl  $(1 << 1), %eax
+    movl %eax, %cr0
 
     /* Enable long mode (EFER.LME = bit 8) + NX (EFER.NXE = bit 11) */
     movl $0xC0000080, %ecx       /* IA32_EFER MSR */

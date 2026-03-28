@@ -127,7 +127,9 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Keep interrupts disabled during syscall handling for now
     // (enabling would require saving/restoring more state on timer IRQ)
 
-    // Syscall logging disabled
+    // Syscall logging disabled for production
+    let mut nb = [0u8; 10];
+    let _ = nb;
 
     let result = match nr {
         // File I/O
@@ -135,7 +137,9 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         1 => syscall_write(a0, a1, a2),           // write
         2 => syscall_open(a0),                     // open
         3 => crate::fdtable::sys_close(a0 as usize), // close
+        4 => syscall_fstatat(0xffffff9cu64, a0, a1), // stat (pathname, buf) → fstatat(AT_FDCWD, ...)
         5 => syscall_fstat(a0, a1),               // fstat
+        6 => syscall_fstatat(0xffffff9cu64, a0, a1), // lstat → same as stat (no symlink distinction)
         8 => syscall_creat(a0),                    // creat
         9 => syscall_mmap(a0, a1, a2, a3, a4),   // mmap
         10 => 0,                                   // mprotect (stub)
