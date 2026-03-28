@@ -276,6 +276,9 @@ fn syscall_exec(path_ptr: u64, arg_ptr: u64) -> ! {
         // Save current CR3 so the parent can restore its page table after exec
         core::arch::asm!("mov {}, cr3", out(reg) SAVED_CR3, options(nostack));
 
+        // Free previous child's pages before allocating new ones
+        crate::pgtrack::begin_child(alloc);
+
         serial::write_str("rux: entering user mode...\n");
         crate::elf::load_and_exec_elf(&buf[..n], alloc);
     }

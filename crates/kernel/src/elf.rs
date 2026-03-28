@@ -214,6 +214,9 @@ pub unsafe fn load_and_exec_elf(
     use rux_klib::{PhysAddr, VirtAddr};
     use rux_mm::{MappingFlags, PageSize};
 
+    let mut talloc = crate::pgtrack::TrackingAllocator::new(alloc);
+    let alloc: &mut dyn rux_mm::FrameAllocator = &mut talloc;
+
     let elf_info = parse_elf(elf_data).expect("ELF parse failed");
 
     // Step 1: Allocate physical pages for each segment and copy data.
@@ -307,6 +310,9 @@ pub unsafe fn load_and_exec_elf(
 ) -> ! {
     use rux_klib::{PhysAddr, VirtAddr};
     use rux_mm::{MappingFlags, PageSize};
+
+    let mut talloc = crate::pgtrack::TrackingAllocator::new(alloc);
+    let alloc: &mut dyn rux_mm::FrameAllocator = &mut talloc;
 
     let elf_info = parse_elf(elf_data).expect("ELF parse failed");
 

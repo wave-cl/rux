@@ -12,6 +12,7 @@ mod elf;
 mod kstate;
 pub mod fdtable;
 pub mod execargs;
+pub mod pgtrack;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
@@ -430,7 +431,7 @@ fn x86_64_init(multiboot_info: usize) {
     if memmap.count > 0 {
         let region = &memmap.regions[best];
         let alloc_base = if region.base.as_usize() < 0x200000 {
-            0x200000usize
+            0x400000usize
         } else {
             region.base.as_usize()
         };
@@ -446,14 +447,14 @@ fn x86_64_init(multiboot_info: usize) {
 
         unsafe {
             serial::write_str("rux: zeroing allocator...\n");
-            let alloc_ptr = 0x130000 as *mut u64;
+            let alloc_ptr = 0x300000 as *mut u64;
             let alloc_qwords = core::mem::size_of::<rux_mm::frame::BuddyAllocator>() / 8;
             for i in 0..alloc_qwords {
                 core::ptr::write_volatile(alloc_ptr.add(i), 0u64);
             }
             serial::write_str("rux: zeroing done\n");
 
-            let alloc = &mut *(0x130000 as *mut rux_mm::frame::BuddyAllocator);
+            let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
             serial::write_str("rux: calling init...\n");
             alloc.init(rux_klib::PhysAddr::new(alloc_base), frames);
             serial::write_str("rux: init done\n");
@@ -661,7 +662,7 @@ fn x86_64_init(multiboot_info: usize) {
 
         // Allocate tasks from the slab (1024 bytes each = Task size)
         unsafe {
-            let alloc = &mut *(0x130000 as *mut rux_mm::frame::BuddyAllocator);
+            let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
             let mut task_slab = slab::Slab::new(core::mem::size_of::<Task>());
 
             // "Parent" task (represents init/kernel_main)
@@ -728,8 +729,8 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
 
     serial::write_str("rux: init ramfs...\n");
 
-    let alloc_ptr = 0x130000 as *mut rux_mm::frame::BuddyAllocator;
-    let fs_ptr = 0x140000 as *mut rux_vfs::ramfs::RamFs;
+    let alloc_ptr = 0x300000 as *mut rux_mm::frame::BuddyAllocator;
+    let fs_ptr = 0x310000 as *mut rux_vfs::ramfs::RamFs;
 
     // Zero the RamFs memory region
     let fs_bytes = core::mem::size_of::<rux_vfs::ramfs::RamFs>();
@@ -802,7 +803,7 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     // Load and run the shell
     serial::write_str("rux: loading shell...\n");
     let shell_data: &[u8] = include_bytes!("../../../user/shell_x86_64.elf");
-    let alloc = &mut *(0x130000 as *mut rux_mm::frame::BuddyAllocator);
+    let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
     elf::load_and_exec_elf(shell_data, alloc);
 }
 
