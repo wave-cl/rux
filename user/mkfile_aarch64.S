@@ -18,7 +18,7 @@ _start:
 .cp_done:
 
     // creat(pathbuf) — syscall 35
-    mov x8, #35
+    mov x8, #33
     adr x0, pathbuf
     svc #0
     cmp x0, #0

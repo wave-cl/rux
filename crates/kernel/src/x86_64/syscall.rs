@@ -17,6 +17,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             2 => syscall_open(arg0),
             3 => crate::fdtable::sys_close(arg0 as usize),
             8 => syscall_creat(arg0), // creat
+            87 => syscall_unlink(arg0), // unlink
             39 => 1, // getpid
             96 => super::pit::ticks() as i64, // gettimeofday → ticks
             57 => syscall_vfork(regs),
@@ -93,6 +94,30 @@ fn syscall_creat(path_ptr: u64) -> i64 {
                 crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
             }
             Err(_) => -17, // -EEXIST or other error
+        }
+    }
+}
+
+fn syscall_unlink(path_ptr: u64) -> i64 {
+    unsafe {
+        use rux_vfs::{FileSystem, FileName};
+
+        let cstr = path_ptr as *const u8;
+        let mut len = 0usize;
+        while *cstr.add(len) != 0 && len < 256 { len += 1; }
+
+        let name_start = if len > 0 && *cstr == b'/' { 1 } else { 0 };
+        let name = core::slice::from_raw_parts(cstr.add(name_start), len - name_start);
+
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) {
+            Ok(f) => f,
+            Err(_) => return -22,
+        };
+
+        match fs.unlink(0, fname) {
+            Ok(()) => 0,
+            Err(_) => -2, // -ENOENT
         }
     }
 }

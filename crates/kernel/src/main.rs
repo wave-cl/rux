@@ -69,8 +69,8 @@ fn aarch64_init(dtb_addr: usize) {
             core::ptr::write_volatile((alloc_ptr as *mut u64).add(i), 0u64);
         }
         let alloc = &mut *(alloc_ptr as *mut rux_mm::frame::BuddyAllocator);
-        alloc.init(rux_klib::PhysAddr::new(0x44000000), 4096);
-        serial::write_str("rux: frame allocator ready (4096 frames)\n");
+        alloc.init(rux_klib::PhysAddr::new(0x44000000), 16384);
+        serial::write_str("rux: frame allocator ready (16384 frames)\n");
 
         use rux_mm::FrameAllocator;
         let page = alloc.alloc(rux_mm::PageSize::FourK).expect("alloc");
@@ -284,9 +284,17 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     let mkfile_ino = fs.create(0, FileName::new(b"mkfile").unwrap(), 0o755).unwrap();
     fs.write(mkfile_ino, 0, mkfile_data).unwrap();
 
+    let rm_data: &[u8] = include_bytes!("../../../user/rm_aarch64.elf");
+    let rm_prog_ino = fs.create(0, FileName::new(b"rm").unwrap(), 0o755).unwrap();
+    fs.write(rm_prog_ino, 0, rm_data).unwrap();
+
+    let wc_data: &[u8] = include_bytes!("../../../user/wc_aarch64.elf");
+    let wc_ino = fs.create(0, FileName::new(b"wc").unwrap(), 0o755).unwrap();
+    fs.write(wc_ino, 0, wc_data).unwrap();
+
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
-    let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
-    fs.write(rm_ino, 0, readme).unwrap();
+    let readme_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
+    fs.write(readme_ino, 0, readme).unwrap();
 
     serial::write_str("rux: ramfs ready\n");
 
@@ -428,7 +436,7 @@ fn x86_64_init(multiboot_info: usize) {
         };
         let alloc_size = region.size - (alloc_base - region.base.as_usize());
         let frames = (alloc_size / 4096) as u32;
-        let frames = frames.min(4096); // limit for initial testing
+        let frames = frames.min(16384);
 
         serial::write_str("rux: init allocator at ");
         write_hex_serial(alloc_base);
@@ -773,9 +781,17 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let mkfile_ino = fs.create(0, FileName::new(b"mkfile").unwrap(), 0o755).unwrap();
     fs.write(mkfile_ino, 0, mkfile_data).unwrap();
 
+    let rm_data: &[u8] = include_bytes!("../../../user/rm_x86_64.elf");
+    let rm_prog_ino = fs.create(0, FileName::new(b"rm").unwrap(), 0o755).unwrap();
+    fs.write(rm_prog_ino, 0, rm_data).unwrap();
+
+    let wc_data: &[u8] = include_bytes!("../../../user/wc_x86_64.elf");
+    let wc_ino = fs.create(0, FileName::new(b"wc").unwrap(), 0o755).unwrap();
+    fs.write(wc_ino, 0, wc_data).unwrap();
+
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
-    let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
-    fs.write(rm_ino, 0, readme).unwrap();
+    let readme_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
+    fs.write(readme_ino, 0, readme).unwrap();
 
     serial::write_str("rux: ramfs ready\n");
 

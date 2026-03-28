@@ -24,7 +24,8 @@ pub fn handle_syscall(frame: *mut u8) {
         let arg2 = *regs.add(2);        // x2
 
         let result: i64 = match syscall_nr {
-            35 => syscall_creat(arg0),                   // unlinkat → creat (repurposed)
+            33 => syscall_creat(arg0),                   // mknodat → creat
+            35 => syscall_unlink(arg0),                  // unlinkat
             56 => syscall_open(arg0),                   // openat (path in x0)
             57 => crate::fdtable::sys_close(arg0 as usize), // close
             61 => syscall_getdents(arg0, arg1),        // getdents64
@@ -104,6 +105,30 @@ fn syscall_creat(path_ptr: u64) -> i64 {
                 crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
             }
             Err(_) => -17,
+        }
+    }
+}
+
+fn syscall_unlink(path_ptr: u64) -> i64 {
+    unsafe {
+        use rux_vfs::{FileSystem, FileName};
+
+        let cstr = path_ptr as *const u8;
+        let mut len = 0usize;
+        while *cstr.add(len) != 0 && len < 256 { len += 1; }
+
+        let name_start = if len > 0 && *cstr == b'/' { 1 } else { 0 };
+        let name = core::slice::from_raw_parts(cstr.add(name_start), len - name_start);
+
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) {
+            Ok(f) => f,
+            Err(_) => return -22,
+        };
+
+        match fs.unlink(0, fname) {
+            Ok(()) => 0,
+            Err(_) => -2,
         }
     }
 }
