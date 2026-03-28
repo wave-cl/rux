@@ -722,7 +722,9 @@ fn syscall_mmap(addr: u64, len: u64, _prot: u64, flags: u64, _fd: u64) -> i64 {
             let ptr = frame.as_usize() as *mut u8;
             for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
             let va = rux_klib::VirtAddr::new((result + offset) as usize);
-            let _ = upt.map_4k(va, frame, flags, alloc);
+            if upt.map_4k(va, frame, flags, alloc).is_err() {
+                serial::write_str("MMAP MAP FAIL!\n");
+            }
         }
 
         result as i64
@@ -753,11 +755,20 @@ fn syscall_ioctl(fd: u64, request: u64, arg: u64) -> i64 {
             0
         }
         TCGETS => {
-            // Return a zeroed termios (raw mode)
+            // Return a realistic termios (cooked mode)
             if arg != 0 {
                 unsafe {
                     let ptr = arg as *mut u8;
                     for i in 0..60 { *ptr.add(i) = 0; }
+                    // struct termios: c_iflag(4), c_oflag(4), c_cflag(4), c_lflag(4), ...
+                    let iflag = arg as *mut u32;
+                    *iflag = 0x500; // ICRNL | IXON
+                    let oflag = (arg + 4) as *mut u32;
+                    *oflag = 0x5; // OPOST | ONLCR
+                    let cflag = (arg + 8) as *mut u32;
+                    *cflag = 0xBF; // CS8 | CREAD | HUPCL | CLOCAL
+                    let lflag = (arg + 12) as *mut u32;
+                    *lflag = 0x8A3B; // ISIG|ICANON|ECHO|ECHOE|ECHOK|ECHOCTL|ECHOKE|IEXTEN
                 }
             }
             0
