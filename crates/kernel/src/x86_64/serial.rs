@@ -49,3 +49,14 @@ pub fn write_bytes(buf: &[u8]) {
 pub fn write_str(s: &str) {
     write_bytes(s.as_bytes());
 }
+
+/// Read a single byte, blocking until data is available.
+pub fn read_byte() -> u8 {
+    unsafe {
+        // Wait for data ready (bit 0 of LSR)
+        while inb(COM1 + 5) & 0x01 == 0 {
+            core::hint::spin_loop();
+        }
+        inb(COM1)
+    }
+}

@@ -12,6 +12,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let arg2 = *regs.add(11);       // RDX
 
         let result: i64 = match syscall_nr {
+            0 => syscall_read(arg0, arg1, arg2),
             1 => syscall_write(arg0, arg1, arg2),
             39 => 1, // getpid
             57 => syscall_vfork(regs),
@@ -23,6 +24,17 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
 
         *regs.add(14) = result as u64;
     }
+}
+
+fn syscall_read(fd: u64, buf: u64, len: u64) -> i64 {
+    if fd != 0 { return -9; } // only stdin
+    unsafe {
+        let ptr = buf as *mut u8;
+        for i in 0..len as usize {
+            *ptr.add(i) = serial::read_byte();
+        }
+    }
+    len as i64
 }
 
 fn syscall_write(fd: u64, buf: u64, len: u64) -> i64 {

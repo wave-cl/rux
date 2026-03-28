@@ -24,6 +24,7 @@ pub fn handle_syscall(frame: *mut u8) {
         let arg2 = *regs.add(2);        // x2
 
         let result: i64 = match syscall_nr {
+            63 => syscall_read(arg0, arg1, arg2),    // read
             64 => syscall_write(arg0, arg1, arg2),  // write
             93 => syscall_exit(arg0 as i32),          // exit
             220 => syscall_vfork(regs),               // vfork
@@ -35,6 +36,18 @@ pub fn handle_syscall(frame: *mut u8) {
         // Return value in x0
         *regs.add(0) = result as u64;
     }
+}
+
+/// read(fd, buf, len) — fd=0 reads from serial console.
+fn syscall_read(fd: u64, buf: u64, len: u64) -> i64 {
+    if fd != 0 { return -9; } // only stdin
+    unsafe {
+        let ptr = buf as *mut u8;
+        for i in 0..len as usize {
+            *ptr.add(i) = serial::read_byte();
+        }
+    }
+    len as i64
 }
 
 /// write(fd, buf, len) — fd=1 or 2 writes to serial console.

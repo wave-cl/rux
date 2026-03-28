@@ -5,6 +5,7 @@ const PL011_BASE: usize = 0x0900_0000;
 const UARTDR: usize = PL011_BASE + 0x00;   // Data register
 const UARTFR: usize = PL011_BASE + 0x18;   // Flag register
 const UARTFR_TXFF: u32 = 1 << 5;           // Transmit FIFO full
+const UARTFR_RXFE: u32 = 1 << 4;           // Receive FIFO empty
 
 #[inline(always)]
 unsafe fn mmio_write(addr: usize, val: u32) {
@@ -47,4 +48,15 @@ pub fn write_bytes(buf: &[u8]) {
 /// Write a string.
 pub fn write_str(s: &str) {
     write_bytes(s.as_bytes());
+}
+
+/// Read a single byte, blocking until data is available.
+pub fn read_byte() -> u8 {
+    unsafe {
+        // Wait for RXFE (receive FIFO empty) to clear
+        while mmio_read(UARTFR) & UARTFR_RXFE != 0 {
+            core::hint::spin_loop();
+        }
+        mmio_read(UARTDR) as u8
+    }
 }
