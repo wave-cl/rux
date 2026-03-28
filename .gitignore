@@ -5,3 +5,5 @@ crates/sched/fuzz/artifacts/
 .idea/
 crates/proc/fuzz/corpus/
 crates/proc/fuzz/artifacts/
+crates/mm/fuzz/corpus/
+crates/mm/fuzz/artifacts/

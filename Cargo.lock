@@ -35,6 +35,7 @@ version = "0.1.0"
 name = "rux-mm"
 version = "0.1.0"
 dependencies = [
+ "rux-arch",
  "rux-klib",
 ]
 

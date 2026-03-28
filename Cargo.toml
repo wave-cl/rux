@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["crates/sched/fuzz", "crates/proc/fuzz"]
+exclude = ["crates/sched/fuzz", "crates/proc/fuzz", "crates/mm/fuzz"]
 
 [profile.release]
 opt-level = 3

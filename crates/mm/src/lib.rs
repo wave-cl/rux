@@ -2,6 +2,16 @@
 
 use rux_klib::{PhysAddr, VirtAddr};
 
+pub mod frame;
+pub mod pt;
+pub mod vma;
+pub mod addr_space;
+pub mod slab;
+pub mod fault;
+pub mod cow;
+
+// ── Page sizes ──────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PageSize {
@@ -19,20 +29,48 @@ impl PageSize {
             Self::OneG => 1024 * 1024 * 1024,
         }
     }
+
+    #[inline(always)]
+    pub const fn shift(self) -> u8 {
+        match self {
+            Self::FourK => 12,
+            Self::TwoM => 21,
+            Self::OneG => 30,
+        }
+    }
 }
 
+// ── Mapping flags ───────────────────────────────────────────────────────
+
+/// Page mapping flags. `#[repr(transparent)]` newtype over u32 so flags
+/// can be combined with OR. Replaces the old enum which couldn't be OR'd.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum MappingFlags {
-    Read = 1 << 0,
-    Write = 1 << 1,
-    Execute = 1 << 2,
-    User = 1 << 3,
-    Global = 1 << 4,
-    NoCache = 1 << 5,
-    WriteCombine = 1 << 6,
-    WriteThrough = 1 << 7,
+#[repr(transparent)]
+pub struct MappingFlags(pub u32);
+
+impl MappingFlags {
+    pub const NONE: Self         = Self(0);
+    pub const READ: Self         = Self(1 << 0);
+    pub const WRITE: Self        = Self(1 << 1);
+    pub const EXECUTE: Self      = Self(1 << 2);
+    pub const USER: Self         = Self(1 << 3);
+    pub const GLOBAL: Self       = Self(1 << 4);
+    pub const NO_CACHE: Self     = Self(1 << 5);
+    pub const WRITE_COMBINE: Self = Self(1 << 6);
+    pub const WRITE_THROUGH: Self = Self(1 << 7);
+    pub const COW: Self          = Self(1 << 8);
+
+    #[inline(always)]
+    pub const fn or(self, other: Self) -> Self { Self(self.0 | other.0) }
+    #[inline(always)]
+    pub const fn and(self, other: Self) -> Self { Self(self.0 & other.0) }
+    #[inline(always)]
+    pub const fn contains(self, flag: Self) -> bool { self.0 & flag.0 == flag.0 }
+    #[inline(always)]
+    pub const fn is_empty(self) -> bool { self.0 == 0 }
 }
+
+// ── Memory errors ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -44,7 +82,12 @@ pub enum MemoryError {
     MisalignedAddress,
     InvalidSize,
     PermissionDenied,
+    OutOfVmas,
+    OverlappingVma,
+    SlabExhausted,
 }
+
+// ── VMA permissions ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -55,6 +98,8 @@ pub enum VmaPermission {
     ReadWriteExecute,
 }
 
+// ── Traits ──────────────────────────────────────────────────────────────
+
 /// # Safety
 /// Implementations operate on hardware page tables. Incorrect mappings
 /// can corrupt memory, violate isolation, or crash the system.
@@ -64,7 +109,7 @@ pub unsafe trait PageTable {
         virt: VirtAddr,
         phys: PhysAddr,
         size: PageSize,
-        flags: u32,
+        flags: MappingFlags,
     ) -> Result<(), MemoryError>;
 
     fn unmap(&mut self, virt: VirtAddr, size: PageSize) -> Result<PhysAddr, MemoryError>;
@@ -74,8 +119,15 @@ pub unsafe trait PageTable {
 
 pub trait FrameAllocator {
     fn alloc(&mut self, size: PageSize) -> Result<PhysAddr, MemoryError>;
-
     fn dealloc(&mut self, addr: PhysAddr, size: PageSize);
-
     fn available_frames(&self, size: PageSize) -> usize;
 }
+
+// ── Re-exports ──────────────────────────────────────────────────────────
+pub use frame::BuddyAllocator;
+pub use pt::{PageLevel, PageTablePage, TranslateResult, PageTableWalker};
+pub use vma::{Vma, VmaKind, VmaList, VmaOps};
+pub use addr_space::{AddressSpace, AddressSpaceOps};
+pub use slab::SlabCache;
+pub use fault::{FaultAction, PageFaultHandler};
+pub use cow::CowOps;
