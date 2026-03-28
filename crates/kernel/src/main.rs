@@ -280,6 +280,10 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     let echo_ino = fs.create(0, FileName::new(b"echo").unwrap(), 0o755).unwrap();
     fs.write(echo_ino, 0, echo_data).unwrap();
 
+    let mkfile_data: &[u8] = include_bytes!("../../../user/mkfile_aarch64.elf");
+    let mkfile_ino = fs.create(0, FileName::new(b"mkfile").unwrap(), 0o755).unwrap();
+    fs.write(mkfile_ino, 0, mkfile_data).unwrap();
+
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
     let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
     fs.write(rm_ino, 0, readme).unwrap();
@@ -764,6 +768,10 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let echo_data: &[u8] = include_bytes!("../../../user/echo_x86_64.elf");
     let echo_ino = fs.create(0, FileName::new(b"echo").unwrap(), 0o755).unwrap();
     fs.write(echo_ino, 0, echo_data).unwrap();
+
+    let mkfile_data: &[u8] = include_bytes!("../../../user/mkfile_x86_64.elf");
+    let mkfile_ino = fs.create(0, FileName::new(b"mkfile").unwrap(), 0o755).unwrap();
+    fs.write(mkfile_ino, 0, mkfile_data).unwrap();
 
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
     let rm_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();

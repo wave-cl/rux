@@ -29,7 +29,7 @@ rust-objcopy --output-target=elf32-i386 \
 # ── x86_64 ───────────────────────────────────────────────────────────
 printf "\n\033[1m── x86_64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 3; printf 'uname\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 3; printf 'uname\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'mkfile test\n'; sleep 1; printf 'testing 123\n'; sleep 1; printf 'cat test\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_X86" -cpu Haswell \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -serial mon:stdio -display none \
@@ -61,10 +61,13 @@ check "shell prompt"            "rux$ "
 check "uname"                   "rux 0.1.0 x86_64"
 check "uptime"                  "up "
 check "echo"                    "rux works"
+check "mkfile creates"          "ok"
+check "cat reads created"       "testing 123"
 check "ls lists hello"          "hello"
 check "ls lists count"          "count"
 check "ls lists cat"            "cat"
-check "ls lists echo"           "echo"
+check "ls lists mkfile"         "mkfile"
+check "ls lists test"           "test"
 check "exec /hello"             "Hello, world!"
 check "exec /count"             "1"
 check "cat reads file"          "Welcome to rux!"
@@ -74,7 +77,7 @@ check "shell exit"              "rux: user exit(0)"
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 5; printf 'uname\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
+OUTPUT=$( { sleep 5; printf 'uname\n'; sleep 1; printf 'uptime\n'; sleep 1; printf 'echo rux works\n'; sleep 1; printf 'mkfile test\n'; sleep 1; printf 'testing 123\n'; sleep 1; printf 'cat test\n'; sleep 1; printf 'ls\n'; sleep 1; printf 'hello\n'; sleep 1; printf 'count\n'; sleep 1; printf 'cat readme\n'; sleep 1; printf 'q\n'; sleep 1; } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -serial mon:stdio -display none \
@@ -105,10 +108,13 @@ check "shell prompt"            "rux$ "
 check "uname"                   "rux 0.1.0 aarch64"
 check "uptime"                  "up "
 check "echo"                    "rux works"
+check "mkfile creates"          "ok"
+check "cat reads created"       "testing 123"
 check "ls lists hello"          "hello"
 check "ls lists count"          "count"
 check "ls lists cat"            "cat"
-check "ls lists echo"           "echo"
+check "ls lists mkfile"         "mkfile"
+check "ls lists test"           "test"
 check "exec /hello"             "Hello, world!"
 check "exec /count"             "1"
 check "cat reads file"          "Welcome to rux!"
