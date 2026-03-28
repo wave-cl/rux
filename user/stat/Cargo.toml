@@ -1,0 +1,11 @@
+[package]
+name = "rux-stat"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "stat"
+path = "src/main.rs"
+
+[dependencies]
+rux-rt = { path = "../rustrt" }

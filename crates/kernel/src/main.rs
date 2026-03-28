@@ -293,6 +293,10 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     let wc_ino = fs.create(0, FileName::new(b"wc").unwrap(), 0o755).unwrap();
     fs.write(wc_ino, 0, wc_data).unwrap();
 
+    let stat_data: &[u8] = include_bytes!("../../../user/stat_aarch64.elf");
+    let stat_ino = fs.create(0, FileName::new(b"stat").unwrap(), 0o755).unwrap();
+    fs.write(stat_ino, 0, stat_data).unwrap();
+
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
     let readme_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();
     fs.write(readme_ino, 0, readme).unwrap();
@@ -789,6 +793,10 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     let wc_data: &[u8] = include_bytes!("../../../user/wc_x86_64.elf");
     let wc_ino = fs.create(0, FileName::new(b"wc").unwrap(), 0o755).unwrap();
     fs.write(wc_ino, 0, wc_data).unwrap();
+
+    let stat_data: &[u8] = include_bytes!("../../../user/stat_x86_64.elf");
+    let stat_ino = fs.create(0, FileName::new(b"stat").unwrap(), 0o755).unwrap();
+    fs.write(stat_ino, 0, stat_data).unwrap();
 
     let readme = b"Welcome to rux!\nType 'ls' to list commands.\nType 'q' to quit.\n";
     let readme_ino = fs.create(0, FileName::new(b"readme").unwrap(), 0o644).unwrap();

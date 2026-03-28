@@ -76,6 +76,8 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                 _ => {
                     super::serial::write_str("rux: user sync EC=");
                     write_hex(ec as usize);
+                    super::serial::write_str(" ESR=");
+                    write_hex(esr as usize);
                     super::serial::write_str("\n");
                 }
             }
