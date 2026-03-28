@@ -229,3 +229,42 @@ fn bench_task_new(b: &mut Bencher) {
         test::black_box(&task);
     });
 }
+
+// ── PID allocator benchmarks ────────────────────────────────────────────
+
+use rux_proc::pid::PidBitmap;
+
+fn make_pid_bitmap() -> Box<PidBitmap> {
+    unsafe {
+        let layout = std::alloc::Layout::new::<PidBitmap>();
+        let ptr = std::alloc::alloc_zeroed(layout) as *mut PidBitmap;
+        let mut bm = Box::from_raw(ptr);
+        *bm = PidBitmap::new();
+        bm
+    }
+}
+
+#[bench]
+fn bench_pid_alloc(b: &mut Bencher) {
+    let mut bm = make_pid_bitmap();
+    b.iter(|| {
+        let pid = bm.alloc().unwrap();
+        bm.free(pid);
+        test::black_box(pid);
+    });
+}
+
+#[bench]
+fn bench_pid_alloc_1000(b: &mut Bencher) {
+    b.iter(|| {
+        let mut bm = make_pid_bitmap();
+        let mut pids = Vec::with_capacity(1000);
+        for _ in 0..1000 {
+            pids.push(bm.alloc().unwrap());
+        }
+        for pid in pids {
+            bm.free(pid);
+        }
+        test::black_box(bm.allocated);
+    });
+}

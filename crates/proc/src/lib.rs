@@ -11,6 +11,8 @@ pub mod fd;
 pub mod group;
 pub mod task;
 pub mod lifecycle;
+pub mod pid;
+pub mod manager;
 
 // Re-export core types at crate root
 pub use id::{Pid, Tgid, Pgid, Sid, Uid, Gid};

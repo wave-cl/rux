@@ -9,3 +9,5 @@ fuzzing = []
 [dependencies]
 rux-sched = { path = "../sched" }
 rux-klib = { path = "../klib" }
+rux-arch = { path = "../arch" }
+rux-mm = { path = "../mm" }

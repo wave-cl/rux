@@ -5,6 +5,7 @@ pub const MAX_SUPPLEMENTARY_GROUPS: usize = 32;
 
 /// Process credentials — real, effective, saved, and filesystem UID/GID,
 /// supplementary groups, and POSIX capabilities.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct Credentials {
     /// Real user ID (set at creation, changed by setuid).

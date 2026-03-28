@@ -1,4 +1,5 @@
 /// Per-process filesystem context.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct FsContext {
     /// Current working directory inode.
