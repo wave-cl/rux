@@ -14,9 +14,11 @@ SECTIONS {
 
     .rodata : ALIGN(4096) {
         *(.rodata .rodata.*)
+        *(.eh_frame_hdr)
     }
 
     .data : ALIGN(4096) {
+        *(.got .got.*)
         *(.data .data.*)
     }
 

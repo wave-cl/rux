@@ -9,6 +9,7 @@ mod aarch64;
 mod scheduler;
 mod slab;
 mod elf;
+mod kstate;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};
@@ -266,10 +267,12 @@ extern "C" fn aarch64_counter_b() {
 
 #[cfg(target_arch = "x86_64")]
 fn x86_64_init(multiboot_info: usize) {
-    // Initialize GDT with TSS
-    // The boot stack top is defined in boot.S. We use 0x104000 + 16384 = 0x108000
-    // (bss starts at ~0x104000, boot_stack is 16K after page tables)
-    unsafe { x86_64::gdt::init(0x108000); }
+    // Initialize GDT with TSS — use the actual boot_stack_top from boot.S
+    unsafe {
+        extern "C" { static boot_stack_top: u8; }
+        let stack_top = &boot_stack_top as *const u8 as u64;
+        x86_64::gdt::init(stack_top);
+    }
     serial::write_str("rux: GDT + TSS loaded\n");
 
     // Initialize IDT with all exception/IRQ handlers
@@ -341,14 +344,14 @@ fn x86_64_init(multiboot_info: usize) {
 
         unsafe {
             serial::write_str("rux: zeroing allocator...\n");
-            let alloc_ptr = 0x400000 as *mut u64;
+            let alloc_ptr = 0x130000 as *mut u64;
             let alloc_qwords = core::mem::size_of::<rux_mm::frame::BuddyAllocator>() / 8;
             for i in 0..alloc_qwords {
                 core::ptr::write_volatile(alloc_ptr.add(i), 0u64);
             }
             serial::write_str("rux: zeroing done\n");
 
-            let alloc = &mut *(0x400000 as *mut rux_mm::frame::BuddyAllocator);
+            let alloc = &mut *(0x130000 as *mut rux_mm::frame::BuddyAllocator);
             serial::write_str("rux: calling init...\n");
             alloc.init(rux_klib::PhysAddr::new(alloc_base), frames);
             serial::write_str("rux: init done\n");
@@ -556,7 +559,7 @@ fn x86_64_init(multiboot_info: usize) {
 
         // Allocate tasks from the slab (1024 bytes each = Task size)
         unsafe {
-            let alloc = &mut *(0x400000 as *mut rux_mm::frame::BuddyAllocator);
+            let alloc = &mut *(0x130000 as *mut rux_mm::frame::BuddyAllocator);
             let mut task_slab = slab::Slab::new(core::mem::size_of::<Task>());
 
             // "Parent" task (represents init/kernel_main)
@@ -609,115 +612,59 @@ fn x86_64_init(multiboot_info: usize) {
         }
     }
 
-    // ── User mode test (ELF loader) ────────────────────────────────────
-    // Load a cross-compiled ELF binary, parse its PT_LOAD segments,
-    // map them at the correct virtual addresses, and enter user mode.
-    serial::write_str("rux: loading ELF binary...\n");
+    // ── RamFs + shell exec ─────────────────────────────────────────────
+    unsafe { init_ramfs_and_exec_shell(); }
+}
 
-    // Embedded ELF binary (cross-compiled for this architecture)
-    #[cfg(target_arch = "x86_64")]
-    let elf_data: &[u8] = include_bytes!("../../../user/hello_x86_64.elf");
+/// Initialize the RAM filesystem, populate it with /hello, and exec the shell.
+/// Marked `#[inline(never)]` to isolate VFS code from the test functions above.
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+unsafe fn init_ramfs_and_exec_shell() -> ! {
+    use rux_mm::FrameAllocator;
+    use rux_vfs::{FileSystem, FileName};
 
-    serial::write_str("rux: ELF size=");
-    let mut buf = [0u8; 10];
-    serial::write_str(write_u32(&mut buf, elf_data.len() as u32));
-    serial::write_str(" first4=");
-    for i in 0..4 { write_hex_serial(elf_data[i] as usize); serial::write_str(","); }
-    serial::write_str("\n");
+    serial::write_str("rux: init ramfs...\n");
 
-    let elf_info = elf::parse_elf(elf_data).expect("ELF parse failed");
+    let alloc_ptr = 0x130000 as *mut rux_mm::frame::BuddyAllocator;
+    let fs_ptr = 0x140000 as *mut rux_vfs::ramfs::RamFs;
 
-    serial::write_str("rux: ELF entry=");
-    write_hex_serial(elf_info.entry as usize);
-    serial::write_str(" segments=");
-    serial::write_str(write_u32(&mut buf, elf_info.num_segments as u32));
-    serial::write_str("\n");
-
-    unsafe {
-        let alloc = &mut *(0x400000 as *mut rux_mm::frame::BuddyAllocator);
-        use rux_mm::FrameAllocator;
-
-        // Step 1: Allocate physical pages for each segment and copy data.
-        // Boot page tables identity-map 0-2GB, so physical addresses are writable.
-        // Track the physical page for each virtual page.
-        let mut seg_mappings: [(u64, rux_klib::PhysAddr, u32); 16] =
-            [(0, rux_klib::PhysAddr::new(0), 0); 16];
-        let mut map_count = 0;
-
-        for i in 0..elf_info.num_segments {
-            let seg = &elf_info.segments[i];
-            let vaddr_base = seg.vaddr & !0xFFF;
-            let vaddr_end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
-            let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
-
-            let mut flags = rux_mm::MappingFlags::USER;
-            if seg.flags & elf::PF_R != 0 { flags = flags.or(rux_mm::MappingFlags::READ); }
-            if seg.flags & elf::PF_W != 0 { flags = flags.or(rux_mm::MappingFlags::WRITE); }
-            if seg.flags & elf::PF_X != 0 { flags = flags.or(rux_mm::MappingFlags::EXECUTE); }
-
-            for p in 0..num_pages {
-                let va = vaddr_base + (p as u64) * 4096;
-                let phys = alloc.alloc(rux_mm::PageSize::FourK).expect("seg page");
-                // Zero the page via boot identity map
-                let ptr = phys.as_usize() as *mut u8;
-                for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
-                // Copy file data that falls within this page
-                let page_va_start = va;
-                let page_va_end = va + 4096;
-                if seg.file_offset + seg.filesz > 0 {
-                    let seg_file_start = seg.vaddr;
-                    let seg_file_end = seg.vaddr + seg.filesz;
-                    let copy_start = page_va_start.max(seg_file_start);
-                    let copy_end = page_va_end.min(seg_file_end);
-                    if copy_start < copy_end {
-                        let file_off = seg.file_offset + (copy_start - seg.vaddr);
-                        let dest_off = copy_start - page_va_start;
-                        let len = (copy_end - copy_start) as usize;
-                        let src = elf_data.as_ptr().add(file_off as usize);
-                        let dst = ptr.add(dest_off as usize);
-                        for j in 0..len { *dst.add(j) = *src.add(j); }
-                    }
-                }
-                if map_count < 16 {
-                    seg_mappings[map_count] = (va, phys, flags.0);
-                    map_count += 1;
-                }
-            }
-        }
-
-        // Step 2: Build user page table
-        let mut upt = x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
-
-        // Kernel identity map (0-8 MiB, RWX, no USER)
-        let kflags = rux_mm::MappingFlags::READ
-            .or(rux_mm::MappingFlags::WRITE)
-            .or(rux_mm::MappingFlags::EXECUTE);
-        upt.identity_map_range(rux_klib::PhysAddr::new(0), 8 * 1024 * 1024, kflags, alloc)
-            .expect("kernel map");
-
-        // Map ELF segment pages (user virtual → physical)
-        for i in 0..map_count {
-            let (va, phys, flags_raw) = seg_mappings[i];
-            let flags = rux_mm::MappingFlags(flags_raw);
-            upt.map_4k(rux_klib::VirtAddr::new(va as usize), phys, flags, alloc)
-                .expect("map user seg");
-        }
-
-        // Map user stack
-        let stack_phys = alloc.alloc(rux_mm::PageSize::FourK).expect("stack page");
-        let stack_va = 0x7FFFF000u64;
-        let stack_flags = rux_mm::MappingFlags::READ
-            .or(rux_mm::MappingFlags::WRITE)
-            .or(rux_mm::MappingFlags::USER);
-        upt.map_4k(
-            rux_klib::VirtAddr::new(stack_va as usize), stack_phys, stack_flags, alloc,
-        ).expect("map stack");
-
-        // Step 3: Activate and enter user mode
-        upt.activate();
-        serial::write_str("rux: entering user mode...\n");
-        x86_64::syscall::enter_user_mode(elf_info.entry, stack_va + 0x1000);
+    // Zero the RamFs memory region
+    let fs_bytes = core::mem::size_of::<rux_vfs::ramfs::RamFs>();
+    let fs_qwords = (fs_bytes + 7) / 8;
+    for i in 0..fs_qwords {
+        core::ptr::write_volatile((fs_ptr as *mut u64).add(i), 0u64);
     }
+    for i in 0..fs_qwords {
+        core::ptr::write_volatile((fs_ptr as *mut u64).add(i), 0u64);
+    }
+    serial::write_str("rux: zeroing done\n");
+
+    // Initialize RamFs in place (avoids 700KB stack allocation)
+    let alloc_dyn: *mut dyn rux_mm::FrameAllocator =
+        &mut *alloc_ptr as &mut dyn rux_mm::FrameAllocator;
+    rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
+    let fs = &mut *fs_ptr;
+
+    // Populate /hello with the ELF binary
+    let hello_data: &[u8] = include_bytes!("../../../user/hello_x86_64.elf");
+    let hello_ino = fs.create(0, FileName::new(b"hello").unwrap(), 0o755).unwrap();
+    fs.write(hello_ino, 0, hello_data).unwrap();
+
+    let mut buf = [0u8; 10];
+    serial::write_str("rux: ramfs: /hello (");
+    serial::write_str(write_u32(&mut buf, hello_data.len() as u32));
+    serial::write_str(" bytes)\n");
+
+    // Init kernel state
+    kstate::init(fs_ptr, alloc_ptr);
+    serial::write_str("rux: kernel state initialized\n");
+
+    // Load and run the shell
+    serial::write_str("rux: loading shell...\n");
+    let shell_data: &[u8] = include_bytes!("../../../user/shell_x86_64.elf");
+    let alloc = &mut *(0x130000 as *mut rux_mm::frame::BuddyAllocator);
+    elf::load_and_exec_elf(shell_data, alloc);
 }
 
 // Counters incremented by the preemptive tasks

@@ -37,6 +37,7 @@ dependencies = [
  "rux-mm",
  "rux-proc",
  "rux-sched",
+ "rux-vfs",
 ]
 
 [[package]]
@@ -72,6 +73,9 @@ version = "0.1.0"
 [[package]]
 name = "rux-sync"
 version = "0.1.0"
+dependencies = [
+ "rux-arch",
+]
 
 [[package]]
 name = "rux-syscall"
@@ -80,3 +84,7 @@ version = "0.1.0"
 [[package]]
 name = "rux-vfs"
 version = "0.1.0"
+dependencies = [
+ "rux-klib",
+ "rux-mm",
+]

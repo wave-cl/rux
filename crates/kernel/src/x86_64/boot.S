@@ -149,4 +149,5 @@ pd:     .skip 4096
 .align 16
 boot_stack:
     .skip 16384
+.global boot_stack_top
 boot_stack_top:

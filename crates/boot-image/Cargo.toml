@@ -1,0 +1,10 @@
+[package]
+name = "rux-boot-image"
+version = "0.1.0"
+edition = "2021"
+
+# This is a HOST tool, not a kernel crate. It runs on the build machine
+# to create bootable disk images from the kernel ELF.
+
+[dependencies]
+bootloader_linker = "0.1"

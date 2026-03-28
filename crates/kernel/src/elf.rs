@@ -195,3 +195,102 @@ pub unsafe fn load_segments(data: &[u8], info: &ElfInfo) {
         }
     }
 }
+
+/// Load an ELF binary into a fresh user page table and enter user mode.
+///
+/// This is the core of exec(): parse the ELF, allocate pages for each
+/// PT_LOAD segment, copy data, build a user page table with the kernel
+/// identity-mapped, map a user stack, activate, and jump to user mode.
+///
+/// # Safety
+/// - `elf_data` must be a valid ELF64 binary.
+/// - `alloc` must be a valid frame allocator with identity-mapped pages.
+/// - Does not return.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn load_and_exec_elf(
+    elf_data: &[u8],
+    alloc: &mut dyn rux_mm::FrameAllocator,
+) -> ! {
+    use rux_klib::{PhysAddr, VirtAddr};
+    use rux_mm::{MappingFlags, PageSize};
+
+    let elf_info = parse_elf(elf_data).expect("ELF parse failed");
+
+    // Step 1: Allocate physical pages for each segment and copy data.
+    let mut seg_mappings: [(u64, PhysAddr, u32); 16] =
+        [(0, PhysAddr::new(0), 0); 16];
+    let mut map_count = 0;
+
+    for i in 0..elf_info.num_segments {
+        let seg = &elf_info.segments[i];
+        let vaddr_base = seg.vaddr & !0xFFF;
+        let vaddr_end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+        let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
+
+        let mut flags = MappingFlags::USER;
+        if seg.flags & PF_R != 0 { flags = flags.or(MappingFlags::READ); }
+        if seg.flags & PF_W != 0 { flags = flags.or(MappingFlags::WRITE); }
+        if seg.flags & PF_X != 0 { flags = flags.or(MappingFlags::EXECUTE); }
+
+        for p in 0..num_pages {
+            let va = vaddr_base + (p as u64) * 4096;
+            let phys = alloc.alloc(PageSize::FourK).expect("seg page");
+            // Zero the page via boot identity map
+            let ptr = phys.as_usize() as *mut u8;
+            for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+            // Copy file data that falls within this page
+            let page_va_start = va;
+            let page_va_end = va + 4096;
+            if seg.file_offset + seg.filesz > 0 {
+                let seg_file_start = seg.vaddr;
+                let seg_file_end = seg.vaddr + seg.filesz;
+                let copy_start = page_va_start.max(seg_file_start);
+                let copy_end = page_va_end.min(seg_file_end);
+                if copy_start < copy_end {
+                    let file_off = seg.file_offset + (copy_start - seg.vaddr);
+                    let dest_off = copy_start - page_va_start;
+                    let len = (copy_end - copy_start) as usize;
+                    let src = elf_data.as_ptr().add(file_off as usize);
+                    let dst = ptr.add(dest_off as usize);
+                    for j in 0..len { *dst.add(j) = *src.add(j); }
+                }
+            }
+            if map_count < 16 {
+                seg_mappings[map_count] = (va, phys, flags.0);
+                map_count += 1;
+            }
+        }
+    }
+
+    // Step 2: Build user page table
+    let mut upt = crate::x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
+
+    // Kernel identity map (0-8 MiB, RWX, no USER)
+    let kflags = MappingFlags::READ
+        .or(MappingFlags::WRITE)
+        .or(MappingFlags::EXECUTE);
+    upt.identity_map_range(PhysAddr::new(0), 8 * 1024 * 1024, kflags, alloc)
+        .expect("kernel map");
+
+    // Map ELF segment pages (user virtual -> physical)
+    for i in 0..map_count {
+        let (va, phys, flags_raw) = seg_mappings[i];
+        let flags = MappingFlags(flags_raw);
+        upt.map_4k(VirtAddr::new(va as usize), phys, flags, alloc)
+            .expect("map user seg");
+    }
+
+    // Map user stack
+    let stack_phys = alloc.alloc(PageSize::FourK).expect("stack page");
+    let stack_va = 0x7FFFF000u64;
+    let stack_flags = MappingFlags::READ
+        .or(MappingFlags::WRITE)
+        .or(MappingFlags::USER);
+    upt.map_4k(
+        VirtAddr::new(stack_va as usize), stack_phys, stack_flags, alloc,
+    ).expect("map stack");
+
+    // Step 3: Activate and enter user mode
+    upt.activate();
+    crate::x86_64::syscall::enter_user_mode(elf_info.entry, stack_va + 0x1000);
+}

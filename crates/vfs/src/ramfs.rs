@@ -134,6 +134,44 @@ impl RamFs {
         alloc::boxed::Box::new(Self::new(alloc))
     }
 
+    /// Initialize a pre-zeroed RamFs in place at a fixed memory address.
+    /// This avoids creating the ~700 KB struct on the stack.
+    ///
+    /// # Safety
+    /// - `this` must point to a zeroed region of at least `size_of::<RamFs>()` bytes.
+    /// - `alloc` must remain valid for the lifetime of the RamFs.
+    /// - Identity mapping must be active (phys addr = usable pointer).
+    pub unsafe fn init_at(this: *mut Self, alloc: *mut dyn FrameAllocator) {
+        // Set fields (inodes are already zeroed = InodeMeta::ZERO since ZERO has all-zero bytes
+        // except for direct[] which is [NO_PAGE; 12] = [u64::MAX; 12])
+        (*this).alloc = alloc;
+        (*this).next_inode = 1;
+
+        // Set all inode direct pages to NO_PAGE (u64::MAX, not 0)
+        for i in 0..MAX_INODES {
+            for d in 0..12 {
+                (*this).inodes[i].direct[d] = NO_PAGE;
+            }
+            (*this).inodes[i].indirect = NO_PAGE;
+        }
+
+        // Allocate a page for root directory entries
+        let page_addr = (*this).alloc_page().expect("RamFs::init_at: cannot allocate root page");
+
+        // Root inode (0) -- directory with "." and ".."
+        let root = &mut (*this).inodes[0];
+        root.active = true;
+        root.kind = InodeType::Directory;
+        root.mode = S_IFDIR | 0o755;
+        root.nlink = 2;
+        root.direct[0] = page_addr;
+        root.size = 2; // "." and ".."
+
+        let page = (*this).page_mut(page_addr);
+        Self::write_dir_entry_raw(page, 0, b".", InodeType::Directory, 0);
+        Self::write_dir_entry_raw(page, 1, b"..", InodeType::Directory, 0);
+    }
+
     // ── Page access helpers ──────────────────────────────────────────
 
     /// Convert a physical address to a mutable page-sized slice.
