@@ -467,6 +467,7 @@ fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
 /// All 15 pushed registers + user RSP.
 static mut VFORK_PARENT_REGS: [u64; 15] = [0; 15];
 static mut VFORK_PARENT_USER_RSP: u64 = 0;
+static mut VFORK_PARENT_FS_BASE: u64 = 0;
 
 #[inline(never)]
 fn syscall_vfork_linux() -> i64 {
@@ -481,6 +482,14 @@ fn syscall_vfork_linux() -> i64 {
             VFORK_PARENT_REGS[i] = *stack_top.sub(i + 1);
         }
         VFORK_PARENT_USER_RSP = SAVED_USER_RSP;
+
+        // Save IA32_FS_BASE — musl TLS. The child's exec sets its own.
+        {
+            let lo: u32;
+            let hi: u32;
+            core::arch::asm!("rdmsr", in("ecx") 0xC0000100u32, out("eax") lo, out("edx") hi, options(nostack));
+            VFORK_PARENT_FS_BASE = (hi as u64) << 32 | lo as u64;
+        }
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
@@ -531,6 +540,13 @@ fn syscall_vfork_linux() -> i64 {
             }
             serial::write_str("rux: vfork parent resumed\n");
             VFORK_JMP.rsp = 0;
+
+            // Restore IA32_FS_BASE (TLS) — child's exec overwrote it
+            {
+                let lo = VFORK_PARENT_FS_BASE as u32;
+                let hi = (VFORK_PARENT_FS_BASE >> 32) as u32;
+                core::arch::asm!("wrmsr", in("ecx") 0xC0000100u32, in("eax") lo, in("edx") hi, options(nostack));
+            }
 
             // Restore ALL user registers by writing them back to SYSCALL_STACK
             // and then using the normal asm pop path.

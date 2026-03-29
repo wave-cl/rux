@@ -139,8 +139,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
         }
         SAVED_REGS_PTR = regs;  // save regs pointer (x0 is caller-saved, lost after longjmp)
         core::arch::asm!("mrs {}, sp_el0", out(reg) SAVED_SP_EL0, options(nostack));
-        // Also save TPIDR_EL0 (TLS base) — musl uses it
-        static mut SAVED_TPIDR: u64 = 0;
+        // Save TPIDR_EL0 (TLS base) — musl uses it; child's exec overwrites it
         core::arch::asm!("mrs {}, tpidr_el0", out(reg) SAVED_TPIDR, options(nostack));
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
@@ -290,6 +289,7 @@ static mut SAVED_SP_EL0: u64 = 0;
 // Saved TTBR0_EL1 from before exec, so the parent can restore its page table
 static mut SAVED_TTBR0: u64 = 0;
 static mut SAVED_REGS_PTR: *mut u64 = core::ptr::null_mut();
+static mut SAVED_TPIDR: u64 = 0;
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"
