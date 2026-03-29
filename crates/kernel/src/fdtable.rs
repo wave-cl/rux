@@ -81,6 +81,21 @@ pub fn sys_open_ino(ino: rux_vfs::InodeId, flags: u32) -> i64 {
     }
 }
 
+/// Duplicate a file descriptor to the lowest available fd (>= 3).
+pub fn sys_dup(oldfd: usize) -> i64 {
+    if oldfd >= MAX_FDS { return -9; }
+    unsafe {
+        // For fd 0-2, allow even if not "active" in table
+        if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
+        for newfd in FIRST_FILE_FD..MAX_FDS {
+            if !FD_TABLE[newfd].active {
+                return sys_dup2(oldfd, newfd);
+            }
+        }
+        -24 // -EMFILE
+    }
+}
+
 /// Duplicate a file descriptor. Real dup2 implementation.
 pub fn sys_dup2(oldfd: usize, newfd: usize) -> i64 {
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
@@ -115,9 +130,28 @@ pub fn sys_close(fd: usize) -> i64 {
         if !FD_TABLE[fd].active {
             return -9;
         }
+        if FD_TABLE[fd].is_pipe {
+            crate::pipe::close(FD_TABLE[fd].pipe_id, FD_TABLE[fd].pipe_write);
+        }
         FD_TABLE[fd].active = false;
     }
     0
+}
+
+/// Allocate an fd for a pipe end. Returns fd number.
+pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<i64, i64> {
+    unsafe {
+        for fd in FIRST_FILE_FD..MAX_FDS {
+            if !FD_TABLE[fd].active {
+                FD_TABLE[fd] = OpenFile {
+                    ino: 0, offset: 0, flags: 0, active: true,
+                    is_pipe: true, pipe_id, pipe_write: is_write,
+                };
+                return Ok(fd as i64);
+            }
+        }
+        Err(-24) // -EMFILE
+    }
 }
 
 /// Read from a file descriptor. Returns bytes read, 0 on EOF, negative on error.
@@ -128,6 +162,9 @@ pub fn sys_read_fd(fd: usize, buf: *mut u8, len: usize) -> i64 {
     unsafe {
         if !FD_TABLE[fd].active {
             return -9;
+        }
+        if FD_TABLE[fd].is_pipe {
+            return crate::pipe::read(FD_TABLE[fd].pipe_id, buf, len);
         }
         let f = &mut FD_TABLE[fd];
         let fs = crate::kstate::fs();
@@ -162,6 +199,9 @@ pub fn sys_write_fd(fd: usize, buf: *const u8, len: usize) -> i64 {
     unsafe {
         if !FD_TABLE[fd].active {
             return -9;
+        }
+        if FD_TABLE[fd].is_pipe {
+            return crate::pipe::write(FD_TABLE[fd].pipe_id, buf, len);
         }
         let f = &mut FD_TABLE[fd];
         let fs = crate::kstate::fs();

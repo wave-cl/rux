@@ -36,12 +36,12 @@ pub fn handle_syscall(frame: *mut u8) {
             63 => posix::read(a0, a1, a2),            // read
             64 => posix::write(a0, a1, a2),           // write
             66 => posix::writev(a0, a1, a2),          // writev
-            23 => posix::dup2(a0, a1),                // dup
+            23 => posix::dup(a0),                     // dup
             24 => posix::dup2(a0, a1),                // dup3 → dup2
             25 => 0,                                  // fcntl
             29 => posix::ioctl(a0, a1, a2),           // ioctl
             62 => posix::lseek(a0, a1 as i64, a2),    // lseek
-            59 => -38,                                // pipe2
+            59 => linux::pipe2(a0, a1),                // pipe2
 
             // File metadata
             79 => posix::fstatat(a0, a1, a2),         // newfstatat
@@ -147,6 +147,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
         SAVED_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
         static mut SAVED_CWD_INODE: u64 = 0;
         SAVED_CWD_INODE = crate::syscall_impl::CWD_INODE;
+        for i in 0..3 { SAVED_FDS[i] = crate::fdtable::FD_TABLE[i]; }
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
@@ -219,6 +220,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             crate::syscall_impl::MMAP_BASE = SAVED_MMAP_BASE;
             crate::syscall_impl::PROGRAM_BRK = SAVED_PROGRAM_BRK;
             crate::syscall_impl::CWD_INODE = SAVED_CWD_INODE;
+            for i in 0..3 { crate::fdtable::FD_TABLE[i] = SAVED_FDS[i]; }
 
             // Restore frame and eret directly (kernel stack is corrupted).
             let frame = SAVED_REGS_PTR;
@@ -303,6 +305,10 @@ static mut SAVED_REGS_PTR: *mut u64 = core::ptr::null_mut();
 static mut SAVED_TPIDR: u64 = 0;
 static mut SAVED_MMAP_BASE: u64 = 0;
 static mut SAVED_PROGRAM_BRK: u64 = 0;
+static mut SAVED_FDS: [crate::fdtable::OpenFile; 3] = [crate::fdtable::OpenFile {
+    ino: 0, offset: 0, flags: 0, active: false,
+    is_pipe: false, pipe_id: 0, pipe_write: false,
+}; 3];
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"

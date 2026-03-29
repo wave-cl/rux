@@ -8,6 +8,24 @@
 
 use super::arch;
 
+// ── Pipes (Linux extension) ──────────────────────────────────────────
+
+/// pipe2(pipefd, flags) — create a pipe.
+pub fn pipe2(pipefd_ptr: u64, _flags: u64) -> i64 {
+    if pipefd_ptr == 0 { return -14; } // -EFAULT
+    match crate::pipe::create() {
+        Ok((_pipe_id, read_fd, write_fd)) => {
+            unsafe {
+                let p = pipefd_ptr as *mut i32;
+                *p = read_fd as i32;
+                *p.add(1) = write_fd as i32;
+            }
+            0
+        }
+        Err(e) => e,
+    }
+}
+
 // ── Memory: brk (Linux historical, not POSIX) ──────────────────────
 
 /// brk(addr) — Linux-specific heap management.

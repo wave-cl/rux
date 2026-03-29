@@ -11,6 +11,7 @@ mod slab;
 mod elf;
 mod kstate;
 pub mod fdtable;
+pub mod pipe;
 pub mod execargs;
 pub mod pgtrack;
 pub mod rootfs;

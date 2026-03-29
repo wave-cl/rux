@@ -12,6 +12,9 @@ use super::arch;
 pub fn read(fd: u64, buf: u64, len: u64) -> i64 {
     if fd == 0 {
         unsafe {
+            if crate::fdtable::FD_TABLE[0].active {
+                return crate::fdtable::sys_read_fd(0, buf as *mut u8, len as usize);
+            }
             let ptr = buf as *mut u8;
             for i in 0..len as usize {
                 *ptr.add(i) = arch::serial_read_byte();
@@ -24,8 +27,12 @@ pub fn read(fd: u64, buf: u64, len: u64) -> i64 {
 
 /// write(fd, buf, count) — POSIX.1
 pub fn write(fd: u64, buf: u64, len: u64) -> i64 {
+    // Check if fd 0-2 has been redirected (dup2'd to a file/pipe)
     if fd <= 2 {
         unsafe {
+            if crate::fdtable::FD_TABLE[fd as usize].active {
+                return crate::fdtable::sys_write_fd(fd as usize, buf as *const u8, len as usize);
+            }
             let ptr = buf as *const u8;
             for i in 0..len as usize { arch::serial_write_byte(*ptr.add(i)); }
         }
@@ -73,6 +80,11 @@ pub fn openat(_dirfd: u64, pathname: u64, flags: u64, mode: u64) -> i64 {
 /// close(fd) — POSIX.1
 pub fn close(fd: u64) -> i64 {
     crate::fdtable::sys_close(fd as usize)
+}
+
+/// dup(oldfd) — POSIX.1: duplicate fd to lowest available fd.
+pub fn dup(oldfd: u64) -> i64 {
+    crate::fdtable::sys_dup(oldfd as usize)
 }
 
 /// dup2(oldfd, newfd) — POSIX.1
