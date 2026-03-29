@@ -101,9 +101,12 @@ pub fn getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
             0 // root
         };
 
-        static mut DIR_OFFSET: [usize; 16] = [0; 16];
-        let off_idx = (fd as usize).min(15);
-        let mut offset = DIR_OFFSET[off_idx];
+        // Use per-fd offset from the fd table (reset on each open)
+        let mut offset = if fd < 64 {
+            crate::fdtable::FD_TABLE[fd as usize].offset
+        } else {
+            0
+        };
         let start_pos = pos;
 
         loop {
@@ -131,7 +134,10 @@ pub fn getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
                 _ => break,
             }
         }
-        DIR_OFFSET[off_idx] = offset;
+        // Save offset back to fd table
+        if fd < 64 {
+            crate::fdtable::FD_TABLE[fd as usize].offset = offset;
+        }
         if pos == start_pos { return 0; }
         pos as i64
     }
