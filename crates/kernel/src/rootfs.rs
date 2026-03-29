@@ -69,9 +69,9 @@ const CONFIG_FILES: &[ConfigFile] = &[
         contents: b"rux\n", mode: 0o644 },
     ConfigFile { dir: b"etc", name: b"hosts",
         contents: b"127.0.0.1\tlocalhost\n::1\tlocalhost\n", mode: 0o644 },
-    ConfigFile { dir: b"etc", name: b"profile",
-        contents: b"export PATH=/bin:/sbin:/usr/bin:/usr/sbin\nexport HOME=/root\n\
-P=0; F=0\n\
+    ConfigFile { dir: b"etc", name: b"profile_full",
+        contents: b"export PATH=/bin:/sbin:/usr/bin:/usr/sbin\nexport HOME=/root\necho 'profile loaded'\n\
+echo 'running tests'\nP=0\nF=0\n\
 # --- rux syscall test suite ---\n\
 echo '=== rux test suite ==='\n\
 \n\
@@ -183,6 +183,8 @@ uname > /dev/null && hostname > /dev/null && cat /etc/hostname > /dev/null && wh
 P=$((P+1))\n\
 \n\
 echo \"=== $P passed, $F failed ===\"\n", mode: 0o644 },
+    ConfigFile { dir: b"etc", name: b"profile",
+        contents: b"export PATH=/bin:/sbin:/usr/bin:/usr/sbin\nexport HOME=/root\necho 'profile loaded'\n", mode: 0o644 },
     ConfigFile { dir: b"etc", name: b"inittab",
         contents: b"::sysinit:/etc/init.d/rcS\n::respawn:/bin/sh\n", mode: 0o644 },
     ConfigFile { dir: b"etc", name: b"fstab",

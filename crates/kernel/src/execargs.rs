@@ -88,6 +88,8 @@ pub unsafe fn write_to_stack(stack_top: u64) -> u64 {
     let argc = ARGC;
 
     // Environment strings
+    // Note: ENV=/etc/profile causes ash to crash during early init.
+    // Tests run via `. /etc/profile` fed through stdin instead.
     let env_strs: [&[u8]; 3] = [
         b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0",
         b"HOME=/root\0",
@@ -161,6 +163,20 @@ pub unsafe fn write_to_stack(stack_top: u64) -> u64 {
     (*auxv.add(3)) = [13, 0];     // AT_GID
     (*auxv.add(4)) = [14, 0];     // AT_EGID
     (*auxv.add(5)) = [0, 0];      // AT_NULL
+
+    // Debug: dump first 16 stack slots
+    #[cfg(target_arch = "x86_64")]
+    {
+        let p = sp as *const u64;
+        crate::serial::write_str("stack dump:\n");
+        for i in 0..16 {
+            crate::serial::write_str("  [");
+            crate::write_hex_serial(i);
+            crate::serial::write_str("] = ");
+            crate::write_hex_serial(*p.add(i) as usize);
+            crate::serial::write_byte(b'\n');
+        }
+    }
 
     sp
 }
