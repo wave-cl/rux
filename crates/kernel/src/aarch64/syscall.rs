@@ -148,7 +148,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
         SAVED_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
         static mut SAVED_CWD_INODE: u64 = 0;
         SAVED_CWD_INODE = crate::syscall_impl::CWD_INODE;
-        for i in 0..3 { SAVED_FDS[i] = crate::fdtable::FD_TABLE[i]; }
+        for i in 0..64 { SAVED_FDS[i] = crate::fdtable::FD_TABLE[i]; }
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
@@ -221,7 +221,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             crate::syscall_impl::MMAP_BASE = SAVED_MMAP_BASE;
             crate::syscall_impl::PROGRAM_BRK = SAVED_PROGRAM_BRK;
             crate::syscall_impl::CWD_INODE = SAVED_CWD_INODE;
-            for i in 0..3 { crate::fdtable::FD_TABLE[i] = SAVED_FDS[i]; }
+            for i in 0..64 { crate::fdtable::FD_TABLE[i] = SAVED_FDS[i]; }
 
             // Restore frame and eret directly (kernel stack is corrupted).
             let frame = SAVED_REGS_PTR;
@@ -306,10 +306,10 @@ static mut SAVED_REGS_PTR: *mut u64 = core::ptr::null_mut();
 static mut SAVED_TPIDR: u64 = 0;
 static mut SAVED_MMAP_BASE: u64 = 0;
 static mut SAVED_PROGRAM_BRK: u64 = 0;
-static mut SAVED_FDS: [crate::fdtable::OpenFile; 3] = [crate::fdtable::OpenFile {
+static mut SAVED_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::OpenFile {
     ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
-}; 3];
+}; 64];
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"

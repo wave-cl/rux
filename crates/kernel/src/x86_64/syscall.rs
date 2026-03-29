@@ -475,10 +475,10 @@ static mut VFORK_PARENT_FS_BASE: u64 = 0;
 static mut VFORK_PARENT_MMAP_BASE: u64 = 0;
 static mut VFORK_PARENT_PROGRAM_BRK: u64 = 0;
 static mut VFORK_PARENT_CWD_INODE: u64 = 0;
-static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 3] = [crate::fdtable::OpenFile {
+static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::OpenFile {
     ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
-}; 3];
+}; 64];
 
 #[inline(never)]
 fn syscall_vfork_linux() -> i64 {
@@ -507,7 +507,8 @@ fn syscall_vfork_linux() -> i64 {
         VFORK_PARENT_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
         VFORK_PARENT_CWD_INODE = crate::syscall_impl::CWD_INODE;
         // Save fd 0-2 (child's dup2 for redirection modifies shared FD_TABLE)
-        for i in 0..3 { VFORK_PARENT_FDS[i] = crate::fdtable::FD_TABLE[i]; }
+        // Save all fds (child's exec/close/dup2 modifies shared FD_TABLE)
+        for i in 0..64 { VFORK_PARENT_FDS[i] = crate::fdtable::FD_TABLE[i]; }
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
@@ -564,7 +565,9 @@ fn syscall_vfork_linux() -> i64 {
             crate::syscall_impl::PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
             crate::syscall_impl::CWD_INODE = VFORK_PARENT_CWD_INODE;
             // Restore fd 0-2 (child's dup2 may have redirected them)
-            for i in 0..3 { crate::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
+            // Restore all fds (child's exec reset closed fds >= 3,
+            // child's dup2 may have changed fd 0-2)
+            for i in 0..64 { crate::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
 
             // Restore IA32_FS_BASE (TLS) — child's exec overwrote it
             {
