@@ -141,7 +141,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         5 => posix::fstat(a0, a1),
         6 => posix::stat(a0, a1),              // lstat (no symlink distinction)
         7 => 1,                                 // poll
-        8 => posix::creat(a0),
+        8 => posix::lseek(a0, a1 as i64, a2),
         9 => posix::mmap(a0, a1, a2, a3, a4),
         10 => 0,                                // mprotect
         11 => 0,                                // munmap
@@ -389,10 +389,9 @@ fn syscall_exec(path_ptr: u64, argv_ptr: u64) -> ! {
         // Save current CR3 so the parent can restore its page table after exec
         core::arch::asm!("mov {}, cr3", out(reg) SAVED_CR3, options(nostack));
 
-        // Free previous child's pages — but NOT if inside a vfork
-        if VFORK_JMP.rsp == 0 {
-            crate::pgtrack::begin_child(alloc);
-        }
+        // Free previous child's pages and mark subsequent allocs as child.
+        // The parent's page table is preserved via SAVED_CR3.
+        crate::pgtrack::begin_child(alloc);
 
         serial::write_str("rux: entering user mode...\n");
         crate::elf::load_elf_from_inode(ino as u64, alloc);
@@ -492,21 +491,14 @@ fn syscall_vfork_linux() -> i64 {
             use rux_mm::FrameAllocator;
             let alloc = crate::kstate::alloc();
 
-            // Allocate a child stack page and copy the top of the parent's stack
-            let child_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
+            // Copy 4 pages of the parent's stack for the child, starting from
+            // the page containing RSP downward. This prevents the child from
+            // corrupting the parent's stack between vfork return and execve.
             let parent_rsp = SAVED_USER_RSP;
-            // Parent stack page base (page containing RSP)
             let parent_page_base = parent_rsp & !0xFFF;
-            let child_page = child_frame.as_usize() as *mut u8;
-            let parent_page = parent_page_base as *const u8;
-            // Copy the entire page
-            for j in 0..4096 {
-                *child_page.add(j) = *parent_page.add(j);
-            }
+            let child_stack_pages = 4u64;
+            let child_va_base = 0x7FFE_0000u64; // well below parent stack
 
-            // Map child stack at a different virtual address so it doesn't
-            // conflict with the parent's. Use 0x7FFFB000 (one page below parent).
-            let child_va = 0x7FFFB000u64;
             let mut cr3: u64;
             core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
             let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
@@ -514,13 +506,22 @@ fn syscall_vfork_linux() -> i64 {
             let flags = rux_mm::MappingFlags::READ
                 .or(rux_mm::MappingFlags::WRITE)
                 .or(rux_mm::MappingFlags::USER);
-            let _ = upt.unmap_4k(rux_klib::VirtAddr::new(child_va as usize));
-            let _ = upt.map_4k(rux_klib::VirtAddr::new(child_va as usize), child_frame, flags, alloc);
 
-            // Adjust SAVED_USER_RSP to point to the child stack
-            // Same offset within the page, but at the new VA
+            for p in 0..child_stack_pages {
+                let src_va = parent_page_base - (child_stack_pages - 1 - p) * 4096;
+                let dst_va = child_va_base + p * 4096;
+                let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
+                let src = src_va as *const u8;
+                let dst = frame.as_usize() as *mut u8;
+                for j in 0..4096 { *dst.add(j) = *src.add(j); }
+                let _ = upt.unmap_4k(rux_klib::VirtAddr::new(dst_va as usize));
+                let _ = upt.map_4k(rux_klib::VirtAddr::new(dst_va as usize), frame, flags, alloc);
+            }
+
+            // Adjust RSP: same offset from page base, but in the child VA range
             let offset_in_page = parent_rsp - parent_page_base;
-            SAVED_USER_RSP = child_va + offset_in_page;
+            let child_top_va = child_va_base + (child_stack_pages - 1) * 4096;
+            SAVED_USER_RSP = child_top_va + offset_in_page;
 
             return 0; // child gets fork return 0, runs on child stack
         } else {

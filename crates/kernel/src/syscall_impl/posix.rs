@@ -56,6 +56,11 @@ pub fn dup2(oldfd: u64, newfd: u64) -> i64 {
     newfd as i64
 }
 
+/// lseek(fd, offset, whence) — POSIX.1
+pub fn lseek(fd: u64, offset: i64, whence: u64) -> i64 {
+    crate::fdtable::sys_lseek(fd as usize, offset, whence as u32)
+}
+
 /// writev(fd, iov, iovcnt) — POSIX.1
 pub fn writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> i64 {
     unsafe {
@@ -349,7 +354,6 @@ pub fn clock_gettime(_clockid: u64, tp: u64) -> i64 {
 pub fn mmap(addr: u64, len: u64, _prot: u64, mmap_flags: u64, _fd: u64) -> i64 {
     unsafe {
         use rux_mm::FrameAllocator;
-        static mut MMAP_BASE: u64 = 0x10000000;
 
         if mmap_flags & 0x20 == 0 { return -12; } // MAP_ANONYMOUS only
 
@@ -357,8 +361,8 @@ pub fn mmap(addr: u64, len: u64, _prot: u64, mmap_flags: u64, _fd: u64) -> i64 {
         let result = if mmap_flags & 0x10 != 0 && addr != 0 {
             addr & !0xFFF // MAP_FIXED
         } else {
-            let r = MMAP_BASE;
-            MMAP_BASE += aligned_len;
+            let r = super::MMAP_BASE;
+            super::MMAP_BASE += aligned_len;
             r
         };
 

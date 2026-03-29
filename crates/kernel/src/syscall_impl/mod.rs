@@ -69,6 +69,9 @@ pub mod arch {
 /// Program break for brk().
 pub static mut PROGRAM_BRK: u64 = 0;
 
+/// Next anonymous mmap virtual address.
+pub static mut MMAP_BASE: u64 = 0x10000000;
+
 /// Child exit status for wait4.
 pub static mut LAST_CHILD_EXIT: i32 = 0;
 

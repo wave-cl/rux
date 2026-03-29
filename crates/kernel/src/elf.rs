@@ -334,7 +334,7 @@ pub unsafe fn load_elf_from_inode(
     let mut upt = {
         let mut upt = crate::x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
         let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
-        upt.identity_map_range(PhysAddr::new(0), 16 * 1024 * 1024, kflags, alloc)
+        upt.identity_map_range(PhysAddr::new(0), 128 * 1024 * 1024, kflags, alloc)
             .expect("kernel map");
         upt
     };
@@ -426,6 +426,8 @@ pub unsafe fn load_elf_from_inode(
             if end > max_end { max_end = end; }
         }
         crate::syscall_impl::PROGRAM_BRK = max_end;
+        crate::syscall_impl::MMAP_BASE = 0x10000000;
+        crate::fdtable::reset();
     }
 
     // Unmap page 0 to catch NULL pointer dereferences

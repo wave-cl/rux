@@ -521,12 +521,12 @@ fn x86_64_init(multiboot_info: usize) {
             // allocator data (2-6MB), BSS/stacks (1MB+), serial I/O ports
             kpt.identity_map_range(
                 rux_klib::PhysAddr::new(0),
-                16 * 1024 * 1024,
+                128 * 1024 * 1024,
                 rwx,
                 alloc,
             ).expect("identity map failed");
 
-            serial::write_str("rux: identity mapped 0-8 MiB\n");
+            serial::write_str("rux: identity mapped 0-128 MiB\n");
 
             // Activate — switch CR3 to our page tables
             x86_64::paging::activate(&kpt);

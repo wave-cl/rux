@@ -156,51 +156,14 @@ impl BuddyAllocator {
         if order > MAX_BUDDY_ORDER {
             return Err(MemoryError::InvalidSize);
         }
-
-        // Order 0 fast path: pop from page cache
-        if order == 0 {
-            if self.pcp.is_empty() {
-                self.pcp_refill();
-            }
-            if !self.pcp.is_empty() {
-                self.free_frames -= 1;
-                return Ok(self.pcp.pop());
-            }
-            return Err(MemoryError::OutOfFrames);
-        }
-
-        // Order 1+: check per-order block cache
-        if self.order_cache.has(order) {
-            self.free_frames -= 1u32 << order;
-            return Ok(self.order_cache.take(order));
-        }
-
-        // Fallback: flush page cache so pages can merge, then bitmap scan
-        self.flush_pcp();
+        // Use bitmap directly — no caching, maximally predictable.
         self.buddy_alloc(order)
     }
 
     /// Deallocate a block of 2^order contiguous pages.
     pub fn dealloc_order(&mut self, addr: PhysAddr, order: u8) {
         self.free_frames += 1u32 << order;
-
-        // Order 0 fast path: push to page cache
-        if order == 0 {
-            self.pcp.push(addr);
-            if self.pcp.is_above_high() {
-                self.pcp_drain();
-            }
-            return;
-        }
-
-        // Order 1+: cache one block per order. If cache slot is occupied,
-        // evict old block to buddy (with merge) and cache the new one.
-        if self.order_cache.has(order) {
-            // Evict old cached block to buddy
-            let old = self.order_cache.take(order);
-            self.buddy_dealloc(old, order);
-        }
-        self.order_cache.put(order, addr);
+        self.buddy_dealloc(addr, order);
     }
 
     /// Total managed memory in bytes.

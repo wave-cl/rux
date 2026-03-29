@@ -40,7 +40,7 @@ pub fn handle_syscall(frame: *mut u8) {
             24 => posix::dup2(a0, a1),                // dup3 → dup2
             25 => 0,                                  // fcntl
             29 => posix::ioctl(a0, a1, a2),           // ioctl
-            62 => posix::creat(a0),                   // lseek → stub (TODO)
+            62 => posix::lseek(a0, a1 as i64, a2),    // lseek
             59 => -38,                                // pipe2
 
             // File metadata
@@ -147,19 +147,14 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {
-            // Child path: give it a COPY of the parent's stack so it doesn't
-            // corrupt the parent's stack between fork-return and execve.
+            // Copy 4 pages of the parent's stack for the child.
             use rux_mm::FrameAllocator;
             let alloc = crate::kstate::alloc();
-            let child_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
             let parent_rsp = SAVED_SP_EL0;
             let parent_page_base = parent_rsp & !0xFFF;
-            let child_page = child_frame.as_usize() as *mut u8;
-            let parent_page = parent_page_base as *const u8;
-            for j in 0..4096 { *child_page.add(j) = *parent_page.add(j); }
+            let child_stack_pages = 4u64;
+            let child_va_base = 0x7FFD_0000u64;
 
-            // Map child stack at a different VA
-            let child_va = 0x7FFD_F000u64;
             let mut ttbr0: u64;
             core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
             let mut upt = crate::aarch64::paging::PageTable4Level::from_cr3(
@@ -167,12 +162,21 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             let flags = rux_mm::MappingFlags::READ
                 .or(rux_mm::MappingFlags::WRITE)
                 .or(rux_mm::MappingFlags::USER);
-            let _ = upt.unmap_4k(rux_klib::VirtAddr::new(child_va as usize));
-            let _ = upt.map_4k(rux_klib::VirtAddr::new(child_va as usize), child_frame, flags, alloc);
 
-            // Adjust SP_EL0 to point to the child stack
+            for p in 0..child_stack_pages {
+                let src_va = parent_page_base - (child_stack_pages - 1 - p) * 4096;
+                let dst_va = child_va_base + p * 4096;
+                let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
+                let src = src_va as *const u8;
+                let dst = frame.as_usize() as *mut u8;
+                for j in 0..4096 { *dst.add(j) = *src.add(j); }
+                let _ = upt.unmap_4k(rux_klib::VirtAddr::new(dst_va as usize));
+                let _ = upt.map_4k(rux_klib::VirtAddr::new(dst_va as usize), frame, flags, alloc);
+            }
+
             let offset_in_page = parent_rsp - parent_page_base;
-            let child_sp = child_va + offset_in_page;
+            let child_top_va = child_va_base + (child_stack_pages - 1) * 4096;
+            let child_sp = child_top_va + offset_in_page;
             core::arch::asm!("msr sp_el0, {}", in(reg) child_sp, options(nostack));
 
             *regs.add(0) = 0;

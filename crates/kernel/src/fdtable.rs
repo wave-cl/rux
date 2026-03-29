@@ -4,7 +4,7 @@
 
 use rux_vfs::{FileSystem, InodeStat, VfsError};
 
-const MAX_FDS: usize = 16;
+const MAX_FDS: usize = 64;
 const FD_STDIN: usize = 0;
 const FD_STDOUT: usize = 1;
 const FD_STDERR: usize = 2;
@@ -119,6 +119,38 @@ pub fn sys_write_fd(fd: usize, buf: *const u8, len: usize) -> i64 {
             }
             Err(_) => -5,
         }
+    }
+}
+
+/// Seek on a file descriptor. Returns new offset, negative on error.
+pub fn sys_lseek(fd: usize, offset: i64, whence: u32) -> i64 {
+    if fd < FIRST_FILE_FD || fd >= MAX_FDS {
+        return -9; // -EBADF
+    }
+    unsafe {
+        if !FD_TABLE[fd].active {
+            return -9;
+        }
+        let f = &mut FD_TABLE[fd];
+        let new_off = match whence {
+            0 => offset, // SEEK_SET
+            1 => f.offset as i64 + offset, // SEEK_CUR
+            2 => {
+                // SEEK_END: need file size
+                let fs = crate::kstate::fs();
+                let mut stat = core::mem::zeroed::<InodeStat>();
+                if fs.stat(f.ino, &mut stat).is_err() {
+                    return -5;
+                }
+                stat.size as i64 + offset
+            }
+            _ => return -22, // -EINVAL
+        };
+        if new_off < 0 {
+            return -22; // -EINVAL
+        }
+        f.offset = new_off as usize;
+        new_off
     }
 }
 
