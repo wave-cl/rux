@@ -96,7 +96,6 @@ pub fn populate(
     elf_data: &[u8],
 ) {
     let root = fs.root_inode();
-
     // Phase 1: Create all directories
     // DIRS entries are in parent-before-child order.
     // We need to resolve parent directories for nested ones.
@@ -118,13 +117,26 @@ pub fn populate(
     // Phase 2: Write /bin/busybox (the main binary)
     let bin = fs.lookup(root, FileName::new(b"bin").unwrap()).unwrap();
     let box_ino = fs.create(bin, FileName::new(b"busybox").unwrap(), 0o755).unwrap();
-    // Write the binary in chunks (may be >1MB)
+    // Write the binary in 4K chunks (may be >1MB)
     let mut offset = 0u64;
+    let mut pages_written = 0u32;
     while (offset as usize) < elf_data.len() {
-        let chunk = &elf_data[offset as usize..];
-        let n = fs.write(box_ino, offset, chunk).unwrap_or(0);
+        let remaining = elf_data.len() - offset as usize;
+        let chunk_len = remaining.min(4096);
+        let chunk = &elf_data[offset as usize..offset as usize + chunk_len];
+        let n = match fs.write(box_ino, offset, chunk) {
+            Ok(n) => n,
+            Err(_) => {
+                crate::syscall_impl::arch::serial_write_str("rootfs: write failed at page ");
+                let mut buf = [0u8; 10];
+                crate::syscall_impl::arch::serial_write_str(crate::write_u32(&mut buf, pages_written));
+                crate::syscall_impl::arch::serial_write_str("\n");
+                break;
+            }
+        };
         if n == 0 { break; }
         offset += n as u64;
+        pages_written += 1;
     }
 
     // Phase 3: Create symlinks

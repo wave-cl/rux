@@ -287,17 +287,18 @@ pub unsafe fn load_and_exec_elf(
     let stack_flags = MappingFlags::READ
         .or(MappingFlags::WRITE)
         .or(MappingFlags::USER);
-    let stack_base = 0x7FFFC000u64;
-    for p in 0..4u64 {
+    let stack_pages_x86 = 32u64;
+    let stack_base = 0x80000000u64 - stack_pages_x86 * 4096;
+    for p in 0..stack_pages_x86 {
         let sp = alloc.alloc(PageSize::FourK).expect("stack page");
         upt.map_4k(
             VirtAddr::new((stack_base + p * 4096) as usize), sp, stack_flags, alloc,
         ).expect("map stack");
     }
-    let stack_top = stack_base + 4 * 4096; // 0x80000000
+    let stack_top = stack_base + stack_pages_x86 * 4096;
 
     // Step 3: Activate and enter user mode
-    upt.activate();
+    crate::x86_64::paging::activate(&upt);
     let user_sp = crate::execargs::write_to_stack(stack_top);
     crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }
@@ -305,7 +306,10 @@ pub unsafe fn load_and_exec_elf(
 /// Load an ELF binary from a VFS inode into a fresh user page table.
 /// Handles arbitrarily large binaries by reading segment data page-by-page
 /// directly from the filesystem instead of buffering the entire file.
-#[cfg(target_arch = "x86_64")]
+///
+/// Architecture-independent segment loading, stack setup, and brk.
+/// Only the kernel memory map, page table activation, and enter_user_mode
+/// differ between x86_64 and aarch64 (handled via #[cfg] blocks).
 pub unsafe fn load_elf_from_inode(
     ino: u64,
     alloc: &mut dyn rux_mm::FrameAllocator,
@@ -324,18 +328,34 @@ pub unsafe fn load_elf_from_inode(
     let _n = fs.read(ino, 0, &mut hdr_buf).unwrap_or(0);
     let elf_info = parse_elf(&hdr_buf).expect("ELF parse failed");
 
-    // Step 1: Build user page table first (so we can map pages as we go)
-    let mut upt = crate::x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
+    // ── Step 1: Build user page table with kernel identity map ──────
 
-    // Kernel identity map (0-8 MiB, RWX, no USER)
-    let kflags = MappingFlags::READ
-        .or(MappingFlags::WRITE)
-        .or(MappingFlags::EXECUTE);
-    upt.identity_map_range(PhysAddr::new(0), 16 * 1024 * 1024, kflags, alloc)
-        .expect("kernel map");
+    #[cfg(target_arch = "x86_64")]
+    let mut upt = {
+        let mut upt = crate::x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
+        let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
+        upt.identity_map_range(PhysAddr::new(0), 16 * 1024 * 1024, kflags, alloc)
+            .expect("kernel map");
+        upt
+    };
 
-    // Step 2: Load each segment page-by-page from VFS
-    let mut tmp_buf = [0u8; 4096]; // reusable read buffer
+    #[cfg(target_arch = "aarch64")]
+    let mut upt = {
+        let mut upt = crate::aarch64::paging::PageTable4Level::new(alloc).expect("user pt");
+        let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
+        upt.identity_map_range(PhysAddr::new(0x40000000), 128 * 1024 * 1024, kflags, alloc)
+            .expect("kernel map");
+        let dev_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::NO_CACHE);
+        upt.identity_map_range(PhysAddr::new(0x08000000), 0x20000, dev_flags, alloc)
+            .expect("gic map");
+        upt.identity_map_range(PhysAddr::new(0x09000000), 0x1000, dev_flags, alloc)
+            .expect("uart map");
+        upt
+    };
+
+    // ── Step 2: Load each segment page-by-page from VFS ─────────────
+
+    let mut tmp_buf = [0u8; 4096];
     for i in 0..elf_info.num_segments {
         let seg = &elf_info.segments[i];
         let vaddr_base = seg.vaddr & !0xFFF;
@@ -352,10 +372,8 @@ pub unsafe fn load_elf_from_inode(
             let phys = alloc.alloc(PageSize::FourK).expect("seg page");
             let page_ptr = phys.as_usize() as *mut u8;
 
-            // Zero the page
             for j in 0..4096 { core::ptr::write_volatile(page_ptr.add(j), 0); }
 
-            // Copy file data that falls within this page
             let page_va_start = va;
             let page_va_end = va + 4096;
             let seg_file_start = seg.vaddr;
@@ -368,7 +386,6 @@ pub unsafe fn load_elf_from_inode(
                 let dest_off = (copy_start - page_va_start) as usize;
                 let len = (copy_end - copy_start) as usize;
 
-                // Read from VFS in chunks via tmp_buf
                 let mut read_pos = 0;
                 while read_pos < len {
                     let chunk = (len - read_pos).min(4096);
@@ -381,25 +398,24 @@ pub unsafe fn load_elf_from_inode(
                 }
             }
 
-            // Map the page (unmap first if kernel identity map conflicts)
             let va_addr = VirtAddr::new(va as usize);
-            let _ = upt.unmap_4k(va_addr); // ignore error if not mapped
+            let _ = upt.unmap_4k(va_addr);
             upt.map_4k(va_addr, phys, flags, alloc).expect("map seg");
         }
     }
 
-    // Step 3: Map user stack (4 pages = 16KB)
-    let stack_flags = MappingFlags::READ
-        .or(MappingFlags::WRITE)
-        .or(MappingFlags::USER);
-    let stack_base = 0x7FFFC000u64;
-    for p in 0..4u64 {
+    // ── Step 3: Map user stack (4 pages = 16KB) ─────────────────────
+
+    let stack_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::USER);
+    let stack_pages = 32u64; // 128 KB user stack
+    let stack_base = 0x80000000u64 - stack_pages * 4096;
+    for p in 0..stack_pages {
         let sp = alloc.alloc(PageSize::FourK).expect("stack page");
         upt.map_4k(
             VirtAddr::new((stack_base + p * 4096) as usize), sp, stack_flags, alloc,
         ).expect("map stack");
     }
-    let stack_top = stack_base + 4 * 4096;
+    let stack_top = stack_base + stack_pages * 4096;
 
     // Set program break to end of last segment (for brk syscall)
     {
@@ -409,33 +425,48 @@ pub unsafe fn load_elf_from_inode(
             let end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
             if end > max_end { max_end = end; }
         }
-        crate::x86_64::syscall::PROGRAM_BRK = max_end;
+        crate::syscall_impl::PROGRAM_BRK = max_end;
     }
 
     // Unmap page 0 to catch NULL pointer dereferences
     let _ = upt.unmap_4k(VirtAddr::new(0));
 
-    // Step 4: Activate and enter user mode
-    upt.activate();
+    // ── Step 4: Activate page table, write stack, enter user mode ────
+
+    #[cfg(target_arch = "x86_64")]
+    crate::x86_64::paging::activate(&upt);
+
+    #[cfg(target_arch = "aarch64")]
+    core::arch::asm!(
+        "msr ttbr0_el1, {}",
+        "isb",
+        "tlbi vmalle1is",
+        "dsb ish",
+        "isb",
+        in(reg) upt.root_phys().as_usize(),
+        options(nostack)
+    );
+
     let user_sp = crate::execargs::write_to_stack(stack_top);
-    crate::serial::write_str("rux: entry=0x");
+    crate::syscall_impl::arch::serial_write_str("rux: entry=0x");
     crate::write_hex_serial(elf_info.entry as usize);
-    crate::serial::write_str(" sp=0x");
+    crate::syscall_impl::arch::serial_write_str(" sp=0x");
     crate::write_hex_serial(user_sp as usize);
-    // Verify stack contents
     let sp_ptr = user_sp as *const u64;
-    crate::serial::write_str(" argc=");
+    crate::syscall_impl::arch::serial_write_str(" argc=");
     crate::write_hex_serial(*sp_ptr as usize);
-    crate::serial::write_str(" argv0=0x");
+    crate::syscall_impl::arch::serial_write_str(" argv0=0x");
     crate::write_hex_serial(*sp_ptr.add(1) as usize);
-    crate::serial::write_str("\n");
+    crate::syscall_impl::arch::serial_write_str("\n");
+
+    #[cfg(target_arch = "x86_64")]
     crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
+
+    #[cfg(target_arch = "aarch64")]
+    crate::aarch64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }
 
-/// aarch64 version: load ELF into user page table, enable, enter EL0.
-///
-/// # Safety
-/// Same preconditions as x86_64 version.
+/// aarch64 buffer-based ELF loader (for small binaries loaded during init).
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn load_and_exec_elf(
     elf_data: &[u8],
@@ -449,7 +480,6 @@ pub unsafe fn load_and_exec_elf(
 
     let elf_info = parse_elf(elf_data).expect("ELF parse failed");
 
-    // Step 1: Allocate physical pages for each segment and copy data.
     let mut seg_mappings: [(u64, PhysAddr, u32); 16] =
         [(0, PhysAddr::new(0), 0); 16];
     let mut map_count = 0;
@@ -470,7 +500,6 @@ pub unsafe fn load_and_exec_elf(
             let phys = alloc.alloc(PageSize::FourK).expect("seg page");
             let ptr = phys.as_usize() as *mut u8;
             for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
-            // Copy file data
             if seg.file_offset + seg.filesz > 0 {
                 let seg_file_start = seg.vaddr;
                 let seg_file_end = seg.vaddr + seg.filesz;
@@ -494,26 +523,16 @@ pub unsafe fn load_and_exec_elf(
         }
     }
 
-    // Step 2: Build user page table
     let mut upt = crate::aarch64::paging::PageTable4Level::new(alloc).expect("user pt");
-
-    // Kernel identity map: 0x40000000-0x48000000 (128 MiB, RWX, no USER)
-    let kflags = MappingFlags::READ
-        .or(MappingFlags::WRITE)
-        .or(MappingFlags::EXECUTE);
+    let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
     upt.identity_map_range(PhysAddr::new(0x40000000), 128 * 1024 * 1024, kflags, alloc)
         .expect("kernel map");
-
-    // Device mappings (GIC + UART) for interrupt handling from kernel
-    let dev_flags = MappingFlags::READ
-        .or(MappingFlags::WRITE)
-        .or(MappingFlags::NO_CACHE);
+    let dev_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::NO_CACHE);
     upt.identity_map_range(PhysAddr::new(0x08000000), 0x20000, dev_flags, alloc)
         .expect("gic map");
     upt.identity_map_range(PhysAddr::new(0x09000000), 0x1000, dev_flags, alloc)
         .expect("uart map");
 
-    // Map ELF segment pages (user virtual -> physical)
     for i in 0..map_count {
         let (va, phys, flags_raw) = seg_mappings[i];
         let flags = MappingFlags(flags_raw);
@@ -521,21 +540,17 @@ pub unsafe fn load_and_exec_elf(
             .expect("map user seg");
     }
 
-    // Map user stack (4 pages = 16KB)
-    let stack_flags = MappingFlags::READ
-        .or(MappingFlags::WRITE)
-        .or(MappingFlags::USER);
-    let stack_base = 0x7FFFC000u64;
-    for p in 0..4u64 {
+    let stack_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::USER);
+    let stack_pages = 32u64; // 128 KB user stack
+    let stack_base = 0x80000000u64 - stack_pages * 4096;
+    for p in 0..stack_pages {
         let sp = alloc.alloc(PageSize::FourK).expect("stack page");
         upt.map_4k(
             VirtAddr::new((stack_base + p * 4096) as usize), sp, stack_flags, alloc,
         ).expect("map stack");
     }
-    let stack_top = stack_base + 4 * 4096;
+    let stack_top = stack_base + stack_pages * 4096;
 
-    // Step 3: Switch TTBR0 and enter user mode
-    // We set TTBR0_EL1 directly (MMU is already enabled from kernel init)
     core::arch::asm!(
         "msr ttbr0_el1, {}",
         "isb",

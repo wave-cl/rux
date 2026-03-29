@@ -21,8 +21,9 @@ const DIRECT_PAGES: usize = 12;
 /// Sentinel: no page allocated.
 const NO_PAGE: u64 = u64::MAX;
 
-/// Maximum file size: 12 direct pages + 512 indirect entries = 524 pages.
-const MAX_FILE_PAGES: usize = DIRECT_PAGES + PAGE_SIZE / 8;
+/// Maximum file size: 12 direct + 2×512 indirect entries = 1036 pages (~4.2 MiB).
+const INDIRECT_ENTRIES: usize = PAGE_SIZE / 8;
+const MAX_FILE_PAGES: usize = DIRECT_PAGES + 2 * INDIRECT_ENTRIES;
 
 /// Directory entry size (packed, on-page).
 /// Layout: inode(u32) + name_len(u8) + kind(u8) + pad(2) + name([u8; 256]) = 264 bytes.
@@ -47,10 +48,10 @@ pub struct InodeMeta {
     pub ctime: u64,
     /// Direct page physical addresses (NO_PAGE = unallocated).
     pub direct: [u64; DIRECT_PAGES],
-    /// Single-indirect page physical address (NO_PAGE = unallocated).
-    /// Points to a page containing up to 512 u64 physical addresses.
+    /// Indirect page physical addresses (NO_PAGE = unallocated).
+    /// Each points to a page containing up to 512 u64 physical addresses.
     pub indirect: u64,
-    pub _pad: [u8; 8],
+    pub indirect2: u64,
 }
 
 // 1 + 1 + 4 + 4 + 4 + 4 + 8 + 8 + 8 + 8 + 96 + 8 + 8 = 162, padded to 168 with _pad
@@ -72,7 +73,7 @@ impl InodeMeta {
         ctime: 0,
         direct: [NO_PAGE; DIRECT_PAGES],
         indirect: NO_PAGE,
-        _pad: [0; 8],
+        indirect2: NO_PAGE,
     };
 }
 
@@ -252,73 +253,128 @@ impl RamFs {
         }
     }
 
+    /// Free all entries in an indirect block and the block itself.
+    fn free_indirect_block(&mut self, addr: u64) {
+        if addr == NO_PAGE { return; }
+        // Copy out entries first (avoids borrow conflicts with page_ref/free_page).
+        let mut entries = [NO_PAGE; INDIRECT_ENTRIES];
+        unsafe {
+            let page = self.page_ref(addr);
+            core::ptr::copy_nonoverlapping(
+                page.as_ptr() as *const u64,
+                entries.as_mut_ptr(),
+                INDIRECT_ENTRIES,
+            );
+        }
+        for &entry in &entries {
+            if entry != NO_PAGE { self.free_page(entry); }
+        }
+        self.free_page(addr);
+    }
+
     /// Free all data pages associated with an inode, then mark it inactive.
     fn free_inode(&mut self, idx: usize) {
-        // Collect addresses to free first (avoids borrow conflicts).
-        let mut to_free = [NO_PAGE; DIRECT_PAGES + 1]; // direct + indirect page itself
         let m = &self.inodes[idx];
+        // Collect direct + indirect block addresses.
+        let mut direct = [NO_PAGE; DIRECT_PAGES];
+        for i in 0..DIRECT_PAGES { direct[i] = m.direct[i]; }
+        let ind1 = m.indirect;
+        let ind2 = m.indirect2;
 
-        for i in 0..DIRECT_PAGES {
-            to_free[i] = m.direct[i];
-        }
-        let indirect_addr = m.indirect;
-        to_free[DIRECT_PAGES] = indirect_addr;
+        // Free direct pages.
+        for &addr in &direct { self.free_page(addr); }
 
-        // If there's an indirect page, copy out its entries before freeing.
-        let mut indirect_entries = [NO_PAGE; PAGE_SIZE / 8];
-        if indirect_addr != NO_PAGE {
-            let indirect_page = self.page_ref(indirect_addr);
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    indirect_page.as_ptr() as *const u64,
-                    indirect_entries.as_mut_ptr(),
-                    PAGE_SIZE / 8,
-                );
-            }
-        }
-
-        // Now free everything.
-        for &addr in &to_free {
-            self.free_page(addr);
-        }
-        if indirect_addr != NO_PAGE {
-            for &entry in &indirect_entries {
-                if entry != NO_PAGE {
-                    self.free_page(entry);
-                }
-            }
-        }
+        // Free indirect blocks and their entries.
+        self.free_indirect_block(ind1);
+        self.free_indirect_block(ind2);
 
         self.inodes[idx] = InodeMeta::ZERO;
     }
 
     // ── Data page management (extent list) ───────────────────────────
 
+    /// Read a u64 entry from an indirect page at the given slot.
+    fn indirect_entry(&self, indirect_addr: u64, slot: usize) -> u64 {
+        let page = self.page_ref(indirect_addr);
+        let off = slot * 8;
+        let v = u64::from_le_bytes([
+            page[off], page[off+1], page[off+2], page[off+3],
+            page[off+4], page[off+5], page[off+6], page[off+7],
+        ]);
+        if v == 0 { NO_PAGE } else { v }
+    }
+
+    /// Write a u64 entry into an indirect page at the given slot.
+    fn set_indirect_entry(&mut self, indirect_addr: u64, slot: usize, val: u64) {
+        let page = self.page_mut(indirect_addr);
+        let off = slot * 8;
+        page[off..off + 8].copy_from_slice(&val.to_le_bytes());
+    }
+
+    /// Resolve a page index to (indirect_block_addr, slot_within_block).
+    /// Returns None if the page is in direct range or out of bounds.
+    fn resolve_indirect(&self, m: &InodeMeta, page_idx: usize) -> Option<(u64, usize)> {
+        if page_idx < DIRECT_PAGES {
+            return None;
+        }
+        let rel = page_idx - DIRECT_PAGES;
+        if rel < INDIRECT_ENTRIES {
+            Some((m.indirect, rel))
+        } else {
+            let rel2 = rel - INDIRECT_ENTRIES;
+            if rel2 < INDIRECT_ENTRIES {
+                Some((m.indirect2, rel2))
+            } else {
+                None // beyond max
+            }
+        }
+    }
+
     /// Get the physical address of the Nth data page for an inode.
     /// Returns NO_PAGE if not allocated.
     fn get_data_page(&self, m: &InodeMeta, page_idx: usize) -> u64 {
         if page_idx < DIRECT_PAGES {
-            m.direct[page_idx]
-        } else if m.indirect != NO_PAGE {
-            let slot = page_idx - DIRECT_PAGES;
-            if slot >= PAGE_SIZE / 8 {
-                return NO_PAGE;
-            }
-            let indirect_page = self.page_ref(m.indirect);
-            let addr = u64::from_le_bytes([
-                indirect_page[slot * 8],
-                indirect_page[slot * 8 + 1],
-                indirect_page[slot * 8 + 2],
-                indirect_page[slot * 8 + 3],
-                indirect_page[slot * 8 + 4],
-                indirect_page[slot * 8 + 5],
-                indirect_page[slot * 8 + 6],
-                indirect_page[slot * 8 + 7],
-            ]);
-            if addr == 0 { NO_PAGE } else { addr }
-        } else {
-            NO_PAGE
+            return m.direct[page_idx];
         }
+        if let Some((blk, slot)) = self.resolve_indirect(m, page_idx) {
+            if blk != NO_PAGE {
+                return self.indirect_entry(blk, slot);
+            }
+        }
+        NO_PAGE
+    }
+
+    /// Allocate an indirect block if not yet allocated.
+    fn ensure_indirect_block(blk: &mut u64, alloc_fn: &mut dyn FnMut() -> Result<u64, VfsError>) -> Result<u64, VfsError> {
+        if *blk == NO_PAGE {
+            let addr = alloc_fn()?;
+            // Fill with NO_PAGE (0xFF bytes)
+            unsafe {
+                let ptr = addr as *mut u8;
+                for i in 0..PAGE_SIZE { *ptr.add(i) = 0xFF; }
+            }
+            *blk = addr;
+        }
+        Ok(*blk)
+    }
+
+    /// Allocate and initialize an indirect block if needed. Returns its address.
+    fn ensure_indirect_alloc(&mut self, ino_idx: usize, which: u8) -> Result<u64, VfsError> {
+        let cur = if which == 0 {
+            self.inodes[ino_idx].indirect
+        } else {
+            self.inodes[ino_idx].indirect2
+        };
+        if cur != NO_PAGE { return Ok(cur); }
+        let addr = self.alloc_page()?;
+        let page = self.page_mut(addr);
+        for byte in page.iter_mut() { *byte = 0xFF; }
+        if which == 0 {
+            self.inodes[ino_idx].indirect = addr;
+        } else {
+            self.inodes[ino_idx].indirect2 = addr;
+        }
+        Ok(addr)
     }
 
     /// Ensure the Nth data page exists for an inode, allocating if needed.
@@ -333,43 +389,41 @@ impl RamFs {
                 let addr = self.alloc_page()?;
                 self.inodes[ino_idx].direct[page_idx] = addr;
             }
-            Ok(self.inodes[ino_idx].direct[page_idx])
+            return Ok(self.inodes[ino_idx].direct[page_idx]);
+        }
+
+        let rel = page_idx - DIRECT_PAGES;
+        let (which, slot) = if rel < INDIRECT_ENTRIES {
+            (0u8, rel)
         } else {
-            // Need indirect page.
-            if self.inodes[ino_idx].indirect == NO_PAGE {
-                let addr = self.alloc_page()?;
-                // Initialize all entries to NO_PAGE (0xFF..FF).
-                let page = self.page_mut(addr);
-                for byte in page.iter_mut() {
-                    *byte = 0xFF;
-                }
-                self.inodes[ino_idx].indirect = addr;
-            }
+            (1u8, rel - INDIRECT_ENTRIES)
+        };
 
-            let slot = page_idx - DIRECT_PAGES;
-            let indirect_addr = self.inodes[ino_idx].indirect;
-            let indirect_page = self.page_ref(indirect_addr);
-            let existing = u64::from_le_bytes([
-                indirect_page[slot * 8],
-                indirect_page[slot * 8 + 1],
-                indirect_page[slot * 8 + 2],
-                indirect_page[slot * 8 + 3],
-                indirect_page[slot * 8 + 4],
-                indirect_page[slot * 8 + 5],
-                indirect_page[slot * 8 + 6],
-                indirect_page[slot * 8 + 7],
-            ]);
+        let indirect_addr = self.ensure_indirect_alloc(ino_idx, which)?;
+        let existing = self.indirect_entry(indirect_addr, slot);
+        if existing == NO_PAGE {
+            let data_addr = self.alloc_page()?;
+            self.set_indirect_entry(indirect_addr, slot, data_addr);
+            Ok(data_addr)
+        } else {
+            Ok(existing)
+        }
+    }
 
-            if existing == NO_PAGE {
-                let data_addr = self.alloc_page()?;
-                let indirect_page = self.page_mut(indirect_addr);
-                let bytes = data_addr.to_le_bytes();
-                indirect_page[slot * 8..slot * 8 + 8].copy_from_slice(&bytes);
-                Ok(data_addr)
-            } else {
-                Ok(existing)
+    /// Free entries from an indirect block starting at start_slot.
+    /// Returns true if any entries before start_slot are still allocated.
+    fn free_indirect_entries(&mut self, indirect_addr: u64, start_slot: usize) -> bool {
+        let mut any_remaining = false;
+        for slot in 0..INDIRECT_ENTRIES {
+            let entry = self.indirect_entry(indirect_addr, slot);
+            if slot >= start_slot && entry != NO_PAGE {
+                self.free_page(entry);
+                self.set_indirect_entry(indirect_addr, slot, NO_PAGE);
+            } else if slot < start_slot && entry != NO_PAGE {
+                any_remaining = true;
             }
         }
+        any_remaining
     }
 
     /// Free data pages from `from_page` (inclusive) to the end.
@@ -384,40 +438,39 @@ impl RamFs {
             }
         }
 
-        // Free indirect entries.
+        // Free indirect block 1 entries.
         if self.inodes[ino_idx].indirect != NO_PAGE {
-            let start_slot = if from_page > DIRECT_PAGES { from_page - DIRECT_PAGES } else { 0 };
+            let start = if from_page > DIRECT_PAGES { from_page - DIRECT_PAGES } else { 0 };
             let indirect_addr = self.inodes[ino_idx].indirect;
-
-            let mut any_remaining = false;
-            for slot in 0..PAGE_SIZE / 8 {
-                let page = self.page_ref(indirect_addr);
-                let entry = u64::from_le_bytes([
-                    page[slot * 8],
-                    page[slot * 8 + 1],
-                    page[slot * 8 + 2],
-                    page[slot * 8 + 3],
-                    page[slot * 8 + 4],
-                    page[slot * 8 + 5],
-                    page[slot * 8 + 6],
-                    page[slot * 8 + 7],
-                ]);
-                if slot >= start_slot && entry != NO_PAGE {
-                    self.free_page(entry);
-                    let page = self.page_mut(indirect_addr);
-                    let bytes = NO_PAGE.to_le_bytes();
-                    page[slot * 8..slot * 8 + 8].copy_from_slice(&bytes);
-                } else if slot < start_slot && entry != NO_PAGE {
-                    any_remaining = true;
-                }
-            }
-
-            // If no indirect entries remain, free the indirect page itself.
+            let any_remaining = self.free_indirect_entries(indirect_addr, start);
             if !any_remaining && from_page <= DIRECT_PAGES {
                 self.free_page(indirect_addr);
                 self.inodes[ino_idx].indirect = NO_PAGE;
             }
         }
+
+        // Free indirect block 2 entries.
+        if self.inodes[ino_idx].indirect2 != NO_PAGE {
+            let base2 = DIRECT_PAGES + INDIRECT_ENTRIES;
+            let start = if from_page > base2 { from_page - base2 } else { 0 };
+            let indirect_addr = self.inodes[ino_idx].indirect2;
+            let any_remaining = self.free_indirect_entries(indirect_addr, start);
+            if !any_remaining && from_page <= base2 {
+                self.free_page(indirect_addr);
+                self.inodes[ino_idx].indirect2 = NO_PAGE;
+            }
+        }
+    }
+
+    /// Count entries in an indirect block.
+    fn count_indirect_entries(&self, indirect_addr: u64) -> u64 {
+        let mut count = 1u64; // the indirect page itself
+        for slot in 0..INDIRECT_ENTRIES {
+            if self.indirect_entry(indirect_addr, slot) != NO_PAGE {
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Count the number of allocated data pages for an inode.
@@ -429,23 +482,10 @@ impl RamFs {
             }
         }
         if m.indirect != NO_PAGE {
-            count += 1; // the indirect page itself
-            let indirect_page = self.page_ref(m.indirect);
-            for slot in 0..PAGE_SIZE / 8 {
-                let entry = u64::from_le_bytes([
-                    indirect_page[slot * 8],
-                    indirect_page[slot * 8 + 1],
-                    indirect_page[slot * 8 + 2],
-                    indirect_page[slot * 8 + 3],
-                    indirect_page[slot * 8 + 4],
-                    indirect_page[slot * 8 + 5],
-                    indirect_page[slot * 8 + 6],
-                    indirect_page[slot * 8 + 7],
-                ]);
-                if entry != NO_PAGE {
-                    count += 1;
-                }
-            }
+            count += self.count_indirect_entries(m.indirect);
+        }
+        if m.indirect2 != NO_PAGE {
+            count += self.count_indirect_entries(m.indirect2);
         }
         count
     }
@@ -748,6 +788,7 @@ impl FileSystem for RamFs {
         let new_ino = self.alloc_inode()?;
         {
             let m = &mut self.inodes[new_ino];
+            *m = InodeMeta::ZERO;
             m.active = true;
             m.kind = InodeType::File;
             m.mode = S_IFREG | (mode & 0o7777);
@@ -783,6 +824,7 @@ impl FileSystem for RamFs {
         };
         {
             let m = &mut self.inodes[new_ino];
+            *m = InodeMeta::ZERO;
             m.active = true;
             m.kind = InodeType::Directory;
             m.mode = S_IFDIR | (mode & 0o7777);
@@ -898,6 +940,7 @@ impl FileSystem for RamFs {
         };
         {
             let m = &mut self.inodes[new_ino];
+            *m = InodeMeta::ZERO;
             m.active = true;
             m.kind = InodeType::Symlink;
             m.mode = S_IFLNK | 0o777;

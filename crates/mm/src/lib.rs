@@ -4,6 +4,7 @@ use rux_klib::{PhysAddr, VirtAddr};
 
 pub mod frame;
 pub mod pt;
+pub mod pt4;
 pub mod vma;
 pub mod addr_space;
 pub mod slab;
@@ -117,6 +118,30 @@ pub unsafe trait PageTable {
     fn translate(&self, virt: VirtAddr) -> Result<PhysAddr, MemoryError>;
 }
 
+/// Architecture-specific page table operations.
+///
+/// Implemented per-arch to provide PTE encoding, flag conversion,
+/// and TLB maintenance. The generic `pt4::PageTable4Level` is
+/// parameterized over this trait.
+pub trait ArchPaging {
+    /// The PTE ops type (e.g., X86_64Pte or Aarch64Pte).
+    type Pte: rux_arch::pte::PageTableEntryOps;
+
+    /// Convert generic MappingFlags to arch-specific PTE flag bits.
+    fn mapping_to_pte_flags(flags: MappingFlags) -> u64;
+
+    /// Extra flags to OR into leaf (4K page) PTE entries.
+    /// aarch64 needs AF | TABLE; x86_64 returns 0.
+    fn leaf_extra_flags() -> u64;
+
+    /// Flags for intermediate (table) PTE entries.
+    /// x86_64: PRESENT | WRITABLE | USER; aarch64: VALID | TABLE.
+    fn table_entry_flags() -> u64;
+
+    /// Flush TLB for a single page.
+    unsafe fn flush_tlb(virt: VirtAddr);
+}
+
 pub trait FrameAllocator {
     fn alloc(&mut self, size: PageSize) -> Result<PhysAddr, MemoryError>;
     fn dealloc(&mut self, addr: PhysAddr, size: PageSize);
@@ -126,6 +151,7 @@ pub trait FrameAllocator {
 // ── Re-exports ──────────────────────────────────────────────────────────
 pub use frame::BuddyAllocator;
 pub use pt::{PageLevel, PageTablePage, TranslateResult, PageTableWalker};
+pub use pt4::PageTable4Level;
 pub use vma::{Vma, VmaKind, VmaList, VmaOps};
 pub use addr_space::{AddressSpace, AddressSpaceOps};
 pub use slab::SlabCache;

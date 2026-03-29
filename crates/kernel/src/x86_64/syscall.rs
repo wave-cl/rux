@@ -1,7 +1,7 @@
 /// Syscall handlers for x86_64.
 /// Supports both INT 0x80 (rux-box) and SYSCALL instruction (Linux ABI).
 
-use super::gdt::{USER_CS, USER_DS, KERNEL_CS};
+use super::gdt::{USER_CS, USER_DS};
 use super::serial;
 
 // ── SYSCALL instruction setup (Linux x86_64 ABI) ───────────────────
@@ -129,71 +129,76 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     let mut nb = [0u8; 10]; let _ = nb;
 
-    use crate::syscall_impl as si;
+    use crate::syscall_impl::{posix, linux};
 
     let result = match nr {
-        // File I/O (shared implementations)
-        0 => si::sys_read(a0, a1, a2),
-        1 => si::sys_write(a0, a1, a2),
-        2 => si::sys_open(a0),
-        3 => crate::fdtable::sys_close(a0 as usize),
-        4 => si::sys_fstatat(0xffffff9cu64, a0, a1), // stat → fstatat
-        5 => si::sys_fstat(a0, a1),
-        6 => si::sys_fstatat(0xffffff9cu64, a0, a1), // lstat
-        7 => 1,                                    // poll
-        8 => si::sys_creat(a0),
-        9 => si::sys_mmap(a0, a1, a2, a3, a4),
-        10 => 0,                                   // mprotect
-        11 => 0,                                   // munmap
-        12 => si::sys_brk(a0),
-        13 => si::sys_rt_sigaction(a0, a1, a2),
-        14 => si::sys_rt_sigprocmask(a0, a1, a2, a3),
-        16 => si::sys_ioctl(a0, a1, a2),
-        20 => si::sys_writev(a0, a1, a2),
-        21 => 0,                                   // access
-        24 => 0,                                   // sched_yield
-        33 => si::sys_dup2(a0, a1),
-        35 => 0,                                   // nanosleep
-        37 => 0,                                   // alarm
-        39 => 1,                                   // getpid
-        48 => 0,                                   // shutdown
-        50 => -95,                                 // listen
-        // Arch-specific (x86_64 only)
-        56 => syscall_vfork_linux(),               // clone (as vfork)
-        57 => syscall_vfork_linux(),               // fork (as vfork)
+        // ── POSIX.1 syscalls ────────────────────────────────────────
+        0 => posix::read(a0, a1, a2),
+        1 => posix::write(a0, a1, a2),
+        2 => posix::open(a0),
+        3 => posix::close(a0),
+        4 => posix::stat(a0, a1),
+        5 => posix::fstat(a0, a1),
+        6 => posix::stat(a0, a1),              // lstat (no symlink distinction)
+        7 => 1,                                 // poll
+        8 => posix::creat(a0),
+        9 => posix::mmap(a0, a1, a2, a3, a4),
+        10 => 0,                                // mprotect
+        11 => 0,                                // munmap
+        13 => posix::sigaction(a0, a1, a2),
+        14 => posix::sigprocmask(a0, a1, a2, a3),
+        16 => posix::ioctl(a0, a1, a2),
+        20 => posix::writev(a0, a1, a2),
+        21 => 0,                                // access
+        24 => 0,                                // sched_yield
+        33 => posix::dup2(a0, a1),
+        35 => 0,                                // nanosleep
+        37 => 0,                                // alarm
+        39 => 1,                                // getpid
+        48 => 0,                                // shutdown
+        50 => -95,                              // listen
+        // fork/exec — arch-specific entry, POSIX semantics
+        56 => syscall_vfork_linux(),            // clone (as vfork)
+        57 => syscall_vfork_linux(),            // fork (as vfork)
         59 => { unsafe { syscall_exec(a0, a1); } 0 } // execve
-        60 => si::sys_exit(a0 as i32),             // exit
-        61 => si::sys_wait4(a0, a1, a2, a3),
-        62 => 0,                                   // kill
-        63 => si::sys_uname(a0),
-        72 => 0,                                   // fcntl
-        78 => si::sys_getdents64(a0, a1, a2),
-        79 => si::sys_getcwd(a0, a1),
-        80 => 0,                                   // chdir
-        83 => si::sys_mkdir(a0),
-        87 => si::sys_unlink(a0),
-        96 => si::arch::ticks() as i64,
-        97 => 0,                                   // getrlimit
-        102 => 0, 104 => 0, 107 => 0, 108 => 0,   // uid/gid
-        109 => 0,                                  // setpgid
-        110 => 1,                                  // getppid
-        111 => 1,                                  // getpgrp
-        112 => 1,                                  // setsid
-        121 => 1,                                  // getpgid
-        131 => -38,                                // sigaltstack
-        157 => 0,                                  // prctl
-        158 => syscall_arch_prctl(a0, a1),         // x86_64-specific
-        186 => 1,                                  // gettid
-        200 => 0, 202 => 0, 204 => 0,             // tkill/futex/sched
-        217 => si::sys_getdents64(a0, a1, a2),
-        218 => 1,                                  // set_tid_address
-        228 => si::sys_clock_gettime(a0, a1),
-        231 => si::sys_exit(a0 as i32),            // exit_group
-        257 => si::sys_openat(a0, a1),
-        262 => si::sys_fstatat(a0, a1, a2),
-        269 => 0,                                  // faccessat
-        273 => 0,                                  // set_robust_list
-        293 => -38, 302 => -38, 334 => -38,       // pipe2/prlimit64/rseq
+        60 => posix::exit(a0 as i32),           // _exit
+        62 => 0,                                // kill
+        63 => posix::uname(a0),
+        72 => 0,                                // fcntl
+        79 => posix::getcwd(a0, a1),
+        80 => 0,                                // chdir
+        83 => posix::mkdir(a0),
+        87 => posix::unlink(a0),
+        96 => crate::syscall_impl::arch::ticks() as i64,
+        97 => 0,                                // getrlimit
+        102 => 0, 104 => 0, 107 => 0, 108 => 0, // uid/gid
+        109 => 0,                               // setpgid
+        110 => 1,                               // getppid
+        111 => 1,                               // getpgrp
+        112 => 1,                               // setsid
+        228 => posix::clock_gettime(a0, a1),
+        257 => posix::openat(a0, a1),
+        262 => posix::fstatat(a0, a1, a2),      // newfstatat
+        269 => 0,                               // faccessat
+
+        // ── Linux extensions ────────────────────────────────────────
+        12 => linux::brk(a0),
+        61 => linux::wait4(a0, a1, a2, a3),
+        78 => linux::getdents64(a0, a1, a2),
+        121 => 1,                               // getpgid
+        131 => -38,                             // sigaltstack
+        157 => 0,                               // prctl
+        186 => 1,                               // gettid
+        200 => 0, 202 => 0, 204 => 0,          // tkill/futex/sched
+        217 => linux::getdents64(a0, a1, a2),
+        218 => linux::set_tid_address(a0),
+        231 => linux::exit_group(a0 as i32),
+        273 => 0,                               // set_robust_list
+        293 => -38, 302 => -38, 334 => -38,    // pipe2/prlimit64/rseq
+
+        // ── x86_64-specific ─────────────────────────────────────────
+        158 => syscall_arch_prctl(a0, a1),
+
         _ => {
             serial::write_str("rux: unknown syscall ");
             let mut buf = [0u8; 10];
@@ -208,6 +213,8 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
 pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
     unsafe {
+        use crate::syscall_impl::{posix, linux};
+
         let regs = frame as *mut u64;
         let syscall_nr = *regs.add(14); // RAX
         let arg0 = *regs.add(9);        // RDI
@@ -215,165 +222,24 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let arg2 = *regs.add(11);       // RDX
 
         let result: i64 = match syscall_nr {
-            0 => syscall_read(arg0, arg1, arg2),
-            1 => syscall_write(arg0, arg1, arg2),
-            2 => syscall_open(arg0),
-            3 => crate::fdtable::sys_close(arg0 as usize),
-            8 => syscall_creat(arg0), // creat
-            83 => syscall_mkdir(arg0), // mkdir
-            87 => syscall_unlink(arg0), // unlink
+            0 => posix::read(arg0, arg1, arg2),
+            1 => posix::write(arg0, arg1, arg2),
+            2 => posix::open(arg0),
+            3 => posix::close(arg0),
+            8 => posix::creat(arg0),
+            83 => posix::mkdir(arg0),
+            87 => posix::unlink(arg0),
             39 => 1, // getpid
-            96 => super::pit::ticks() as i64, // gettimeofday → ticks
+            96 => super::pit::ticks() as i64,
             57 => syscall_vfork(regs),
             59 => { syscall_exec(arg0, arg1); 0 }
-            60 => syscall_exit(arg0 as i32),
-            61 => syscall_wait4(arg0, arg1, arg2, 0),
-            78 => syscall_getdents64(arg0, arg1, arg2),
+            60 => posix::exit(arg0 as i32),
+            61 => linux::wait4(arg0, arg1, arg2, 0),
+            78 => linux::getdents64(arg0, arg1, arg2),
             _ => -38,
         };
 
         *regs.add(14) = result as u64;
-    }
-}
-
-fn syscall_read(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd == 0 {
-        // stdin: read from serial
-        unsafe {
-            let ptr = buf as *mut u8;
-            for i in 0..len as usize {
-                *ptr.add(i) = serial::read_byte();
-            }
-        }
-        return len as i64;
-    }
-    // File fd
-    crate::fdtable::sys_read_fd(fd as usize, buf as *mut u8, len as usize)
-}
-
-fn syscall_open(path_ptr: u64) -> i64 {
-    unsafe {
-        let cstr = path_ptr as *const u8;
-        let mut len = 0usize;
-        while *cstr.add(len) != 0 && len < 256 { len += 1; }
-        let path = core::slice::from_raw_parts(cstr, len);
-        crate::fdtable::sys_open(path)
-    }
-}
-
-fn syscall_write(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd <= 2 {
-        // stdin/stdout/stderr → serial (they share the same serial port)
-        unsafe {
-            let ptr = buf as *const u8;
-            for i in 0..len as usize { serial::write_byte(*ptr.add(i)); }
-        }
-        return len as i64;
-    }
-    // File fd
-    crate::fdtable::sys_write_fd(fd as usize, buf as *const u8, len as usize)
-}
-
-/// Resolve a path to (parent_inode, basename).
-/// E.g. "/bin/ls" → (inode_of_bin, b"ls"), "/foo" → (root, b"foo")
-unsafe fn resolve_parent_and_name(path_ptr: u64) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
-    use rux_vfs::FileSystem;
-    let cstr = path_ptr as *const u8;
-    let mut len = 0usize;
-    while *cstr.add(len) != 0 && len < 256 { len += 1; }
-    let path = core::slice::from_raw_parts(cstr, len);
-
-    // Find the last '/' to split into parent path and basename
-    let mut last_slash = 0;
-    for j in 0..len {
-        if path[j] == b'/' { last_slash = j; }
-    }
-
-    let fs = crate::kstate::fs();
-    if last_slash == 0 {
-        // Path like "/foo" — parent is root, name is everything after '/'
-        let name = &path[1..];
-        Ok((fs.root_inode(), name))
-    } else {
-        // Path like "/bin/ls" — resolve parent "/bin", name is "ls"
-        let parent_path = &path[..last_slash];
-        let name = &path[last_slash + 1..];
-        match rux_vfs::path::resolve_path(fs, parent_path) {
-            Ok(parent_ino) => Ok((parent_ino, name)),
-            Err(_) => Err(-2), // -ENOENT
-        }
-    }
-}
-
-fn syscall_creat(path_ptr: u64) -> i64 {
-    unsafe {
-        use rux_vfs::{FileSystem, FileName};
-
-        let (dir_ino, name) = match resolve_parent_and_name(path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) {
-            Ok(f) => f,
-            Err(_) => return -22,
-        };
-
-        match fs.create(dir_ino, fname, 0o644) {
-            Ok(_ino) => {
-                // Auto-open the created file
-                let cstr = path_ptr as *const u8;
-                let mut len = 0usize;
-                while *cstr.add(len) != 0 && len < 256 { len += 1; }
-                crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
-            }
-            Err(_) => -17,
-        }
-    }
-}
-
-fn syscall_mkdir(path_ptr: u64) -> i64 {
-    unsafe {
-        use rux_vfs::{FileSystem, FileName};
-
-        let (dir_ino, name) = match resolve_parent_and_name(path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) {
-            Ok(f) => f,
-            Err(_) => return -22,
-        };
-
-        match fs.mkdir(dir_ino, fname, 0o755) {
-            Ok(_) => 0,
-            Err(_) => -17,
-        }
-    }
-}
-
-fn syscall_unlink(path_ptr: u64) -> i64 {
-    unsafe {
-        use rux_vfs::{FileSystem, FileName};
-
-        let (dir_ino, name) = match resolve_parent_and_name(path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) {
-            Ok(f) => f,
-            Err(_) => return -22,
-        };
-
-        match fs.unlink(dir_ino, fname) {
-            Ok(()) => 0,
-            Err(_) => -2, // -ENOENT
-        }
     }
 }
 
@@ -533,132 +399,6 @@ fn syscall_exec(path_ptr: u64, argv_ptr: u64) -> ! {
     }
 }
 
-fn syscall_exit(status: i32) -> ! {
-    serial::write_str("rux: user exit(");
-    let mut buf = [0u8; 10];
-    serial::write_str(crate::write_u32(&mut buf, status as u32));
-    serial::write_str(")\n");
-
-    unsafe {
-        // Save exit status for wait4
-        LAST_CHILD_EXIT = status;
-
-        // If parent is blocked in vfork, resume it with child PID
-        if VFORK_JMP.rsp != 0 {
-            vfork_longjmp(&raw mut VFORK_JMP, 42);
-        }
-    }
-
-    crate::x86_64::exit::exit_qemu(crate::x86_64::exit::EXIT_SUCCESS);
-}
-
-/// getdents(buf, bufsize) — list root directory entries into user buffer.
-/// Writes null-terminated filenames consecutively. Returns bytes written.
-/// Linux getdents64: write struct linux_dirent64 entries to user buffer.
-///
-/// struct linux_dirent64 {
-///     u64 d_ino;       // offset 0
-///     u64 d_off;       // offset 8 (offset to next entry)
-///     u16 d_reclen;    // offset 16
-///     u8  d_type;      // offset 18
-///     char d_name[];   // offset 19
-/// };
-fn syscall_getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
-    unsafe {
-        use rux_vfs::{FileSystem, DirEntry, InodeType};
-
-        let fs = crate::kstate::fs();
-        let out = buf_ptr as *mut u8;
-        let limit = bufsize as usize;
-        let mut pos = 0usize;
-
-        // Determine which directory inode to read from the fd
-        let dir_ino = if fd >= 3 {
-            match crate::fdtable::get_fd_inode(fd as usize) {
-                Some(ino) => ino,
-                None => return -9, // -EBADF
-            }
-        } else {
-            0 // root
-        };
-
-        // Use a static offset tracker per fd (simplified)
-        static mut DIR_OFFSET: [usize; 16] = [0; 16];
-        let off_idx = (fd as usize).min(15);
-        let mut offset = DIR_OFFSET[off_idx];
-
-        let start_pos = pos;
-        loop {
-            let mut entry = core::mem::zeroed::<DirEntry>();
-            match fs.readdir(dir_ino, offset, &mut entry) {
-                Ok(true) => {
-                    let nlen = entry.name_len as usize;
-                    // reclen = 19 (header) + nlen + 1 (null) + padding to 8-byte align
-                    let reclen = ((19 + nlen + 1) + 7) & !7;
-                    if pos + reclen > limit { break; }
-
-                    // d_ino
-                    *((out.add(pos)) as *mut u64) = entry.ino;
-                    // d_off (position for next readdir call)
-                    *((out.add(pos + 8)) as *mut u64) = (offset + 1) as u64;
-                    // d_reclen
-                    *((out.add(pos + 16)) as *mut u16) = reclen as u16;
-                    // d_type
-                    let dtype: u8 = match entry.kind {
-                        InodeType::File => 8,       // DT_REG
-                        InodeType::Directory => 4,  // DT_DIR
-                        InodeType::Symlink => 10,   // DT_LNK
-                        _ => 0,                     // DT_UNKNOWN
-                    };
-                    *out.add(pos + 18) = dtype;
-                    // d_name (null-terminated)
-                    for i in 0..nlen {
-                        *out.add(pos + 19 + i) = entry.name[i];
-                    }
-                    *out.add(pos + 19 + nlen) = 0;
-
-                    pos += reclen;
-                    offset += 1;
-                }
-                _ => break,
-            }
-        }
-
-        DIR_OFFSET[off_idx] = offset;
-
-        // If we wrote nothing and there were no more entries, return 0 (end)
-        if pos == start_pos { return 0; }
-
-        pos as i64
-    }
-}
-
-/// Track child exit status for wait4.
-static mut LAST_CHILD_EXIT: i32 = 0;
-
-/// Track whether there's a child to collect.
-static mut CHILD_AVAILABLE: bool = false;
-
-fn syscall_wait4(pid: u64, wstatus_ptr: u64, options: u64, _rusage: u64) -> i64 {
-    unsafe {
-        // WNOHANG = 1
-        let wnohang = options & 1 != 0;
-
-        if !CHILD_AVAILABLE {
-            return -10; // -ECHILD (no child processes)
-        }
-
-        // Collect the child
-        CHILD_AVAILABLE = false;
-
-        if wstatus_ptr != 0 {
-            let status = (LAST_CHILD_EXIT as u32) << 8; // WEXITSTATUS format
-            *(wstatus_ptr as *mut u32) = status;
-        }
-        42 // child PID
-    }
-}
-
 #[unsafe(naked)]
 pub extern "C" fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
     core::arch::naked_asm!(
@@ -671,323 +411,6 @@ pub extern "C" fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
         user_ds = const (USER_DS as u64),
         user_cs = const (USER_CS as u64),
     );
-}
-
-// ── Linux-specific syscall implementations ──────────────────────────
-
-/// Program break for brk() syscall.
-pub static mut PROGRAM_BRK: u64 = 0;
-
-fn syscall_brk(addr: u64) -> i64 {
-    unsafe {
-        if PROGRAM_BRK == 0 {
-            // Should be set by load_elf_from_inode, but default to safe value
-            PROGRAM_BRK = 0x800000;
-        }
-        if addr == 0 {
-            return PROGRAM_BRK as i64;
-        }
-        if addr >= PROGRAM_BRK {
-            // Grow the break — we need to map new pages in the CURRENT
-            // user page table. For now, read the current CR3 and map pages.
-            let old_page = (PROGRAM_BRK + 0xFFF) & !0xFFF;
-            let new_page = (addr + 0xFFF) & !0xFFF;
-
-            // Allocate and map new pages
-            use rux_mm::FrameAllocator;
-            let alloc = crate::kstate::alloc();
-            let mut cr3: u64;
-            core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
-
-            for pa in (old_page..new_page).step_by(4096) {
-                let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("brk page");
-                // Zero the page
-                let ptr = frame.as_usize() as *mut u8;
-                for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
-                // Map in current page table
-                // We need to walk the page table directly...
-                // For simplicity, use a PageTable4Level wrapper
-                let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
-                    rux_klib::PhysAddr::new(cr3 as usize));
-                let flags = rux_mm::MappingFlags::READ
-                    .or(rux_mm::MappingFlags::WRITE)
-                    .or(rux_mm::MappingFlags::USER);
-                let va = rux_klib::VirtAddr::new(pa as usize);
-                let _ = upt.unmap_4k(va); // remove kernel identity mapping if present
-                let _ = upt.map_4k(va, frame, flags, alloc);
-            }
-
-            PROGRAM_BRK = addr;
-        }
-        PROGRAM_BRK as i64
-    }
-}
-
-fn syscall_mmap(addr: u64, len: u64, _prot: u64, mmap_flags: u64, _fd: u64) -> i64 {
-    unsafe {
-        use rux_mm::FrameAllocator;
-        static mut MMAP_BASE: u64 = 0x10000000;
-
-        // MAP_ANONYMOUS = 0x20, MAP_FIXED = 0x10
-        if mmap_flags & 0x20 == 0 {
-            return -12; // -ENOMEM (no file-backed mmap yet)
-        }
-
-        let aligned_len = (len + 0xFFF) & !0xFFF;
-
-        // Allocate from counter (MAP_FIXED will be handled separately later)
-        let result = MMAP_BASE;
-        MMAP_BASE += aligned_len;
-
-        // Allocate and map pages
-        let alloc = crate::kstate::alloc();
-        let mut cr3: u64;
-        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
-        let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
-            rux_klib::PhysAddr::new(cr3 as usize));
-        let pg_flags = rux_mm::MappingFlags::READ
-            .or(rux_mm::MappingFlags::WRITE)
-            .or(rux_mm::MappingFlags::USER);
-
-        for offset in (0..aligned_len).step_by(4096) {
-            let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("mmap page");
-            let ptr = frame.as_usize() as *mut u8;
-            for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
-            let va = rux_klib::VirtAddr::new((result + offset) as usize);
-            let _ = upt.unmap_4k(va); // allow overwriting existing mappings
-            let _ = upt.map_4k(va, frame, pg_flags, alloc);
-        }
-
-        result as i64
-    }
-}
-
-fn syscall_rt_sigaction(_signum: u64, _act: u64, _oldact: u64) -> i64 {
-    // Stub: accept any signal handler setup, don't actually deliver signals
-    0
-}
-
-fn syscall_ioctl(fd: u64, request: u64, arg: u64) -> i64 {
-    // Terminal ioctls
-    const TCGETS: u64 = 0x5401;
-    const TIOCGWINSZ: u64 = 0x5413;
-    const TIOCSPGRP: u64 = 0x5410;
-    const TIOCGPGRP: u64 = 0x540F;
-
-    match request {
-        TIOCGWINSZ => {
-            // Return window size: 24 rows, 80 cols
-            if arg != 0 {
-                unsafe {
-                    let ws = arg as *mut [u16; 4]; // rows, cols, xpixel, ypixel
-                    (*ws) = [24, 80, 0, 0];
-                }
-            }
-            0
-        }
-        TCGETS => {
-            // Return a realistic termios (cooked mode)
-            if arg != 0 {
-                unsafe {
-                    let ptr = arg as *mut u8;
-                    for i in 0..60 { *ptr.add(i) = 0; }
-                    // struct termios: c_iflag(4), c_oflag(4), c_cflag(4), c_lflag(4), ...
-                    let iflag = arg as *mut u32;
-                    *iflag = 0x500; // ICRNL | IXON
-                    let oflag = (arg + 4) as *mut u32;
-                    *oflag = 0x5; // OPOST | ONLCR
-                    let cflag = (arg + 8) as *mut u32;
-                    *cflag = 0xBF; // CS8 | CREAD | HUPCL | CLOCAL
-                    let lflag = (arg + 12) as *mut u32;
-                    *lflag = 0x8A3B; // ISIG|ICANON|ECHO|ECHOE|ECHOK|ECHOCTL|ECHOKE|IEXTEN
-                }
-            }
-            0
-        }
-        TIOCGPGRP => {
-            // Return process group ID = 1
-            if arg != 0 {
-                unsafe { *(arg as *mut i32) = 1; }
-            }
-            0
-        }
-        TIOCSPGRP => 0, // ignore set pgrp
-        0x5401 => { // TCGETS (another variant)
-            if arg != 0 {
-                unsafe {
-                    let ptr = arg as *mut u8;
-                    for i in 0..60 { *ptr.add(i) = 0; }
-                }
-            }
-            0
-        }
-        0x5402 | 0x5403 | 0x5404 => 0, // TCSETS/TCSETSW/TCSETSF
-        _ => -25 // -ENOTTY
-    }
-}
-
-fn syscall_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> i64 {
-    // Gather write: iov is an array of { base: *const u8, len: usize }
-    unsafe {
-        let iov = iov_ptr as *const [u64; 2]; // [base, len] pairs
-        let mut total: i64 = 0;
-        for i in 0..iovcnt as usize {
-            let base = (*iov.add(i))[0];
-            let len = (*iov.add(i))[1];
-            let n = syscall_write(fd, base, len);
-            if n < 0 { return n; }
-            total += n;
-        }
-        total
-    }
-}
-
-/// Fill a Linux struct stat (144 bytes) from VFS InodeStat.
-///
-/// Linux x86_64 struct stat layout:
-///   0:  st_dev      u64
-///   8:  st_ino      u64
-///  16:  st_nlink    u64
-///  24:  st_mode     u32
-///  28:  st_uid      u32
-///  32:  st_gid      u32
-///  36:  __pad0      u32
-///  40:  st_rdev     u64
-///  48:  st_size     i64
-///  56:  st_blksize  i64
-///  64:  st_blocks   i64
-///  72:  st_atime    u64
-///  80:  st_atime_ns u64
-///  88:  st_mtime    u64
-///  96:  st_mtime_ns u64
-/// 104:  st_ctime    u64
-/// 112:  st_ctime_ns u64
-unsafe fn fill_linux_stat(buf: u64, vfs_stat: &rux_vfs::InodeStat) {
-    let p = buf as *mut u8;
-    for i in 0..144 { *p.add(i) = 0; }
-
-    *(buf as *mut u64) = 0;                          // st_dev
-    *((buf + 8) as *mut u64) = vfs_stat.ino;         // st_ino
-    *((buf + 16) as *mut u64) = vfs_stat.nlink as u64; // st_nlink
-    *((buf + 24) as *mut u32) = vfs_stat.mode;       // st_mode
-    *((buf + 28) as *mut u32) = vfs_stat.uid;        // st_uid
-    *((buf + 32) as *mut u32) = vfs_stat.gid;        // st_gid
-    *((buf + 48) as *mut i64) = vfs_stat.size as i64; // st_size
-    *((buf + 56) as *mut i64) = 4096;                // st_blksize
-    *((buf + 64) as *mut i64) = vfs_stat.blocks as i64; // st_blocks
-}
-
-fn syscall_fstat(fd: u64, buf: u64) -> i64 {
-    if buf == 0 { return -14; } // -EFAULT
-    // For stdin/stdout/stderr, return a char device stat
-    if fd <= 2 {
-        unsafe {
-            let p = buf as *mut u8;
-            for i in 0..144 { *p.add(i) = 0; }
-            *((buf + 24) as *mut u32) = 0o20666; // S_IFCHR | 0666
-            *((buf + 56) as *mut i64) = 4096;
-        }
-        return 0;
-    }
-    // File fd — stat via VFS
-    // For now return generic file stat (TODO: look up inode from fd table)
-    unsafe {
-        let p = buf as *mut u8;
-        for i in 0..144 { *p.add(i) = 0; }
-        *((buf + 24) as *mut u32) = 0o100644;
-        *((buf + 56) as *mut i64) = 4096;
-    }
-    0
-}
-
-fn syscall_fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
-    if buf == 0 { return -14; }
-    unsafe {
-        use rux_vfs::FileSystem;
-
-        // Read path string
-        let cstr = pathname as *const u8;
-        let mut len = 0usize;
-        while *cstr.add(len) != 0 && len < 256 { len += 1; }
-        let path = core::slice::from_raw_parts(cstr, len);
-
-        let fs = crate::kstate::fs();
-        let ino = match rux_vfs::path::resolve_path(fs, path) {
-            Ok(ino) => ino,
-            Err(_) => return -2, // -ENOENT
-        };
-
-        let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
-        if fs.stat(ino, &mut vfs_stat).is_err() {
-            return -2;
-        }
-
-        fill_linux_stat(buf, &vfs_stat);
-        0
-    }
-}
-
-fn syscall_openat(_dirfd: u64, pathname: u64) -> i64 {
-    // openat with AT_FDCWD (-100): just open the path
-    syscall_open(pathname)
-}
-
-fn syscall_uname(buf: u64) -> i64 {
-    // struct utsname: 5 fields of 65 bytes each = 325 bytes
-    // sysname, nodename, release, version, machine
-    if buf == 0 { return -14; }
-    unsafe {
-        let ptr = buf as *mut u8;
-        for i in 0..325 { *ptr.add(i) = 0; }
-        // sysname
-        let s = b"Linux";
-        for (i, &b) in s.iter().enumerate() { *ptr.add(i) = b; }
-        // nodename (offset 65)
-        let s = b"rux";
-        for (i, &b) in s.iter().enumerate() { *ptr.add(65 + i) = b; }
-        // release (offset 130)
-        let s = b"6.1.0-rux";
-        for (i, &b) in s.iter().enumerate() { *ptr.add(130 + i) = b; }
-        // version (offset 195)
-        let s = b"#1 SMP";
-        for (i, &b) in s.iter().enumerate() { *ptr.add(195 + i) = b; }
-        // machine (offset 260)
-        let s = b"x86_64";
-        for (i, &b) in s.iter().enumerate() { *ptr.add(260 + i) = b; }
-    }
-    0
-}
-
-fn syscall_getcwd(buf: u64, size: u64) -> i64 {
-    if buf == 0 || size < 2 { return -34; }
-    unsafe {
-        let ptr = buf as *mut u8;
-        *ptr = b'/';
-        *ptr.add(1) = 0;
-    }
-    buf as i64
-}
-
-fn syscall_dup2(oldfd: u64, newfd: u64) -> i64 {
-    // Simple dup2: for fd 0-2 (stdin/stdout/stderr), just return newfd
-    // For file fds, we'd need to duplicate the fd table entry
-    if oldfd <= 2 && newfd <= 2 {
-        return newfd as i64;
-    }
-    // For other fds, just pretend it worked
-    newfd as i64
-}
-
-fn syscall_rt_sigprocmask(_how: u64, _set: u64, oldset: u64, sigsetsize: u64) -> i64 {
-    // Write the old signal mask (all zeros = no signals blocked)
-    // Only write exactly sigsetsize bytes (typically 8 on Linux x86_64)
-    if oldset != 0 && sigsetsize > 0 && sigsetsize <= 8 {
-        unsafe {
-            let ptr = oldset as *mut u64;
-            *ptr = 0; // 64-bit mask, all zeros
-        }
-    }
-    0
 }
 
 fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
@@ -1025,18 +448,6 @@ fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
     }
 }
 
-fn syscall_clock_gettime(_clockid: u64, tp: u64) -> i64 {
-    if tp == 0 { return -14; }
-    let ticks = super::pit::ticks();
-    unsafe {
-        let sec_ptr = tp as *mut u64;
-        let nsec_ptr = (tp + 8) as *mut u64;
-        *sec_ptr = ticks / 1000;
-        *nsec_ptr = (ticks % 1000) * 1_000_000;
-    }
-    0
-}
-
 /// vfork entry from the SYSCALL instruction path.
 /// This is trickier because we need to save/restore the syscall frame.
 /// vfork from the SYSCALL instruction path.
@@ -1072,7 +483,7 @@ fn syscall_vfork_linux() -> i64 {
         }
         VFORK_PARENT_USER_RSP = SAVED_USER_RSP;
 
-        CHILD_AVAILABLE = true;
+        crate::syscall_impl::CHILD_AVAILABLE = true;
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {

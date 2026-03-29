@@ -146,7 +146,7 @@ fn aarch64_init(dtb_addr: usize) {
             alloc,
         ).expect("uart map");
 
-        kpt.activate();
+        aarch64::paging::activate(&kpt);
         pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
         serial::write_str("rux: MMU enabled, kernel page tables active!\n");
 
@@ -256,18 +256,19 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     let fs = &mut *fs_ptr;
 
     // Populate full busybox-compatible rootfs
-    let box_data: &[u8] = include_bytes!("../../../user/rux-box_aarch64.elf");
+    let box_data: &[u8] = include_bytes!("../../../user/busybox_aarch64");
     rootfs::populate(fs, box_data);
 
     // Init kernel state
     kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
-    // Boot: exec /sbin/init
+    // Boot: exec /bin/sh (busybox)
     serial::write_str("rux: exec /sbin/init\n");
-    crate::execargs::set(b"/sbin/init", b"");
+    crate::execargs::set(b"/bin/sh", b"");
+    let init_ino = rux_vfs::path::resolve_path(fs, b"/bin/busybox").expect("busybox not found");
     let alloc = &mut *alloc_ptr;
-    elf::load_and_exec_elf(box_data, alloc);
+    elf::load_elf_from_inode(init_ino as u64, alloc);
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -528,7 +529,7 @@ fn x86_64_init(multiboot_info: usize) {
             serial::write_str("rux: identity mapped 0-8 MiB\n");
 
             // Activate — switch CR3 to our page tables
-            kpt.activate();
+            x86_64::paging::activate(&kpt);
             pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
             serial::write_str("rux: CR3 switched to kernel page tables!\n");
         }

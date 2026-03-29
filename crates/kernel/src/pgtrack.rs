@@ -15,7 +15,7 @@ pub fn set_kernel_pt(root: u64) {
 use rux_klib::PhysAddr;
 use rux_mm::{FrameAllocator, MemoryError, PageSize};
 
-const MAX_PAGES: usize = 512;
+const MAX_PAGES: usize = 2048;
 
 /// Pages allocated by the parent process (shell). Never freed during normal operation.
 static mut PARENT_PAGES: [u64; MAX_PAGES] = [0; MAX_PAGES];
