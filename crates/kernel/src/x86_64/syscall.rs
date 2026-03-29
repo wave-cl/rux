@@ -157,6 +157,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         35 => 0,                                // nanosleep
         37 => 0,                                // alarm
         39 => 1,                                // getpid
+        40 => posix::sendfile(a0, a1, a2, a3),
         48 => 0,                                // shutdown
         50 => -95,                              // listen
         // fork/exec — arch-specific entry, POSIX semantics

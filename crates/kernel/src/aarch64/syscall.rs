@@ -36,6 +36,7 @@ pub fn handle_syscall(frame: *mut u8) {
             63 => posix::read(a0, a1, a2),            // read
             64 => posix::write(a0, a1, a2),           // write
             66 => posix::writev(a0, a1, a2),          // writev
+            71 => posix::sendfile(a0, a1, a2, a3),    // sendfile
             23 => posix::dup(a0),                     // dup
             24 => posix::dup2(a0, a1),                // dup3 → dup2
             25 => 0,                                  // fcntl

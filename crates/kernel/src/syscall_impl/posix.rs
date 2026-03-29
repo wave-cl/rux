@@ -113,6 +113,28 @@ pub fn writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> i64 {
     }
 }
 
+/// sendfile(out_fd, in_fd, offset, count) — Linux (widely used by busybox cat)
+pub fn sendfile(out_fd: u64, in_fd: u64, offset_ptr: u64, count: u64) -> i64 {
+    // Read from in_fd, write to out_fd, up to count bytes.
+    // If offset_ptr is non-null, use that offset instead of fd's current offset.
+    unsafe {
+        let mut buf = [0u8; 4096];
+        let mut total = 0i64;
+        let mut remaining = count as usize;
+
+        while remaining > 0 {
+            let chunk = remaining.min(4096);
+            let n = crate::fdtable::sys_read_fd(in_fd as usize, buf.as_mut_ptr(), chunk);
+            if n <= 0 { break; } // EOF or error
+            let written = write(out_fd, buf.as_ptr() as u64, n as u64);
+            if written < 0 { return if total > 0 { total } else { written }; }
+            total += written;
+            remaining -= n as usize;
+        }
+        total
+    }
+}
+
 // ── File metadata (POSIX.1 Section 2) ───────────────────────────────
 
 /// stat(pathname, statbuf) — POSIX.1
