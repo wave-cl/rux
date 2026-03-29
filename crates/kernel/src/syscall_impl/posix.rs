@@ -34,18 +34,40 @@ pub fn write(fd: u64, buf: u64, len: u64) -> i64 {
     crate::fdtable::sys_write_fd(fd as usize, buf as *const u8, len as usize)
 }
 
-/// open(pathname, flags, ...) — POSIX.1
-pub fn open(path_ptr: u64) -> i64 {
+/// open(pathname, flags, mode) — POSIX.1
+pub fn open(path_ptr: u64, flags: u64, mode: u64) -> i64 {
     unsafe {
         let path = super::read_user_path(path_ptr);
         if path.is_empty() { return -2; }
-        // Resolve with CWD for relative paths, then open by inode
-        let ino = match super::resolve_with_cwd(path) {
-            Ok(ino) => ino,
-            Err(e) => return e,
-        };
-        crate::fdtable::sys_open_ino(ino)
+
+        let o_creat = flags & 0x40 != 0;
+
+        match super::resolve_with_cwd(path) {
+            Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
+            Err(_) if o_creat => {
+                use rux_vfs::{FileSystem, FileName};
+                let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                };
+                let fs = crate::kstate::fs();
+                let fname = match FileName::new(name) {
+                    Ok(f) => f,
+                    Err(_) => return -22,
+                };
+                match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
+                    Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
+                    Err(_) => -13,
+                }
+            }
+            Err(e) => e,
+        }
     }
+}
+
+/// openat(dirfd, pathname, flags, mode) — POSIX.1-2008
+pub fn openat(_dirfd: u64, pathname: u64, flags: u64, mode: u64) -> i64 {
+    open(pathname, flags, mode)
 }
 
 /// close(fd) — POSIX.1
@@ -55,8 +77,7 @@ pub fn close(fd: u64) -> i64 {
 
 /// dup2(oldfd, newfd) — POSIX.1
 pub fn dup2(oldfd: u64, newfd: u64) -> i64 {
-    if oldfd <= 2 && newfd <= 2 { return newfd as i64; }
-    newfd as i64
+    crate::fdtable::sys_dup2(oldfd as usize, newfd as usize)
 }
 
 /// lseek(fd, offset, whence) — POSIX.1
@@ -151,12 +172,6 @@ pub fn fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
 }
 
 // ── Directory operations (POSIX.1) ──────────────────────────────────
-
-/// openat(dirfd, pathname, flags, ...) — POSIX.1-2008
-pub fn openat(_dirfd: u64, pathname: u64) -> i64 {
-    // AT_FDCWD (-100) handled implicitly — open() uses CWD for relative paths.
-    open(pathname)
-}
 
 /// chdir(path) — POSIX.1
 pub fn chdir(path_ptr: u64) -> i64 {

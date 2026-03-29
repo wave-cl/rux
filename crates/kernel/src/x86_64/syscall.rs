@@ -135,7 +135,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         // ── POSIX.1 syscalls ────────────────────────────────────────
         0 => posix::read(a0, a1, a2),
         1 => posix::write(a0, a1, a2),
-        2 => posix::open(a0),
+        2 => posix::open(a0, a1, a2),
         3 => posix::close(a0),
         4 => posix::stat(a0, a1),
         5 => posix::fstat(a0, a1),
@@ -177,7 +177,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         111 => 1,                               // getpgrp
         112 => 1,                               // setsid
         228 => posix::clock_gettime(a0, a1),
-        257 => posix::openat(a0, a1),
+        257 => posix::openat(a0, a1, a2, a3),
         262 => posix::fstatat(a0, a1, a2),      // newfstatat
         269 => 0,                               // faccessat
 
@@ -224,7 +224,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let result: i64 = match syscall_nr {
             0 => posix::read(arg0, arg1, arg2),
             1 => posix::write(arg0, arg1, arg2),
-            2 => posix::open(arg0),
+            2 => posix::open(arg0, arg1, arg2),
             3 => posix::close(arg0),
             8 => posix::creat(arg0),
             83 => posix::mkdir(arg0),

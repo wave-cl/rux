@@ -31,7 +31,7 @@ pub fn handle_syscall(frame: *mut u8) {
             // ── POSIX.1 syscalls (aarch64 Linux numbers) ──────────────
 
             // File I/O
-            56 => posix::openat(a0, a1),              // openat
+            56 => posix::openat(a0, a1, a2, a3),      // openat
             57 => posix::close(a0),                   // close
             63 => posix::read(a0, a1, a2),            // read
             64 => posix::write(a0, a1, a2),           // write

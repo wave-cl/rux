@@ -14,10 +14,19 @@ const FIRST_FILE_FD: usize = 3;
 pub struct OpenFile {
     pub ino: u64,
     pub offset: usize,
+    pub flags: u32,
     pub active: bool,
+    pub is_pipe: bool,
+    pub pipe_id: u8,
+    pub pipe_write: bool,
 }
 
-pub static mut FD_TABLE: [OpenFile; MAX_FDS] = [OpenFile { ino: 0, offset: 0, active: false }; MAX_FDS];
+const EMPTY_FD: OpenFile = OpenFile {
+    ino: 0, offset: 0, flags: 0, active: false,
+    is_pipe: false, pipe_id: 0, pipe_write: false,
+};
+
+pub static mut FD_TABLE: [OpenFile; MAX_FDS] = [EMPTY_FD; MAX_FDS];
 
 /// Get the inode for a file descriptor (for getdents to read directory).
 pub fn get_fd_inode(fd: usize) -> Option<u64> {
@@ -38,21 +47,63 @@ pub fn sys_open(path: &[u8]) -> i64 {
             Ok(ino) => ino,
             Err(_) => return -2,
         };
-        sys_open_ino(ino)
+        sys_open_ino(ino, 0)
     }
 }
 
-/// Open a file by inode. Returns fd on success, negative errno on failure.
-pub fn sys_open_ino(ino: rux_vfs::InodeId) -> i64 {
+/// Open a file by inode with flags. Returns fd on success, negative errno on failure.
+pub fn sys_open_ino(ino: rux_vfs::InodeId, flags: u32) -> i64 {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if !FD_TABLE[fd].active {
-                FD_TABLE[fd] = OpenFile { ino: ino as u64, offset: 0, active: true };
+                let mut offset = 0usize;
+                // O_APPEND: start at end of file
+                if flags & 0x400 != 0 {
+                    let fs = crate::kstate::fs();
+                    let mut stat = core::mem::zeroed::<InodeStat>();
+                    if fs.stat(ino, &mut stat).is_ok() {
+                        offset = stat.size as usize;
+                    }
+                }
+                // O_TRUNC: truncate file to 0
+                if flags & 0x200 != 0 {
+                    let fs = crate::kstate::fs();
+                    let _ = fs.truncate(ino, 0);
+                }
+                FD_TABLE[fd] = OpenFile {
+                    ino: ino as u64, offset, flags, active: true,
+                    is_pipe: false, pipe_id: 0, pipe_write: false,
+                };
                 return fd as i64;
             }
         }
         -24 // -EMFILE
     }
+}
+
+/// Duplicate a file descriptor. Real dup2 implementation.
+pub fn sys_dup2(oldfd: usize, newfd: usize) -> i64 {
+    if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
+    unsafe {
+        // For stdin/stdout/stderr (0-2), allow dup2 even if not "active" in table
+        if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
+        // Close newfd if it's currently open
+        if newfd >= FIRST_FILE_FD && FD_TABLE[newfd].active {
+            FD_TABLE[newfd].active = false;
+        }
+        if oldfd <= 2 {
+            // Duping stdin/stdout/stderr — create a "serial" fd entry
+            FD_TABLE[newfd] = OpenFile {
+                ino: 0, offset: 0, flags: 0, active: true,
+                is_pipe: false, pipe_id: 0, pipe_write: false,
+            };
+            // Mark as serial fd (ino=0 + flags bit to distinguish)
+            FD_TABLE[newfd].ino = oldfd as u64; // store original fd for serial routing
+        } else {
+            FD_TABLE[newfd] = FD_TABLE[oldfd];
+        }
+    }
+    newfd as i64
 }
 
 /// Close a file descriptor. Returns 0 on success.
