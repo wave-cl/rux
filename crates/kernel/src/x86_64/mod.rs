@@ -1,3 +1,4 @@
+pub mod init;
 pub mod serial;
 pub mod exit;
 pub mod gdt;
