@@ -129,82 +129,77 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     let mut nb = [0u8; 10]; let _ = nb;
 
+    use crate::syscall_impl as si;
+
     let result = match nr {
-        // File I/O
-        0 => syscall_read(a0, a1, a2),           // read
-        1 => syscall_write(a0, a1, a2),           // write
-        2 => syscall_open(a0),                     // open
-        3 => crate::fdtable::sys_close(a0 as usize), // close
-        4 => syscall_fstatat(0xffffff9cu64, a0, a1), // stat (pathname, buf) → fstatat(AT_FDCWD, ...)
-        5 => syscall_fstat(a0, a1),               // fstat
-        6 => syscall_fstatat(0xffffff9cu64, a0, a1), // lstat
-        7 => 1,                                    // poll → 1 fd ready
-        8 => syscall_creat(a0),                    // creat
-        9 => syscall_mmap(a0, a1, a2, a3, a4),   // mmap
-        10 => 0,                                   // mprotect (stub)
-        11 => 0,                                   // munmap (stub)
-        12 => syscall_brk(a0),                    // brk
-        13 => syscall_rt_sigaction(a0, a1, a2),   // rt_sigaction
-        14 => syscall_rt_sigprocmask(a0, a1, a2, a3), // rt_sigprocmask
-        16 => syscall_ioctl(a0, a1, a2),          // ioctl
-        20 => syscall_writev(a0, a1, a2),         // writev
-        21 => 0,                                   // access (stub: always OK)
-        33 => syscall_dup2(a0, a1),                // dup2
-        39 => 1,                                   // getpid
-        56 => syscall_vfork_linux(),                 // clone (as vfork)
-        57 => syscall_vfork_linux(),                 // fork (as vfork)
-        59 => { unsafe { syscall_exec(a0, a1); } 0 } // execve
-        60 => unsafe { syscall_exit(a0 as i32) }, // exit
-        61 => syscall_wait4(a0, a1, a2, a3),                      // wait4
-        63 => syscall_uname(a0),                   // uname
-        72 => 0,                                   // fcntl (stub)
-        78 => syscall_getdents64(a0, a1, a2),      // getdents
-        79 => syscall_getcwd(a0, a1),             // getcwd
-        80 => 0,                                   // chdir (stub)
-        83 => unsafe { syscall_mkdir(a0) as i64 },// mkdir
-        87 => unsafe { syscall_unlink(a0) as i64 },// unlink
-        96 => super::pit::ticks() as i64,         // gettimeofday
-        102 => 0,                                  // getuid
-        104 => 0,                                  // getgid
-        107 => 0,                                  // geteuid
-        108 => 0,                                  // getegid
-        110 => 1,                                  // getppid
-        111 => 1,                                  // getpgrp → return pid
-        158 => syscall_arch_prctl(a0, a1),            // arch_prctl
-        217 => syscall_getdents64(a0, a1, a2),     // getdents64
-        218 => 1,                                  // set_tid_address → return pid
-        228 => syscall_clock_gettime(a0, a1),     // clock_gettime
-        231 => unsafe { syscall_exit(a0 as i32) },// exit_group
-        257 => syscall_openat(a0, a1),            // openat
-        262 => syscall_fstatat(a0, a1, a2),       // newfstatat
-        269 => 0,                                  // faccessat (stub)
-        293 => -38,                                // pipe2 (TODO)
-        302 => -38,                                // prlimit64 (stub)
-        334 => -38,                                // rseq (stub)
+        // File I/O (shared implementations)
+        0 => si::sys_read(a0, a1, a2),
+        1 => si::sys_write(a0, a1, a2),
+        2 => si::sys_open(a0),
+        3 => crate::fdtable::sys_close(a0 as usize),
+        4 => si::sys_fstatat(0xffffff9cu64, a0, a1), // stat → fstatat
+        5 => si::sys_fstat(a0, a1),
+        6 => si::sys_fstatat(0xffffff9cu64, a0, a1), // lstat
+        7 => 1,                                    // poll
+        8 => si::sys_creat(a0),
+        9 => si::sys_mmap(a0, a1, a2, a3, a4),
+        10 => 0,                                   // mprotect
+        11 => 0,                                   // munmap
+        12 => si::sys_brk(a0),
+        13 => si::sys_rt_sigaction(a0, a1, a2),
+        14 => si::sys_rt_sigprocmask(a0, a1, a2, a3),
+        16 => si::sys_ioctl(a0, a1, a2),
+        20 => si::sys_writev(a0, a1, a2),
+        21 => 0,                                   // access
         24 => 0,                                   // sched_yield
-        35 => 0,                                   // nanosleep (stub)
-        37 => 0,                                   // alarm (stub)
-        48 => 0,                                   // shutdown (stub)
+        33 => si::sys_dup2(a0, a1),
+        35 => 0,                                   // nanosleep
         37 => 0,                                   // alarm
-        50 => -95,                                 // listen → -ENOTSUP
-        62 => 0,                                   // kill (stub)
-        109 => 0,                                  // setpgid (stub)
-        112 => 1,                                  // setsid → return pid
-        97 => 0,                                   // getrlimit (stub)
-        121 => 1,                                  // getpgid → return pid (same process group)
-        131 => -38,                                // sigaltstack (stub)
-        157 => 0,                                  // prctl (stub)
-        186 => 1,                                  // gettid → 1
-        200 => 0,                                  // tkill (stub)
-        202 => 0,                                  // futex (stub)
-        204 => 0,                                  // sched_getaffinity (stub)
-        273 => 0,                                  // set_robust_list (stub)
+        39 => 1,                                   // getpid
+        48 => 0,                                   // shutdown
+        50 => -95,                                 // listen
+        // Arch-specific (x86_64 only)
+        56 => syscall_vfork_linux(),               // clone (as vfork)
+        57 => syscall_vfork_linux(),               // fork (as vfork)
+        59 => { unsafe { syscall_exec(a0, a1); } 0 } // execve
+        60 => si::sys_exit(a0 as i32),             // exit
+        61 => si::sys_wait4(a0, a1, a2, a3),
+        62 => 0,                                   // kill
+        63 => si::sys_uname(a0),
+        72 => 0,                                   // fcntl
+        78 => si::sys_getdents64(a0, a1, a2),
+        79 => si::sys_getcwd(a0, a1),
+        80 => 0,                                   // chdir
+        83 => si::sys_mkdir(a0),
+        87 => si::sys_unlink(a0),
+        96 => si::arch::ticks() as i64,
+        97 => 0,                                   // getrlimit
+        102 => 0, 104 => 0, 107 => 0, 108 => 0,   // uid/gid
+        109 => 0,                                  // setpgid
+        110 => 1,                                  // getppid
+        111 => 1,                                  // getpgrp
+        112 => 1,                                  // setsid
+        121 => 1,                                  // getpgid
+        131 => -38,                                // sigaltstack
+        157 => 0,                                  // prctl
+        158 => syscall_arch_prctl(a0, a1),         // x86_64-specific
+        186 => 1,                                  // gettid
+        200 => 0, 202 => 0, 204 => 0,             // tkill/futex/sched
+        217 => si::sys_getdents64(a0, a1, a2),
+        218 => 1,                                  // set_tid_address
+        228 => si::sys_clock_gettime(a0, a1),
+        231 => si::sys_exit(a0 as i32),            // exit_group
+        257 => si::sys_openat(a0, a1),
+        262 => si::sys_fstatat(a0, a1, a2),
+        269 => 0,                                  // faccessat
+        273 => 0,                                  // set_robust_list
+        293 => -38, 302 => -38, 334 => -38,       // pipe2/prlimit64/rseq
         _ => {
             serial::write_str("rux: unknown syscall ");
             let mut buf = [0u8; 10];
             serial::write_str(crate::write_u32(&mut buf, nr as u32));
             serial::write_str("\n");
-            -38 // -ENOSYS
+            -38
         }
     };
 
@@ -440,6 +435,16 @@ struct JmpBuf {
 static mut VFORK_JMP: JmpBuf = JmpBuf {
     rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0, rsp: 0, rip: 0,
 };
+
+/// Check if a vfork parent is waiting.
+pub fn vfork_jmp_active() -> bool {
+    unsafe { VFORK_JMP.rsp != 0 }
+}
+
+/// Resume the vfork parent with the given child PID. Does not return.
+pub unsafe fn vfork_longjmp_to_parent(child_pid: i64) -> ! {
+    vfork_longjmp(&raw mut VFORK_JMP, child_pid);
+}
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"

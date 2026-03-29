@@ -14,6 +14,7 @@ pub mod fdtable;
 pub mod execargs;
 pub mod pgtrack;
 pub mod rootfs;
+pub mod syscall_impl;
 
 #[cfg(target_arch = "x86_64")]
 use x86_64::{serial, exit};

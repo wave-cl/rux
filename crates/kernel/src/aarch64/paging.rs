@@ -25,6 +25,8 @@ impl PageTable4Level {
         Ok(Self { root })
     }
 
+    pub fn from_cr3(root: PhysAddr) -> Self { Self { root } }
+
     pub fn root_phys(&self) -> PhysAddr { self.root }
 
     pub fn map_4k(

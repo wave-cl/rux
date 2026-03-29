@@ -262,6 +262,16 @@ static mut VFORK_JMP: JmpBuf = JmpBuf {
     x25: 0, x26: 0, x27: 0, x28: 0, x29: 0, lr: 0, sp: 0,
 };
 
+/// Check if a vfork parent is waiting.
+pub fn vfork_jmp_active() -> bool {
+    unsafe { VFORK_JMP.sp != 0 }
+}
+
+/// Resume the vfork parent with the given child PID. Does not return.
+pub unsafe fn vfork_longjmp_to_parent(child_pid: i64) -> ! {
+    vfork_longjmp(&raw mut VFORK_JMP, child_pid);
+}
+
 // Saved parent exception frame (34 u64s)
 static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
 
