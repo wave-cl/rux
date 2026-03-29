@@ -130,7 +130,7 @@ pub unsafe fn write_to_stack(stack_top: u64) -> u64 {
         str_pos += (len + 1) as u64;
     }
 
-    let mut env_addrs = [0u64; 3];
+    let mut env_addrs = [0u64; 8]; // room for up to 8 env vars
     for (idx, env) in env_strs.iter().enumerate() {
         env_addrs[idx] = str_pos;
         let p = str_pos as *mut u8;
