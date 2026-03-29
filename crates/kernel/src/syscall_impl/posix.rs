@@ -8,13 +8,20 @@ use super::arch;
 
 // ── File I/O (POSIX.1 Section 2) ────────────────────────────────────
 
+/// Check if fd 0-2 should use serial (not redirected to file/pipe).
+fn is_serial_fd(fd: u64) -> bool {
+    if fd > 2 { return false; }
+    unsafe {
+        let f = &crate::fdtable::FD_TABLE[fd as usize];
+        !f.active || f.is_serial
+    }
+}
+
 /// read(fd, buf, count) — POSIX.1
 pub fn read(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd == 0 {
+    if fd == 0 && is_serial_fd(0) {
+        // stdin from serial
         unsafe {
-            if crate::fdtable::FD_TABLE[0].active {
-                return crate::fdtable::sys_read_fd(0, buf as *mut u8, len as usize);
-            }
             let ptr = buf as *mut u8;
             for i in 0..len as usize {
                 *ptr.add(i) = arch::serial_read_byte();
@@ -27,12 +34,9 @@ pub fn read(fd: u64, buf: u64, len: u64) -> i64 {
 
 /// write(fd, buf, count) — POSIX.1
 pub fn write(fd: u64, buf: u64, len: u64) -> i64 {
-    // Check if fd 0-2 has been redirected (dup2'd to a file/pipe)
-    if fd <= 2 {
+    if fd <= 2 && is_serial_fd(fd) {
+        // stdout/stderr to serial
         unsafe {
-            if crate::fdtable::FD_TABLE[fd as usize].active {
-                return crate::fdtable::sys_write_fd(fd as usize, buf as *const u8, len as usize);
-            }
             let ptr = buf as *const u8;
             for i in 0..len as usize { arch::serial_write_byte(*ptr.add(i)); }
         }
@@ -95,6 +99,30 @@ pub fn dup2(oldfd: u64, newfd: u64) -> i64 {
 /// lseek(fd, offset, whence) — POSIX.1
 pub fn lseek(fd: u64, offset: i64, whence: u64) -> i64 {
     crate::fdtable::sys_lseek(fd as usize, offset, whence as u32)
+}
+
+/// fcntl(fd, cmd, arg) — POSIX.1
+pub fn fcntl(fd: u64, cmd: u64, arg: u64) -> i64 {
+    match cmd {
+        0 => {
+            // F_DUPFD: dup to lowest fd >= arg
+            crate::fdtable::sys_dupfd(fd as usize, arg as usize)
+        }
+        1 => 0,  // F_GETFD: return 0 (no FD_CLOEXEC)
+        2 => 0,  // F_SETFD: ignore
+        3 => {
+            // F_GETFL: return stored flags
+            unsafe {
+                if (fd as usize) < 64 && crate::fdtable::FD_TABLE[fd as usize].active {
+                    crate::fdtable::FD_TABLE[fd as usize].flags as i64
+                } else {
+                    0
+                }
+            }
+        }
+        4 => 0,  // F_SETFL: ignore
+        _ => 0,
+    }
 }
 
 /// writev(fd, iov, iovcnt) — POSIX.1

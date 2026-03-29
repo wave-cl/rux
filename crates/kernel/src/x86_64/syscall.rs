@@ -167,7 +167,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         60 => posix::exit(a0 as i32),           // _exit
         62 => 0,                                // kill
         63 => posix::uname(a0),
-        72 => 0,                                // fcntl
+        72 => posix::fcntl(a0, a1, a2),
         79 => posix::getcwd(a0, a1),
         80 => posix::chdir(a0),
         83 => posix::mkdir(a0),
@@ -476,7 +476,7 @@ static mut VFORK_PARENT_MMAP_BASE: u64 = 0;
 static mut VFORK_PARENT_PROGRAM_BRK: u64 = 0;
 static mut VFORK_PARENT_CWD_INODE: u64 = 0;
 static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 3] = [crate::fdtable::OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false,
+    ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 }; 3];
 

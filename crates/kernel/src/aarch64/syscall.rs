@@ -39,7 +39,7 @@ pub fn handle_syscall(frame: *mut u8) {
             71 => posix::sendfile(a0, a1, a2, a3),    // sendfile
             23 => posix::dup(a0),                     // dup
             24 => posix::dup2(a0, a1),                // dup3 → dup2
-            25 => 0,                                  // fcntl
+            25 => posix::fcntl(a0, a1, a2),            // fcntl
             29 => posix::ioctl(a0, a1, a2),           // ioctl
             62 => posix::lseek(a0, a1 as i64, a2),    // lseek
             59 => linux::pipe2(a0, a1),                // pipe2
@@ -307,7 +307,7 @@ static mut SAVED_TPIDR: u64 = 0;
 static mut SAVED_MMAP_BASE: u64 = 0;
 static mut SAVED_PROGRAM_BRK: u64 = 0;
 static mut SAVED_FDS: [crate::fdtable::OpenFile; 3] = [crate::fdtable::OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false,
+    ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 }; 3];
 

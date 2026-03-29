@@ -16,13 +16,14 @@ pub struct OpenFile {
     pub offset: usize,
     pub flags: u32,
     pub active: bool,
+    pub is_serial: bool,  // true = fd routes to serial (stdin/stdout/stderr default)
     pub is_pipe: bool,
     pub pipe_id: u8,
     pub pipe_write: bool,
 }
 
 const EMPTY_FD: OpenFile = OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false,
+    ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 };
 
@@ -71,7 +72,7 @@ pub fn sys_open_ino(ino: rux_vfs::InodeId, flags: u32) -> i64 {
                     let _ = fs.truncate(ino, 0);
                 }
                 FD_TABLE[fd] = OpenFile {
-                    ino: ino as u64, offset, flags, active: true,
+                    ino: ino as u64, offset, flags, active: true, is_serial: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                 };
                 return fd as i64;
@@ -96,6 +97,22 @@ pub fn sys_dup(oldfd: usize) -> i64 {
     }
 }
 
+/// Duplicate a file descriptor to the lowest available fd >= minfd.
+/// Used by fcntl(F_DUPFD).
+pub fn sys_dupfd(oldfd: usize, minfd: usize) -> i64 {
+    if oldfd >= MAX_FDS { return -9; }
+    unsafe {
+        if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
+        let start = minfd.max(FIRST_FILE_FD);
+        for newfd in start..MAX_FDS {
+            if !FD_TABLE[newfd].active {
+                return sys_dup2(oldfd, newfd);
+            }
+        }
+        -24 // -EMFILE
+    }
+}
+
 /// Duplicate a file descriptor. Real dup2 implementation.
 pub fn sys_dup2(oldfd: usize, newfd: usize) -> i64 {
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
@@ -106,14 +123,12 @@ pub fn sys_dup2(oldfd: usize, newfd: usize) -> i64 {
         if newfd >= FIRST_FILE_FD && FD_TABLE[newfd].active {
             FD_TABLE[newfd].active = false;
         }
-        if oldfd <= 2 {
-            // Duping stdin/stdout/stderr — create a "serial" fd entry
+        if oldfd <= 2 && (!FD_TABLE[oldfd].active || FD_TABLE[oldfd].is_serial) {
+            // Duping a serial fd (stdin/stdout/stderr not redirected)
             FD_TABLE[newfd] = OpenFile {
-                ino: 0, offset: 0, flags: 0, active: true,
+                ino: 0, offset: 0, flags: 0, active: true, is_serial: true,
                 is_pipe: false, pipe_id: 0, pipe_write: false,
             };
-            // Mark as serial fd (ino=0 + flags bit to distinguish)
-            FD_TABLE[newfd].ino = oldfd as u64; // store original fd for serial routing
         } else {
             FD_TABLE[newfd] = FD_TABLE[oldfd];
         }
@@ -144,7 +159,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<i64, i64> {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if !FD_TABLE[fd].active {
                 FD_TABLE[fd] = OpenFile {
-                    ino: 0, offset: 0, flags: 0, active: true,
+                    ino: 0, offset: 0, flags: 0, active: true, is_serial: false,
                     is_pipe: true, pipe_id, pipe_write: is_write,
                 };
                 return Ok(fd as i64);
