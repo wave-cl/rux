@@ -99,6 +99,19 @@ pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> i64 {
     }
 }
 
+/// Increment reader/writer count (called when dup/dup2 copies a pipe fd).
+pub fn dup_ref(pipe_id: u8, is_write_end: bool) {
+    unsafe {
+        let p = &mut PIPES[pipe_id as usize];
+        if !p.active { return; }
+        if is_write_end {
+            p.writers += 1;
+        } else {
+            p.readers += 1;
+        }
+    }
+}
+
 /// Close one end of a pipe.
 pub fn close(pipe_id: u8, is_write_end: bool) {
     unsafe {

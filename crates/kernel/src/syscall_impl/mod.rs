@@ -89,6 +89,9 @@ pub static mut LAST_CHILD_EXIT: i32 = 0;
 /// Whether there's a child to collect.
 pub static mut CHILD_AVAILABLE: bool = false;
 
+/// Whether we're in a vfork child context (skip pipe ref counting in close).
+pub static mut IN_VFORK_CHILD: bool = false;
+
 // ── Path resolution helper (used by both POSIX and Linux) ───────────
 
 /// Read a C string from user memory into a path slice.

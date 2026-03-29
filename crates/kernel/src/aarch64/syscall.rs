@@ -154,6 +154,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {
+            crate::syscall_impl::IN_VFORK_CHILD = true;
             // Copy 4 pages of the parent's stack for the child.
             use rux_mm::FrameAllocator;
             let alloc = crate::kstate::alloc();
@@ -218,6 +219,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             core::arch::asm!("msr tpidr_el0, {}", in(reg) SAVED_TPIDR, options(nostack));
 
             // Restore process state that exec reset
+            crate::syscall_impl::IN_VFORK_CHILD = false;
             crate::syscall_impl::MMAP_BASE = SAVED_MMAP_BASE;
             crate::syscall_impl::PROGRAM_BRK = SAVED_PROGRAM_BRK;
             crate::syscall_impl::CWD_INODE = SAVED_CWD_INODE;

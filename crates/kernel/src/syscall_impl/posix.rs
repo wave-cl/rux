@@ -186,7 +186,8 @@ const STAT_BLKSIZE_OFF: usize = 56;
 
 pub fn fstat(fd: u64, buf: u64) -> i64 {
     if buf == 0 { return -14; }
-    if fd <= 2 {
+    if fd <= 2 && is_serial_fd(fd) {
+        // Default serial (not redirected to file/pipe)
         unsafe {
             let p = buf as *mut u8;
             for i in 0..144 { *p.add(i) = 0; }
@@ -194,6 +195,19 @@ pub fn fstat(fd: u64, buf: u64) -> i64 {
             *((buf + STAT_BLKSIZE_OFF as u64) as *mut u32) = 4096;
         }
         return 0;
+    }
+    if fd <= 2 {
+        // fd 0-2 redirected to pipe — return FIFO stat
+        unsafe {
+            let f = &crate::fdtable::FD_TABLE[fd as usize];
+            if f.is_pipe {
+                let p = buf as *mut u8;
+                for i in 0..144 { *p.add(i) = 0; }
+                *((buf + STAT_MODE_OFF as u64) as *mut u32) = 0o10666; // S_IFIFO | 0666
+                *((buf + STAT_BLKSIZE_OFF as u64) as *mut u32) = 4096;
+                return 0;
+            }
+        }
     }
     // Look up real inode stat from VFS
     unsafe {

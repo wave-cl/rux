@@ -514,6 +514,7 @@ fn syscall_vfork_linux() -> i64 {
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {
+            crate::syscall_impl::IN_VFORK_CHILD = true;
             // Child path: give it a COPY of the parent's stack so it doesn't
             // corrupt the parent's stack between fork-return and execve.
             use rux_mm::FrameAllocator;
@@ -559,6 +560,7 @@ fn syscall_vfork_linux() -> i64 {
             }
             serial::write_str("rux: vfork parent resumed\n");
             VFORK_JMP.rsp = 0;
+            crate::syscall_impl::IN_VFORK_CHILD = false;
 
             // Restore process state that exec reset
             crate::syscall_impl::MMAP_BASE = VFORK_PARENT_MMAP_BASE;

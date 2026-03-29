@@ -119,8 +119,11 @@ pub fn sys_dup2(oldfd: usize, newfd: usize) -> i64 {
     unsafe {
         // For stdin/stdout/stderr (0-2), allow dup2 even if not "active" in table
         if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
-        // Close newfd if it's currently open
-        if newfd >= FIRST_FILE_FD && FD_TABLE[newfd].active {
+        // Close newfd if it's currently open (including pipe cleanup)
+        if FD_TABLE[newfd].active {
+            if FD_TABLE[newfd].is_pipe && !crate::syscall_impl::IN_VFORK_CHILD {
+                crate::pipe::close(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
+            }
             FD_TABLE[newfd].active = false;
         }
         if oldfd <= 2 && (!FD_TABLE[oldfd].active || FD_TABLE[oldfd].is_serial) {
@@ -131,6 +134,10 @@ pub fn sys_dup2(oldfd: usize, newfd: usize) -> i64 {
             };
         } else {
             FD_TABLE[newfd] = FD_TABLE[oldfd];
+            // Increment pipe ref count for the dup'd fd (skip in vfork child)
+            if FD_TABLE[newfd].is_pipe && !crate::syscall_impl::IN_VFORK_CHILD {
+                crate::pipe::dup_ref(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
+            }
         }
     }
     newfd as i64
@@ -145,7 +152,9 @@ pub fn sys_close(fd: usize) -> i64 {
         if !FD_TABLE[fd].active {
             return -9;
         }
-        if FD_TABLE[fd].is_pipe {
+        // Skip pipe ref count changes in vfork child — the fd table
+        // is fully restored on parent resume, so child closes are no-ops.
+        if FD_TABLE[fd].is_pipe && !crate::syscall_impl::IN_VFORK_CHILD {
             crate::pipe::close(FD_TABLE[fd].pipe_id, FD_TABLE[fd].pipe_write);
         }
         FD_TABLE[fd].active = false;
