@@ -72,6 +72,17 @@ pub static mut PROGRAM_BRK: u64 = 0;
 /// Next anonymous mmap virtual address.
 pub static mut MMAP_BASE: u64 = 0x10000000;
 
+/// Current working directory inode (0 = root).
+pub static mut CWD_INODE: u64 = 0;
+
+/// Current working directory path (for getcwd). Null-terminated.
+pub static mut CWD_PATH: [u8; 256] = {
+    let mut buf = [0u8; 256];
+    buf[0] = b'/';
+    buf
+};
+pub static mut CWD_PATH_LEN: usize = 1;
+
 /// Child exit status for wait4.
 pub static mut LAST_CHILD_EXIT: i32 = 0;
 
@@ -80,29 +91,49 @@ pub static mut CHILD_AVAILABLE: bool = false;
 
 // ── Path resolution helper (used by both POSIX and Linux) ───────────
 
-/// Resolve a path to (parent_inode, basename).
-pub unsafe fn resolve_parent_and_name(path_ptr: u64) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
-    use rux_vfs::FileSystem;
+/// Read a C string from user memory into a path slice.
+pub unsafe fn read_user_path(path_ptr: u64) -> &'static [u8] {
     let cstr = path_ptr as *const u8;
     let mut len = 0usize;
     while *cstr.add(len) != 0 && len < 256 { len += 1; }
-    let path = core::slice::from_raw_parts(cstr, len);
+    core::slice::from_raw_parts(cstr, len)
+}
 
-    let mut last_slash = 0;
-    for j in 0..len {
-        if path[j] == b'/' { last_slash = j; }
+/// Resolve a path using CWD for relative paths.
+pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_vfs::InodeId, i64> {
+    let fs = crate::kstate::fs();
+    rux_vfs::path::resolve_path_at(fs, CWD_INODE, path).map_err(|_| -2i64)
+}
+
+/// Resolve a path to (parent_inode, basename).
+pub unsafe fn resolve_parent_and_name(path_ptr: u64) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
+    use rux_vfs::FileSystem;
+    let path = read_user_path(path_ptr);
+
+    let mut last_slash = None;
+    for j in 0..path.len() {
+        if path[j] == b'/' { last_slash = Some(j); }
     }
 
     let fs = crate::kstate::fs();
-    if last_slash == 0 {
-        let name = &path[1..];
-        Ok((fs.root_inode(), name))
-    } else {
-        let parent_path = &path[..last_slash];
-        let name = &path[last_slash + 1..];
-        match rux_vfs::path::resolve_path(fs, parent_path) {
-            Ok(parent_ino) => Ok((parent_ino, name)),
-            Err(_) => Err(-2),
+    match last_slash {
+        Some(0) => {
+            // "/foo" → parent is root, name is everything after '/'
+            let name = &path[1..];
+            Ok((fs.root_inode(), name))
+        }
+        Some(s) => {
+            // "/a/b/foo" or "a/b/foo" → resolve parent, name is after last slash
+            let parent_path = &path[..s];
+            let name = &path[s + 1..];
+            match rux_vfs::path::resolve_path_at(fs, CWD_INODE, parent_path) {
+                Ok(parent_ino) => Ok((parent_ino, name)),
+                Err(_) => Err(-2),
+            }
+        }
+        None => {
+            // "foo" (no slash) → parent is CWD
+            Ok((CWD_INODE, path))
         }
     }
 }

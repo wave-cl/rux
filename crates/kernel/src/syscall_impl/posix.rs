@@ -37,11 +37,14 @@ pub fn write(fd: u64, buf: u64, len: u64) -> i64 {
 /// open(pathname, flags, ...) — POSIX.1
 pub fn open(path_ptr: u64) -> i64 {
     unsafe {
-        let cstr = path_ptr as *const u8;
-        let mut len = 0usize;
-        while *cstr.add(len) != 0 && len < 256 { len += 1; }
-        let path = core::slice::from_raw_parts(cstr, len);
-        crate::fdtable::sys_open(path)
+        let path = super::read_user_path(path_ptr);
+        if path.is_empty() { return -2; }
+        // Resolve with CWD for relative paths, then open by inode
+        let ino = match super::resolve_with_cwd(path) {
+            Ok(ino) => ino,
+            Err(e) => return e,
+        };
+        crate::fdtable::sys_open_ino(ino)
     }
 }
 
@@ -123,14 +126,11 @@ pub fn fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
     if buf == 0 { return -14; }
     unsafe {
         use rux_vfs::FileSystem;
-        let cstr = pathname as *const u8;
-        let mut len = 0usize;
-        while *cstr.add(len) != 0 && len < 256 { len += 1; }
-        let path = core::slice::from_raw_parts(cstr, len);
+        let path = super::read_user_path(pathname);
         let fs = crate::kstate::fs();
-        let ino = match rux_vfs::path::resolve_path(fs, path) {
+        let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
-            Err(_) => return -2,
+            Err(e) => return e,
         };
         let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
         if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
@@ -143,7 +143,55 @@ pub fn fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
 
 /// openat(dirfd, pathname, flags, ...) — POSIX.1-2008
 pub fn openat(_dirfd: u64, pathname: u64) -> i64 {
+    // AT_FDCWD (-100) handled implicitly — open() uses CWD for relative paths.
     open(pathname)
+}
+
+/// chdir(path) — POSIX.1
+pub fn chdir(path_ptr: u64) -> i64 {
+    unsafe {
+        use rux_vfs::FileSystem;
+        let path = super::read_user_path(path_ptr);
+        if path.is_empty() { return -2; }
+
+        let fs = crate::kstate::fs();
+        let ino = match super::resolve_with_cwd(path) {
+            Ok(ino) => ino,
+            Err(e) => return e,
+        };
+
+        // Verify it's a directory
+        let mut stat = core::mem::zeroed::<rux_vfs::InodeStat>();
+        if fs.stat(ino, &mut stat).is_err() { return -2; }
+        if stat.mode & rux_vfs::S_IFMT != rux_vfs::S_IFDIR {
+            return -20; // -ENOTDIR
+        }
+
+        super::CWD_INODE = ino;
+
+        // Update CWD_PATH: build absolute path
+        if path[0] == b'/' {
+            // Absolute: just copy it
+            let len = path.len().min(255);
+            super::CWD_PATH[..len].copy_from_slice(&path[..len]);
+            super::CWD_PATH[len] = 0;
+            super::CWD_PATH_LEN = len;
+        } else {
+            // Relative: append to current CWD
+            let cur_len = super::CWD_PATH_LEN;
+            let need_slash = cur_len > 0 && super::CWD_PATH[cur_len - 1] != b'/';
+            let mut pos = cur_len;
+            if need_slash && pos < 255 { super::CWD_PATH[pos] = b'/'; pos += 1; }
+            for &b in path {
+                if pos >= 255 { break; }
+                super::CWD_PATH[pos] = b;
+                pos += 1;
+            }
+            super::CWD_PATH[pos] = 0;
+            super::CWD_PATH_LEN = pos;
+        }
+        0
+    }
 }
 
 /// mkdir(pathname, mode) — POSIX.1
@@ -254,11 +302,14 @@ pub fn waitpid(_pid: u64, wstatus_ptr: u64, _options: u64) -> i64 {
 
 /// getcwd(buf, size) — POSIX.1
 pub fn getcwd(buf: u64, size: u64) -> i64 {
-    if buf == 0 || size < 2 { return -34; }
     unsafe {
+        let len = super::CWD_PATH_LEN;
+        if buf == 0 || size < (len + 1) as u64 { return -34; } // -ERANGE
         let ptr = buf as *mut u8;
-        *ptr = b'/';
-        *ptr.add(1) = 0;
+        for i in 0..len {
+            *ptr.add(i) = super::CWD_PATH[i];
+        }
+        *ptr.add(len) = 0;
     }
     buf as i64
 }

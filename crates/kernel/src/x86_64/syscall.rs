@@ -166,7 +166,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         63 => posix::uname(a0),
         72 => 0,                                // fcntl
         79 => posix::getcwd(a0, a1),
-        80 => 0,                                // chdir
+        80 => posix::chdir(a0),
         83 => posix::mkdir(a0),
         87 => posix::unlink(a0),
         96 => crate::syscall_impl::arch::ticks() as i64,
@@ -470,6 +470,7 @@ static mut VFORK_PARENT_USER_RSP: u64 = 0;
 static mut VFORK_PARENT_FS_BASE: u64 = 0;
 static mut VFORK_PARENT_MMAP_BASE: u64 = 0;
 static mut VFORK_PARENT_PROGRAM_BRK: u64 = 0;
+static mut VFORK_PARENT_CWD_INODE: u64 = 0;
 
 #[inline(never)]
 fn syscall_vfork_linux() -> i64 {
@@ -496,6 +497,7 @@ fn syscall_vfork_linux() -> i64 {
         // Save process state that exec resets
         VFORK_PARENT_MMAP_BASE = crate::syscall_impl::MMAP_BASE;
         VFORK_PARENT_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
+        VFORK_PARENT_CWD_INODE = crate::syscall_impl::CWD_INODE;
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
@@ -550,6 +552,7 @@ fn syscall_vfork_linux() -> i64 {
             // Restore process state that exec reset
             crate::syscall_impl::MMAP_BASE = VFORK_PARENT_MMAP_BASE;
             crate::syscall_impl::PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
+            crate::syscall_impl::CWD_INODE = VFORK_PARENT_CWD_INODE;
 
             // Restore IA32_FS_BASE (TLS) — child's exec overwrote it
             {

@@ -15,29 +15,47 @@ const SYMLOOP_MAX: usize = 8;
 /// - Empty path returns `InvalidPath`.
 #[inline]
 pub fn resolve_path<F: FileSystem>(fs: &F, path: &[u8]) -> Result<InodeId, VfsError> {
-    resolve_path_inner(fs, path, SYMLOOP_MAX)
+    resolve_path_inner(fs, fs.root_inode(), path, SYMLOOP_MAX)
+}
+
+/// Resolve a path relative to a starting directory inode.
+///
+/// - If path starts with `/`, resolves from root (absolute).
+/// - Otherwise, resolves from `start` (relative to CWD).
+/// - Empty path returns `start` (the directory itself).
+#[inline]
+pub fn resolve_path_at<F: FileSystem>(
+    fs: &F,
+    start: InodeId,
+    path: &[u8],
+) -> Result<InodeId, VfsError> {
+    if path.is_empty() {
+        return Ok(start);
+    }
+    if path[0] == b'/' {
+        return resolve_path_inner(fs, fs.root_inode(), path, SYMLOOP_MAX);
+    }
+    resolve_path_inner(fs, start, path, SYMLOOP_MAX)
 }
 
 fn resolve_path_inner<F: FileSystem>(
     fs: &F,
+    start: InodeId,
     path: &[u8],
     symlinks_left: usize,
 ) -> Result<InodeId, VfsError> {
     if path.is_empty() {
-        return Err(VfsError::InvalidPath);
-    }
-    if path[0] != b'/' {
-        return Err(VfsError::InvalidPath);
+        return Ok(start);
     }
 
     let root = fs.root_inode();
-    let mut current = root;
+    let mut current = if path[0] == b'/' { root } else { start };
 
     // Stack tracks the chain of parents for ".." handling.
     let mut parent_stack = [root; MAX_DEPTH];
     let mut depth: usize = 0;
 
-    let mut i = 1; // skip leading '/'
+    let mut i = if path[0] == b'/' { 1 } else { 0 }; // skip leading '/' if absolute
     let len = path.len();
 
     while i < len {
@@ -97,7 +115,7 @@ fn resolve_path_inner<F: FileSystem>(
                 let mut fp = 0;
                 for &b in target { if fp < 512 { full[fp] = b; fp += 1; } }
                 for &b in remaining { if fp < 512 { full[fp] = b; fp += 1; } }
-                return resolve_path_inner(fs, &full[..fp], symlinks_left - 1);
+                return resolve_path_inner(fs, root, &full[..fp], symlinks_left - 1);
             } else {
                 // Relative symlink: look up target in the parent directory.
                 // Parent is parent_stack[depth-1] (we pushed before lookup).

@@ -54,7 +54,7 @@ pub fn handle_syscall(frame: *mut u8) {
             33 => posix::creat(a0),                   // mknodat → creat
             34 => posix::mkdir(a0),                   // mkdirat
             35 => posix::unlink(a0),                  // unlinkat
-            49 => 0,                                  // chdir (stub)
+            49 => posix::chdir(a0),                    // chdir
 
             // Memory management
             222 => posix::mmap(a0, a1, a2, a3, a4),   // mmap
@@ -145,6 +145,8 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
         // Save process state that exec resets
         SAVED_MMAP_BASE = crate::syscall_impl::MMAP_BASE;
         SAVED_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
+        static mut SAVED_CWD_INODE: u64 = 0;
+        SAVED_CWD_INODE = crate::syscall_impl::CWD_INODE;
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
@@ -216,6 +218,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             // Restore process state that exec reset
             crate::syscall_impl::MMAP_BASE = SAVED_MMAP_BASE;
             crate::syscall_impl::PROGRAM_BRK = SAVED_PROGRAM_BRK;
+            crate::syscall_impl::CWD_INODE = SAVED_CWD_INODE;
 
             // Restore frame and eret directly (kernel stack is corrupted).
             let frame = SAVED_REGS_PTR;

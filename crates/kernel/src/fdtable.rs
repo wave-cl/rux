@@ -30,24 +30,28 @@ pub fn get_fd_inode(fd: usize) -> Option<u64> {
     }
 }
 
-/// Open a file by path. Returns fd on success, negative errno on failure.
+/// Open a file by path (absolute only — legacy). Returns fd.
 pub fn sys_open(path: &[u8]) -> i64 {
     unsafe {
         let fs = crate::kstate::fs();
-
         let ino = match rux_vfs::path::resolve_path(fs, path) {
             Ok(ino) => ino,
-            Err(_) => return -2, // -ENOENT
+            Err(_) => return -2,
         };
+        sys_open_ino(ino)
+    }
+}
 
-        // Find a free fd slot
+/// Open a file by inode. Returns fd on success, negative errno on failure.
+pub fn sys_open_ino(ino: rux_vfs::InodeId) -> i64 {
+    unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if !FD_TABLE[fd].active {
                 FD_TABLE[fd] = OpenFile { ino: ino as u64, offset: 0, active: true };
                 return fd as i64;
             }
         }
-        -24 // -EMFILE (too many open files)
+        -24 // -EMFILE
     }
 }
 
