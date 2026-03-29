@@ -468,6 +468,8 @@ fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
 static mut VFORK_PARENT_REGS: [u64; 15] = [0; 15];
 static mut VFORK_PARENT_USER_RSP: u64 = 0;
 static mut VFORK_PARENT_FS_BASE: u64 = 0;
+static mut VFORK_PARENT_MMAP_BASE: u64 = 0;
+static mut VFORK_PARENT_PROGRAM_BRK: u64 = 0;
 
 #[inline(never)]
 fn syscall_vfork_linux() -> i64 {
@@ -490,6 +492,10 @@ fn syscall_vfork_linux() -> i64 {
             core::arch::asm!("rdmsr", in("ecx") 0xC0000100u32, out("eax") lo, out("edx") hi, options(nostack));
             VFORK_PARENT_FS_BASE = (hi as u64) << 32 | lo as u64;
         }
+
+        // Save process state that exec resets
+        VFORK_PARENT_MMAP_BASE = crate::syscall_impl::MMAP_BASE;
+        VFORK_PARENT_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
 
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
@@ -540,6 +546,10 @@ fn syscall_vfork_linux() -> i64 {
             }
             serial::write_str("rux: vfork parent resumed\n");
             VFORK_JMP.rsp = 0;
+
+            // Restore process state that exec reset
+            crate::syscall_impl::MMAP_BASE = VFORK_PARENT_MMAP_BASE;
+            crate::syscall_impl::PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
 
             // Restore IA32_FS_BASE (TLS) — child's exec overwrote it
             {

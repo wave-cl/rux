@@ -303,16 +303,58 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
         14 => {
             let cr2: u64;
             unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nostack)); }
-            super::serial::write_str("PAGE FAULT: addr=");
-            crate::write_hex_serial(cr2 as usize);
-            super::serial::write_str(" err=");
-            crate::write_hex_serial(error_code as usize);
-            super::serial::write_str(" rcx=");
-            crate::write_hex_serial(unsafe { super::syscall::DEBUG_RCX } as usize);
-            super::serial::write_str(" fs=");
-            crate::write_hex_serial(unsafe { super::syscall::DEBUG_FS } as usize);
-            super::serial::write_byte(b'\n');
-            panic!("Page fault at {:#x} (error_code={:#x})", cr2, error_code);
+            let cr3: u64;
+            unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack)); }
+            let fs_lo: u32;
+            let fs_hi: u32;
+            unsafe { core::arch::asm!("rdmsr", in("ecx") 0xC0000100u32, out("eax") fs_lo, out("edx") fs_hi, options(nostack)); }
+            let fs_base = (fs_hi as u64) << 32 | fs_lo as u64;
+
+            unsafe {
+                let r = frame as *const u64;
+                // frame layout: r15..r8, rbp, rdi, rsi, rdx, rcx, rbx, rax, vec, err, rip, cs, rfl, rsp, ss
+                let user = error_code & 4 != 0;
+                super::serial::write_str(if user { "\n=== USER PAGE FAULT ===\n" } else { "\n=== KERNEL PAGE FAULT ===\n" });
+                super::serial::write_str("  fault addr: "); crate::write_hex_serial(cr2 as usize);
+                super::serial::write_str("  err: "); crate::write_hex_serial(error_code as usize); super::serial::write_byte(b'\n');
+                super::serial::write_str("  rip: "); crate::write_hex_serial(*r.add(17) as usize);
+                super::serial::write_str("  rsp: "); crate::write_hex_serial(*r.add(20) as usize); super::serial::write_byte(b'\n');
+                super::serial::write_str("  rax: "); crate::write_hex_serial(*r.add(14) as usize);
+                super::serial::write_str("  rbx: "); crate::write_hex_serial(*r.add(13) as usize); super::serial::write_byte(b'\n');
+                super::serial::write_str("  rcx: "); crate::write_hex_serial(*r.add(12) as usize);
+                super::serial::write_str("  rdx: "); crate::write_hex_serial(*r.add(11) as usize); super::serial::write_byte(b'\n');
+                super::serial::write_str("  rdi: "); crate::write_hex_serial(*r.add(9) as usize);
+                super::serial::write_str("  rsi: "); crate::write_hex_serial(*r.add(10) as usize); super::serial::write_byte(b'\n');
+                super::serial::write_str("  rbp: "); crate::write_hex_serial(*r.add(8) as usize);
+                super::serial::write_str("  r8:  "); crate::write_hex_serial(*r.add(7) as usize); super::serial::write_byte(b'\n');
+                super::serial::write_str("  cr3: "); crate::write_hex_serial(cr3 as usize);
+                super::serial::write_str("  fs:  "); crate::write_hex_serial(fs_base as usize); super::serial::write_byte(b'\n');
+
+                // Translate a few interesting VAs through the current page table
+                let upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+                    rux_klib::PhysAddr::new(cr3 as usize));
+                for &va in &[cr2 as usize, 0x10001000usize] {
+                    match upt.translate(rux_klib::VirtAddr::new(va)) {
+                        Ok(pa) => {
+                            super::serial::write_str("  translate 0x");
+                            crate::write_hex_serial(va);
+                            super::serial::write_str(" -> 0x");
+                            crate::write_hex_serial(pa.as_usize());
+                            // Read first 8 bytes at that PA
+                            let v = *(pa.as_usize() as *const u64);
+                            super::serial::write_str(" [0x");
+                            crate::write_hex_serial(v as usize);
+                            super::serial::write_str("]\n");
+                        }
+                        Err(_) => {
+                            super::serial::write_str("  translate 0x");
+                            crate::write_hex_serial(va);
+                            super::serial::write_str(" -> NOT MAPPED\n");
+                        }
+                    }
+                }
+            }
+            panic!("page fault");
         }
         32 => {
             // Timer tick

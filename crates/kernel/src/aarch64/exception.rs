@@ -30,12 +30,10 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             let ec = esr_ec(esr);
             match ec {
                 0b100100 | 0b100101 => {
-                    // Data abort (from EL1 or EL0)
-                    panic_serial("Data abort at ", far);
+                    dump_user_fault("KERNEL DATA ABORT", far, esr, _frame);
                 }
                 0b100000 | 0b100001 => {
-                    // Instruction abort
-                    panic_serial("Instruction abort at ", far);
+                    dump_user_fault("KERNEL INSTR ABORT", far, esr, _frame);
                 }
                 0b010101 => {
                     // SVC (syscall from EL0)
@@ -68,10 +66,10 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     super::syscall::handle_syscall(_frame as *mut u8);
                 }
                 0b100100 | 0b100101 => {
-                    panic_serial("User data abort at ", far);
+                    dump_user_fault("USER DATA ABORT", far, esr, _frame);
                 }
                 0b100000 | 0b100001 => {
-                    panic_serial("User instruction abort at ", far);
+                    dump_user_fault("USER INSTR ABORT", far, esr, _frame);
                 }
                 _ => {
                     super::serial::write_str("rux: user sync EC=");
@@ -94,6 +92,38 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             super::serial::write_str("\n");
         }
     }
+}
+
+fn dump_user_fault(label: &str, far: u64, esr: u64, frame: *const u8) {
+    let s = super::serial::write_str;
+    let h = |v: usize| crate::write_hex_serial(v);
+    unsafe {
+        let r = frame as *const u64;
+        // frame: x0..x29(30 regs), x30(lr), elr_el1, spsr_el1
+        let elr = *r.add(31);
+        let sp_el0: u64;
+        core::arch::asm!("mrs {}, sp_el0", out(reg) sp_el0, options(nostack));
+        let ttbr0: u64;
+        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
+        let tpidr: u64;
+        core::arch::asm!("mrs {}, tpidr_el0", out(reg) tpidr, options(nostack));
+
+        s("\n=== "); s(label); s(" ===\n");
+        s("  far:  "); h(far as usize); s("  esr: "); h(esr as usize); s("\n");
+        s("  elr:  "); h(elr as usize); s("  sp:  "); h(sp_el0 as usize); s("\n");
+        s("  x0:   "); h(*r.add(0) as usize); s("  x1:  "); h(*r.add(1) as usize); s("\n");
+        s("  x2:   "); h(*r.add(2) as usize); s("  x3:  "); h(*r.add(3) as usize); s("\n");
+        s("  x8:   "); h(*r.add(8) as usize); s("  x29: "); h(*r.add(29) as usize); s("\n");
+        s("  x30:  "); h(*r.add(30) as usize); s("\n");
+        s("  ttbr0:"); h(ttbr0 as usize); s("  tpidr:"); h(tpidr as usize); s("\n");
+
+        // Try to read the faulting instruction (if elr is in mapped range)
+        if elr >= 0x400000 && elr < 0x600000 {
+            let insn = *(elr as *const u32);
+            s("  insn: "); h(insn as usize); s("\n");
+        }
+    }
+    super::exit::exit_qemu(super::exit::EXIT_FAILURE);
 }
 
 fn panic_serial(msg: &str, addr: u64) {

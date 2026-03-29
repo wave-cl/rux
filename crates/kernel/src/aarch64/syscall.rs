@@ -142,6 +142,10 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
         // Save TPIDR_EL0 (TLS base) — musl uses it; child's exec overwrites it
         core::arch::asm!("mrs {}, tpidr_el0", out(reg) SAVED_TPIDR, options(nostack));
 
+        // Save process state that exec resets
+        SAVED_MMAP_BASE = crate::syscall_impl::MMAP_BASE;
+        SAVED_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
+
         crate::syscall_impl::CHILD_AVAILABLE = true;
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
@@ -208,6 +212,10 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             // Restore SP_EL0 and TPIDR_EL0 (TLS base)
             core::arch::asm!("msr sp_el0, {}", in(reg) SAVED_SP_EL0, options(nostack));
             core::arch::asm!("msr tpidr_el0, {}", in(reg) SAVED_TPIDR, options(nostack));
+
+            // Restore process state that exec reset
+            crate::syscall_impl::MMAP_BASE = SAVED_MMAP_BASE;
+            crate::syscall_impl::PROGRAM_BRK = SAVED_PROGRAM_BRK;
 
             // Restore frame and eret directly (kernel stack is corrupted).
             let frame = SAVED_REGS_PTR;
@@ -290,6 +298,8 @@ static mut SAVED_SP_EL0: u64 = 0;
 static mut SAVED_TTBR0: u64 = 0;
 static mut SAVED_REGS_PTR: *mut u64 = core::ptr::null_mut();
 static mut SAVED_TPIDR: u64 = 0;
+static mut SAVED_MMAP_BASE: u64 = 0;
+static mut SAVED_PROGRAM_BRK: u64 = 0;
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"
