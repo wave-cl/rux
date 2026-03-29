@@ -24,7 +24,20 @@ pub fn read(fd: u64, buf: u64, len: u64) -> i64 {
         unsafe {
             let ptr = buf as *mut u8;
             for i in 0..len as usize {
-                *ptr.add(i) = arch::serial_read_byte();
+                let b = arch::serial_read_byte();
+                if b == 0x03 {
+                    // Ctrl+C: return -EINTR if we haven't read anything,
+                    // or return what we have so far
+                    if i == 0 {
+                        return -4; // -EINTR
+                    }
+                    return i as i64;
+                }
+                *ptr.add(i) = b;
+                // Return after newline (line-buffered input)
+                if b == b'\n' {
+                    return (i + 1) as i64;
+                }
             }
         }
         return len as i64;
