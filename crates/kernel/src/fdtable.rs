@@ -14,10 +14,10 @@ const FIRST_FILE_FD: usize = 3;
 pub struct OpenFile {
     pub ino: u64,
     pub offset: usize,
-    active: bool,
+    pub active: bool,
 }
 
-static mut FD_TABLE: [OpenFile; MAX_FDS] = [OpenFile { ino: 0, offset: 0, active: false }; MAX_FDS];
+pub static mut FD_TABLE: [OpenFile; MAX_FDS] = [OpenFile { ino: 0, offset: 0, active: false }; MAX_FDS];
 
 /// Get the inode for a file descriptor (for getdents to read directory).
 pub fn get_fd_inode(fd: usize) -> Option<u64> {

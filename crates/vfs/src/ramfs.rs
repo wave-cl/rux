@@ -148,12 +148,13 @@ impl RamFs {
         (*this).alloc = alloc;
         (*this).next_inode = 1;
 
-        // Set all inode direct pages to NO_PAGE (u64::MAX, not 0)
+        // Set all inode direct/indirect pages to NO_PAGE (u64::MAX, not 0)
         for i in 0..MAX_INODES {
             for d in 0..12 {
                 (*this).inodes[i].direct[d] = NO_PAGE;
             }
             (*this).inodes[i].indirect = NO_PAGE;
+            (*this).inodes[i].indirect2 = NO_PAGE;
         }
 
         // Allocate a page for root directory entries

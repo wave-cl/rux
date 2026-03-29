@@ -112,11 +112,22 @@ pub fn fstat(fd: u64, buf: u64) -> i64 {
         }
         return 0;
     }
+    // Look up real inode stat from VFS
     unsafe {
-        let p = buf as *mut u8;
-        for i in 0..144 { *p.add(i) = 0; }
-        *((buf + STAT_MODE_OFF as u64) as *mut u32) = 0o100644;
-        *((buf + STAT_BLKSIZE_OFF as u64) as *mut u32) = 4096;
+        use rux_vfs::FileSystem;
+        let f = &crate::fdtable::FD_TABLE[fd as usize];
+        if !f.active { return -9; }
+        let fs = crate::kstate::fs();
+        let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
+        if fs.stat(f.ino, &mut vfs_stat).is_err() {
+            // Fallback to generic file stat
+            let p = buf as *mut u8;
+            for i in 0..144 { *p.add(i) = 0; }
+            *((buf + STAT_MODE_OFF as u64) as *mut u32) = 0o100644;
+            *((buf + STAT_BLKSIZE_OFF as u64) as *mut u32) = 4096;
+            return 0;
+        }
+        super::fill_linux_stat(buf, &vfs_stat);
     }
     0
 }
