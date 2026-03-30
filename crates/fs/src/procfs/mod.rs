@@ -25,8 +25,9 @@ const INO_MEMINFO: InodeId = 2;
 const INO_STAT: InodeId = 3;
 const INO_VERSION: InodeId = 4;
 const INO_LOADAVG: InodeId = 5;
+const INO_SELF: InodeId = 6; // symlink "self" → "1"
 
-const NUM_SYS_ENTRIES: usize = 5;
+const NUM_SYS_ENTRIES: usize = 6;
 
 const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"uptime", INO_UPTIME),
@@ -34,6 +35,7 @@ const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"stat", INO_STAT),
     (b"version", INO_VERSION),
     (b"loadavg", INO_LOADAVG),
+    (b"self", INO_SELF),
 ];
 
 const PID_DIR_BASE: InodeId = 100;
@@ -209,6 +211,13 @@ impl FileSystem for ProcFs {
         buf.ino = ino;
         buf.blksize = 4096;
 
+        if ino == INO_SELF {
+            buf.mode = crate::S_IFLNK | 0o777;
+            buf.nlink = 1;
+            buf.size = 1;
+            return Ok(());
+        }
+
         if ino == INO_ROOT || is_pid_dir(ino) {
             let pid = if is_pid_dir(ino) { pid_from_dir(ino) } else { 0 };
             if is_pid_dir(ino) && !self.pid_exists(pid) {
@@ -287,7 +296,7 @@ impl FileSystem for ProcFs {
             if offset < NUM_SYS_ENTRIES {
                 let (name, ino) = SYS_ENTRIES[offset];
                 buf.ino = ino;
-                buf.kind = InodeType::File;
+                buf.kind = if ino == INO_SELF { InodeType::Symlink } else { InodeType::File };
                 buf.name_len = name.len() as u8;
                 buf.name[..name.len()].copy_from_slice(name);
                 return Ok(true);
@@ -327,7 +336,13 @@ impl FileSystem for ProcFs {
     fn rmdir(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
     fn link(&mut self, _dir: InodeId, _name: FileName<'_>, _target: InodeId) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
     fn symlink(&mut self, _dir: InodeId, _name: FileName<'_>, _target: &[u8]) -> Result<InodeId, VfsError> { Err(VfsError::ReadOnly) }
-    fn readlink(&self, _ino: InodeId, _buf: &mut [u8]) -> Result<usize, VfsError> { Err(VfsError::NotSupported) }
+    fn readlink(&self, ino: InodeId, buf: &mut [u8]) -> Result<usize, VfsError> {
+        if ino == INO_SELF && !buf.is_empty() {
+            buf[0] = b'1';
+            return Ok(1);
+        }
+        Err(VfsError::NotSupported)
+    }
     fn rename(&mut self, _old_dir: InodeId, _old_name: FileName<'_>, _new_dir: InodeId, _new_name: FileName<'_>) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
     fn chmod(&mut self, _ino: InodeId, _mode: u32) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
     fn chown(&mut self, _ino: InodeId, _uid: u32, _gid: u32) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
