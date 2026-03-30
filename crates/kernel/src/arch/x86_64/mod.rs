@@ -16,6 +16,15 @@ core::arch::global_asm!(include_str!("boot.S"));
 /// Zero-sized marker type for x86_64 architecture trait implementations.
 pub struct X86_64;
 
+impl rux_arch::ArchSpecificOps for X86_64 {
+    fn arch_syscall(nr: u64, a0: u64, a1: u64) -> Option<i64> {
+        match nr {
+            158 => Some(syscall::syscall_arch_prctl(a0, a1)),
+            _ => None,
+        }
+    }
+}
+
 impl rux_arch::BootOps for X86_64 {
     fn boot_init(arg: usize) { init::x86_64_init(arg); }
 }
@@ -36,22 +45,18 @@ impl rux_arch::ArchInfo for X86_64 {
 }
 
 impl super::StatLayout for X86_64 {
-    const STAT_MODE_OFF: usize = 24;
-    const STAT_BLKSIZE_OFF: usize = 56;
-
-    unsafe fn fill_stat(buf: u64, vfs_stat: &rux_vfs::InodeStat) {
-        let p = buf as *mut u8;
-        for i in 0..144 { *p.add(i) = 0; }
-        *(buf as *mut u64) = 0;                            // st_dev
-        *((buf + 8) as *mut u64) = vfs_stat.ino;           // st_ino
-        *((buf + 16) as *mut u64) = vfs_stat.nlink as u64; // st_nlink (u64!)
-        *((buf + 24) as *mut u32) = vfs_stat.mode;         // st_mode
-        *((buf + 28) as *mut u32) = vfs_stat.uid;          // st_uid
-        *((buf + 32) as *mut u32) = vfs_stat.gid;          // st_gid
-        *((buf + 48) as *mut i64) = vfs_stat.size as i64;  // st_size
-        *((buf + 56) as *mut i64) = 4096;                  // st_blksize
-        *((buf + 64) as *mut i64) = vfs_stat.blocks as i64; // st_blocks
-    }
+    const STAT_SIZE: usize = 144;
+    const INO_OFF: usize = 8;
+    const NLINK_OFF: usize = 16;
+    const NLINK_IS_U64: bool = true;
+    const MODE_OFF: usize = 24;
+    const UID_OFF: usize = 28;
+    const GID_OFF: usize = 32;
+    const RDEV_OFF: usize = 0; // skip
+    const SIZE_OFF: usize = 48;
+    const BLKSIZE_OFF: usize = 56;
+    const BLKSIZE_IS_I64: bool = true;
+    const BLOCKS_OFF: usize = 64;
 }
 
 unsafe impl super::KernelMapOps for X86_64 {

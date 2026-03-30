@@ -124,123 +124,105 @@ unsafe extern "C" fn syscall_entry() {
 /// Called from the assembly entry point with syscall number and arguments.
 #[no_mangle]
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
-    // Keep interrupts disabled during syscall handling for now
-    // (enabling would require saving/restoring more state on timer IRQ)
+    use crate::syscall::Syscall;
 
-    let mut nb = [0u8; 10]; let _ = nb;
+    // Vfork/exec must be handled here (arch-specific state machine)
+    match nr {
+        56 | 57 => return syscall_vfork_linux(),  // clone/fork as vfork
+        59 => { unsafe { syscall_exec(a0, a1); } return 0; } // execve
+        _ => {}
+    }
 
-    use crate::syscall::{posix, linux};
+    // Everything else goes through generic dispatch
+    let sc = translate_x86_64(nr);
+    crate::syscall::dispatch(sc, a0, a1, a2, a3, a4)
+}
 
-    let result = match nr {
-        // ── POSIX.1 syscalls ────────────────────────────────────────
-        0 => posix::read(a0, a1, a2),
-        1 => posix::write(a0, a1, a2),
-        2 => posix::open(a0, a1, a2),
-        3 => posix::close(a0),
-        4 => posix::stat(a0, a1),
-        5 => posix::fstat(a0, a1),
-        6 => posix::stat(a0, a1),              // lstat (no symlink distinction)
-        7 => 1,                                 // poll
-        8 => posix::lseek(a0, a1 as i64, a2),
-        9 => posix::mmap(a0, a1, a2, a3, a4),
-        10 => 0,                                // mprotect
-        11 => 0,                                // munmap
-        13 => posix::sigaction(a0, a1, a2),
-        14 => posix::sigprocmask(a0, a1, a2, a3),
-        16 => posix::ioctl(a0, a1, a2),
-        20 => posix::writev(a0, a1, a2),
-        21 => 0,                                // access
-        22 => linux::pipe2(a0, 0),              // pipe (no flags)
-        24 => 0,                                // sched_yield
-        32 => posix::dup(a0),
-        33 => posix::dup2(a0, a1),
-        35 => 0,                                // nanosleep
-        37 => 0,                                // alarm
-        39 => 1,                                // getpid
-        40 => posix::sendfile(a0, a1, a2, a3),
-        48 => 0,                                // shutdown
-        50 => -95,                              // listen
-        // fork/exec — arch-specific entry, POSIX semantics
-        56 => syscall_vfork_linux(),            // clone (as vfork)
-        57 => syscall_vfork_linux(),            // fork (as vfork)
-        59 => { unsafe { syscall_exec(a0, a1); } 0 } // execve
-        60 => posix::exit(a0 as i32),           // _exit
-        62 => 0,                                // kill
-        63 => posix::uname(a0),
-        72 => posix::fcntl(a0, a1, a2),
-        79 => posix::getcwd(a0, a1),
-        80 => posix::chdir(a0),
-        83 => posix::mkdir(a0),
-        87 => posix::unlink(a0),
-        96 => { use rux_arch::TimerOps; super::X86_64::ticks() as i64 },
-        97 => 0,                                // getrlimit
-        102 => 0, 104 => 0, 107 => 0, 108 => 0, // uid/gid
-        109 => 0,                               // setpgid
-        110 => 1,                               // getppid
-        111 => 1,                               // getpgrp
-        112 => 1,                               // setsid
-        228 => posix::clock_gettime(a0, a1),
-        257 => posix::openat(a0, a1, a2, a3),
-        262 => posix::fstatat(a0, a1, a2),      // newfstatat
-        269 => 0,                               // faccessat
-
-        // ── Linux extensions ────────────────────────────────────────
-        12 => linux::brk(a0),
-        61 => linux::wait4(a0, a1, a2, a3),
-        78 => linux::getdents64(a0, a1, a2),
-        121 => 1,                               // getpgid
-        131 => -38,                             // sigaltstack
-        157 => 0,                               // prctl
-        186 => 1,                               // gettid
-        200 => 0, 202 => 0, 204 => 0,          // tkill/futex/sched
-        217 => linux::getdents64(a0, a1, a2),
-        218 => linux::set_tid_address(a0),
-        231 => linux::exit_group(a0 as i32),
-        273 => 0,                               // set_robust_list
-        293 => linux::pipe2(a0, a1),             // pipe2
-        302 => -38, 334 => -38,                 // prlimit64/rseq
-
-        // ── x86_64-specific ─────────────────────────────────────────
-        158 => syscall_arch_prctl(a0, a1),
-
-        _ => {
-            serial::write_str("rux: unknown syscall ");
-            let mut buf = [0u8; 10];
-            serial::write_str(crate::write_u32(&mut buf, nr as u32));
-            serial::write_str("\n");
-            -38
-        }
-    };
-
-    result
+/// x86_64 Linux syscall number → generic Syscall enum.
+fn translate_x86_64(nr: u64) -> crate::syscall::Syscall {
+    use crate::syscall::Syscall;
+    match nr {
+        0 => Syscall::Read,
+        1 => Syscall::Write,
+        2 => Syscall::Open,
+        3 => Syscall::Close,
+        4 | 6 => Syscall::Stat,             // stat / lstat
+        5 => Syscall::Fstat,
+        7 => Syscall::Poll,
+        8 => Syscall::Lseek,
+        9 => Syscall::Mmap,
+        10 => Syscall::Mprotect,
+        11 => Syscall::Munmap,
+        12 => Syscall::Brk,
+        13 => Syscall::Sigaction,
+        14 => Syscall::Sigprocmask,
+        16 => Syscall::Ioctl,
+        20 => Syscall::Writev,
+        21 => Syscall::Access,
+        22 | 293 => Syscall::Pipe2,
+        24 => Syscall::SchedYield,
+        32 => Syscall::Dup,
+        33 => Syscall::Dup2,
+        35 => Syscall::Nanosleep,
+        37 => Syscall::Alarm,
+        39 => Syscall::Getpid,
+        40 => Syscall::Sendfile,
+        60 => Syscall::Exit,
+        61 => Syscall::Wait4,
+        62 => Syscall::Kill,
+        63 => Syscall::Uname,
+        72 => Syscall::Fcntl,
+        78 | 217 => Syscall::Getdents64,
+        79 => Syscall::Getcwd,
+        80 => Syscall::Chdir,
+        83 => Syscall::Mkdir,
+        87 => Syscall::Unlink,
+        96 => Syscall::Gettimeofday,
+        97 => Syscall::Getrlimit,
+        102 | 107 => Syscall::Getuid,
+        104 | 108 => Syscall::Getgid,
+        109 => Syscall::Setpgid,
+        110 => Syscall::Getppid,
+        111 => Syscall::Getpgid,
+        112 => Syscall::Setsid,
+        121 => Syscall::Getpgid,
+        131 => Syscall::Sigaltstack,
+        157 => Syscall::Prctl,
+        186 => Syscall::Gettid,
+        200 => Syscall::Tkill,
+        202 => Syscall::Futex,
+        204 => Syscall::SchedGetaffinity,
+        218 => Syscall::SetTidAddress,
+        228 => Syscall::ClockGettime,
+        231 => Syscall::ExitGroup,
+        257 => Syscall::OpenAt,
+        262 => Syscall::FstatAt,
+        269 => Syscall::Faccessat,
+        273 => Syscall::SetRobustList,
+        302 => Syscall::Prlimit64,
+        334 => Syscall::Rseq,
+        // x86_64-specific
+        158 => Syscall::ArchSpecific(nr),
+        _ => Syscall::Unknown(nr),
+    }
 }
 
 pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
     unsafe {
-        use crate::syscall::{posix, linux};
-
         let regs = frame as *mut u64;
-        let syscall_nr = *regs.add(14); // RAX
-        let arg0 = *regs.add(9);        // RDI
-        let arg1 = *regs.add(10);       // RSI
-        let arg2 = *regs.add(11);       // RDX
+        let nr = *regs.add(14);   // RAX = syscall number
+        let a0 = *regs.add(9);    // RDI
+        let a1 = *regs.add(10);   // RSI
+        let a2 = *regs.add(11);   // RDX
 
-        let result: i64 = match syscall_nr {
-            0 => posix::read(arg0, arg1, arg2),
-            1 => posix::write(arg0, arg1, arg2),
-            2 => posix::open(arg0, arg1, arg2),
-            3 => posix::close(arg0),
-            8 => posix::creat(arg0),
-            83 => posix::mkdir(arg0),
-            87 => posix::unlink(arg0),
-            39 => 1, // getpid
-            96 => super::pit::ticks() as i64,
+        // Vfork/exec must be handled here (arch-specific state machine)
+        let result: i64 = match nr {
             57 => syscall_vfork(regs),
-            59 => { syscall_exec(arg0, arg1); 0 }
-            60 => posix::exit(arg0 as i32),
-            61 => linux::wait4(arg0, arg1, arg2, 0),
-            78 => linux::getdents64(arg0, arg1, arg2),
-            _ => -38,
+            59 => { syscall_exec(a0, a1); 0 }
+            _ => {
+                let sc = translate_x86_64(nr);
+                crate::syscall::dispatch(sc, a0, a1, a2, 0, 0)
+            }
         };
 
         *regs.add(14) = result as u64;
@@ -422,7 +404,7 @@ unsafe impl rux_arch::UserModeOps for super::X86_64 {
     }
 }
 
-fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
+pub fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
     const ARCH_SET_FS: u64 = 0x1002;
     const ARCH_SET_GS: u64 = 0x1001;
     const ARCH_GET_FS: u64 = 0x1003;

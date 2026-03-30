@@ -139,3 +139,9 @@ pub unsafe trait VforkOps {
 pub trait ArchInfo {
     const MACHINE_NAME: &'static [u8];
 }
+
+/// Architecture-specific syscalls (e.g., arch_prctl on x86_64).
+/// Returns Some(result) if handled, None if not recognized.
+pub trait ArchSpecificOps {
+    fn arch_syscall(nr: u64, a0: u64, a1: u64) -> Option<i64>;
+}

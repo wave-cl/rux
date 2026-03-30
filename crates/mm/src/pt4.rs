@@ -32,8 +32,13 @@ impl<A: ArchPaging> PageTable4Level<A> {
     }
 
     /// Wrap an existing page table root (e.g., from CR3 or TTBR0_EL1).
-    pub fn from_cr3(root: PhysAddr) -> Self {
+    pub fn from_root(root: PhysAddr) -> Self {
         Self { root, _arch: PhantomData }
+    }
+
+    /// Alias for `from_root` — legacy name.
+    pub fn from_cr3(root: PhysAddr) -> Self {
+        Self::from_root(root)
     }
 
     /// Get the root physical address.

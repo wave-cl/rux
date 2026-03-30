@@ -15,8 +15,6 @@ const FRAME_REGS: usize = 34;
 /// Handle SVC from user mode. Called from exception_dispatch.
 pub fn handle_syscall(frame: *mut u8) {
     unsafe {
-        use crate::syscall::{posix, linux};
-
         let regs = frame as *mut u64;
 
         // aarch64 syscall convention: x8 = number, x0-x5 = args
@@ -27,104 +25,95 @@ pub fn handle_syscall(frame: *mut u8) {
         let a3 = *regs.add(3);   // x3
         let a4 = *regs.add(4);   // x4
 
+        // Vfork/exec must be handled here (arch-specific state machine)
         let result: i64 = match nr {
-            // ── POSIX.1 syscalls (aarch64 Linux numbers) ──────────────
-
-            // File I/O
-            56 => posix::openat(a0, a1, a2, a3),      // openat
-            57 => posix::close(a0),                   // close
-            63 => posix::read(a0, a1, a2),            // read
-            64 => posix::write(a0, a1, a2),           // write
-            66 => posix::writev(a0, a1, a2),          // writev
-            71 => posix::sendfile(a0, a1, a2, a3),    // sendfile
-            23 => posix::dup(a0),                     // dup
-            24 => posix::dup2(a0, a1),                // dup3 → dup2
-            25 => posix::fcntl(a0, a1, a2),            // fcntl
-            29 => posix::ioctl(a0, a1, a2),           // ioctl
-            62 => posix::lseek(a0, a1 as i64, a2),    // lseek
-            59 => linux::pipe2(a0, a1),                // pipe2
-
-            // File metadata
-            79 => posix::fstatat(a0, a1, a2),         // newfstatat
-            80 => posix::fstat(a0, a1),               // fstat
-            78 => posix::stat(a0, a1),                // readlinkat → stat
-            48 => 0,                                  // faccessat
-
-            // Directory operations
-            17 => posix::getcwd(a0, a1),              // getcwd
-            33 => posix::creat(a0),                   // mknodat → creat
-            34 => posix::mkdir(a0),                   // mkdirat
-            35 => posix::unlink(a0),                  // unlinkat
-            49 => posix::chdir(a0),                    // chdir
-
-            // Memory management
-            222 => posix::mmap(a0, a1, a2, a3, a4),   // mmap
-            215 => 0,                                  // munmap
-            226 => 0,                                  // mprotect
-
-            // Process control
-            172 => 1,                                  // getpid
-            173 => 1,                                  // getppid
-            93 => posix::exit(a0 as i32),              // exit
-            129 => 0,                                  // kill
-            160 => posix::uname(a0),                   // uname
-
-            // User/group IDs
-            174 => 0,                                  // getuid
-            175 => 0,                                  // geteuid
-            176 => 0,                                  // getgid
-            177 => 0,                                  // getegid
-
-            // Process groups / sessions
-            154 => 0,                                  // setpgid
-            155 => 1,                                  // getpgid
-            157 => 1,                                  // setsid
-
-            // Signals
-            134 => posix::sigaction(a0, a1, a2),       // rt_sigaction
-            135 => posix::sigprocmask(a0, a1, a2, a3), // rt_sigprocmask
-            132 => -38,                                // sigaltstack
-
-            // Terminal
-            113 => posix::clock_gettime(a0, a1),       // clock_gettime
-            101 => 0,                                  // nanosleep
-            124 => 0,                                  // sched_yield
-
-            // ── Linux extensions ──────────────────────────────────────
-
-            214 => linux::brk(a0),                     // brk
-            61 => linux::getdents64(a0, a1, a2),       // getdents64
-            260 => linux::wait4(a0, a1, a2, a3),       // wait4
-            94 => linux::exit_group(a0 as i32),        // exit_group
-            96 => linux::set_tid_address(a0),           // set_tid_address
-            178 => 1,                                  // gettid
-            167 => 0,                                  // prctl
-            99 => 0,                                   // set_robust_list
-            98 => 0,                                   // futex
-            131 => 0,                                  // tgkill
-            130 => 0,                                  // tkill
-            123 => 0,                                  // sched_getaffinity
-            261 => -38,                                // prlimit64
-            293 => -38,                                // rseq
-            73 => 1,                                   // ppoll
-            169 => super::timer::ticks() as i64,       // gettimeofday (stub)
-            163 => 0,                                  // getrlimit
-
-            // ── aarch64-specific (vfork/exec need arch asm) ───────────
-            220 => syscall_vfork(regs),                // clone (as vfork)
-            221 => { syscall_exec(a0, a1); 0 }         // execve
-
+            220 => syscall_vfork(regs),           // clone (as vfork)
+            221 => { syscall_exec(a0, a1); 0 }    // execve
             _ => {
-                serial::write_str("rux: unknown syscall ");
-                let mut buf = [0u8; 10];
-                serial::write_str(crate::write_u32(&mut buf, nr as u32));
-                serial::write_str("\n");
-                -38
+                let sc = translate_aarch64(nr);
+                crate::syscall::dispatch(sc, a0, a1, a2, a3, a4)
             }
         };
 
         // Return value in x0
         *regs.add(0) = result as u64;
+    }
+}
+
+/// aarch64 Linux syscall number → generic Syscall enum.
+fn translate_aarch64(nr: u64) -> crate::syscall::Syscall {
+    use crate::syscall::Syscall;
+    match nr {
+        // File I/O
+        56 => Syscall::OpenAt,
+        57 => Syscall::Close,
+        63 => Syscall::Read,
+        64 => Syscall::Write,
+        66 => Syscall::Writev,
+        71 => Syscall::Sendfile,
+        23 => Syscall::Dup,
+        24 => Syscall::Dup2,
+        25 => Syscall::Fcntl,
+        29 => Syscall::Ioctl,
+        62 => Syscall::Lseek,
+        59 => Syscall::Pipe2,
+        // File metadata
+        79 => Syscall::FstatAt,
+        80 => Syscall::Fstat,
+        78 => Syscall::Stat,
+        48 => Syscall::Faccessat,
+        // Directory ops
+        17 => Syscall::Getcwd,
+        33 => Syscall::Creat,
+        34 => Syscall::Mkdir,
+        35 => Syscall::Unlink,
+        49 => Syscall::Chdir,
+        // Memory
+        222 => Syscall::Mmap,
+        215 => Syscall::Munmap,
+        226 => Syscall::Mprotect,
+        214 => Syscall::Brk,
+        // Process
+        172 => Syscall::Getpid,
+        173 => Syscall::Getppid,
+        93 => Syscall::Exit,
+        94 => Syscall::ExitGroup,
+        129 => Syscall::Kill,
+        160 => Syscall::Uname,
+        260 => Syscall::Wait4,
+        // User/group IDs
+        174 => Syscall::Getuid,
+        175 => Syscall::Geteuid,
+        176 => Syscall::Getgid,
+        177 => Syscall::Getegid,
+        // Process groups
+        154 => Syscall::Setpgid,
+        155 => Syscall::Getpgid,
+        157 => Syscall::Setsid,
+        // Signals
+        134 => Syscall::Sigaction,
+        135 => Syscall::Sigprocmask,
+        132 => Syscall::Sigaltstack,
+        // Time / scheduling
+        113 => Syscall::ClockGettime,
+        101 => Syscall::Nanosleep,
+        124 => Syscall::SchedYield,
+        // Linux extensions
+        61 => Syscall::Getdents64,
+        96 => Syscall::SetTidAddress,
+        178 => Syscall::Gettid,
+        167 => Syscall::Prctl,
+        99 => Syscall::SetRobustList,
+        98 => Syscall::Futex,
+        131 => Syscall::Tgkill,
+        130 => Syscall::Tkill,
+        123 => Syscall::SchedGetaffinity,
+        261 => Syscall::Prlimit64,
+        293 => Syscall::Rseq,
+        73 => Syscall::Poll,
+        169 => Syscall::Gettimeofday,
+        163 => Syscall::Getrlimit,
+        _ => Syscall::Unknown(nr),
     }
 }
 

@@ -45,9 +45,9 @@ pub unsafe fn map_user_pages(
 ) {
     use rux_arch::PageTableRootOps;
     let alloc = crate::kstate::alloc();
-    let cr3 = crate::arch::Arch::read();
-    let mut upt = crate::arch::PageTable::from_cr3(
-        rux_klib::PhysAddr::new(cr3 as usize));
+    let root = crate::arch::Arch::read();
+    let mut upt = crate::arch::PageTable::from_root(
+        rux_klib::PhysAddr::new(root as usize));
 
     let upt_ptr = &mut upt as *mut crate::arch::PageTable;
     rux_mm::map_zeroed_pages(
@@ -81,11 +81,156 @@ pub unsafe fn resolve_parent_and_name(path_ptr: u64) -> Result<(rux_vfs::InodeId
 }
 
 /// Fill a Linux struct stat from VFS InodeStat.
-///
-/// Delegates to the architecture's `StatLayout::fill_stat` impl because
-/// the struct stat layout differs between x86_64 and aarch64 (st_nlink
-/// width, field order, st_blksize type).
+/// Uses the architecture's StatLayout constants for field offsets/widths.
 pub unsafe fn fill_linux_stat(buf: u64, vfs_stat: &rux_vfs::InodeStat) {
-    use crate::arch::StatLayout;
-    crate::arch::Arch::fill_stat(buf, vfs_stat);
+    crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, vfs_stat);
+}
+
+// ── Generic syscall dispatch ───────────────────────────────────────────
+
+/// Architecture-independent syscall identifiers.
+/// Each arch maps its own syscall numbers to this enum via `translate()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Syscall {
+    // File I/O
+    Read, Write, Open, OpenAt, Close, Lseek, Dup, Dup2, Fcntl,
+    Writev, Sendfile, Ioctl, Pipe2,
+    // File metadata
+    Stat, Fstat, FstatAt, Faccessat,
+    // Directory ops
+    Getcwd, Creat, Mkdir, Unlink, Chdir,
+    // Memory
+    Mmap, Munmap, Mprotect, Brk,
+    // Process
+    Getpid, Getppid, Exit, ExitGroup, Kill,
+    Vfork, Execve, Wait4,
+    Uname, ClockGettime,
+    // Signals
+    Sigaction, Sigprocmask, Sigaltstack,
+    // Terminal / scheduling
+    SchedYield, Nanosleep,
+    // User/group IDs
+    Getuid, Geteuid, Getgid, Getegid,
+    // Process groups / sessions
+    Setpgid, Getpgid, Setsid,
+    // Linux extensions
+    Getdents64, SetTidAddress, Gettid,
+    SetRobustList, Futex, Tgkill, Tkill,
+    SchedGetaffinity, Getrlimit,
+    Poll, Gettimeofday,
+    Prctl, Alarm, Access,
+    // Stubs that return specific values
+    Prlimit64, Rseq,
+    // Architecture-specific (handled by ArchSpecificOps)
+    ArchSpecific(u64),
+    // Unknown
+    Unknown(u64),
+}
+
+/// Dispatch a syscall by its architecture-independent identifier.
+/// Called from the arch-specific entry point after translating the number.
+pub fn dispatch(sc: Syscall, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
+    match sc {
+        // ── POSIX.1 File I/O ───────────────────────────────────────
+        Syscall::Read => posix::read(a0, a1, a2),
+        Syscall::Write => posix::write(a0, a1, a2),
+        Syscall::Open => posix::open(a0, a1, a2),
+        Syscall::OpenAt => posix::openat(a0, a1, a2, a3),
+        Syscall::Close => posix::close(a0),
+        Syscall::Lseek => posix::lseek(a0, a1 as i64, a2),
+        Syscall::Dup => posix::dup(a0),
+        Syscall::Dup2 => posix::dup2(a0, a1),
+        Syscall::Fcntl => posix::fcntl(a0, a1, a2),
+        Syscall::Writev => posix::writev(a0, a1, a2),
+        Syscall::Sendfile => posix::sendfile(a0, a1, a2, a3),
+        Syscall::Ioctl => posix::ioctl(a0, a1, a2),
+        Syscall::Pipe2 => linux::pipe2(a0, a1),
+
+        // ── File metadata ──────────────────────────────────────────
+        Syscall::Stat => posix::stat(a0, a1),
+        Syscall::Fstat => posix::fstat(a0, a1),
+        Syscall::FstatAt => posix::fstatat(a0, a1, a2),
+        Syscall::Faccessat => 0,
+
+        // ── Directory ops ──────────────────────────────────────────
+        Syscall::Getcwd => posix::getcwd(a0, a1),
+        Syscall::Creat => posix::creat(a0),
+        Syscall::Mkdir => posix::mkdir(a0),
+        Syscall::Unlink => posix::unlink(a0),
+        Syscall::Chdir => posix::chdir(a0),
+
+        // ── Memory ─────────────────────────────────────────────────
+        Syscall::Mmap => posix::mmap(a0, a1, a2, a3, a4),
+        Syscall::Munmap => 0,
+        Syscall::Mprotect => 0,
+        Syscall::Brk => linux::brk(a0),
+
+        // ── Process ────────────────────────────────────────────────
+        Syscall::Getpid => 1,
+        Syscall::Getppid => 1,
+        Syscall::Exit => posix::exit(a0 as i32),
+        Syscall::ExitGroup => linux::exit_group(a0 as i32),
+        Syscall::Kill => 0,
+        // Vfork/Execve are dispatched by the arch entry — they never reach here
+        Syscall::Vfork => 0,   // unreachable in practice
+        Syscall::Execve => 0,  // unreachable in practice
+        Syscall::Wait4 => linux::wait4(a0, a1, a2, a3),
+        Syscall::Uname => posix::uname(a0),
+        Syscall::ClockGettime => posix::clock_gettime(a0, a1),
+
+        // ── Signals ────────────────────────────────────────────────
+        Syscall::Sigaction => posix::sigaction(a0, a1, a2),
+        Syscall::Sigprocmask => posix::sigprocmask(a0, a1, a2, a3),
+        Syscall::Sigaltstack => -38,
+
+        // ── Terminal / scheduling ──────────────────────────────────
+        Syscall::SchedYield | Syscall::Nanosleep | Syscall::Alarm => 0,
+
+        // ── User/group IDs ─────────────────────────────────────────
+        Syscall::Getuid | Syscall::Geteuid |
+        Syscall::Getgid | Syscall::Getegid => 0,
+
+        // ── Process groups ─────────────────────────────────────────
+        Syscall::Setpgid => 0,
+        Syscall::Getpgid => 1,
+        Syscall::Setsid => 1,
+
+        // ── Linux extensions ───────────────────────────────────────
+        Syscall::Getdents64 => linux::getdents64(a0, a1, a2),
+        Syscall::SetTidAddress => linux::set_tid_address(a0),
+        Syscall::Gettid => 1,
+        Syscall::SetRobustList | Syscall::Futex |
+        Syscall::Tgkill | Syscall::Tkill |
+        Syscall::SchedGetaffinity | Syscall::Prctl => 0,
+        Syscall::Getrlimit => 0,
+        Syscall::Poll => 1,
+        Syscall::Gettimeofday => {
+            use rux_arch::TimerOps;
+            crate::arch::Arch::ticks() as i64
+        }
+        Syscall::Access => 0,
+        Syscall::Prlimit64 | Syscall::Rseq => -38,
+
+        // ── Architecture-specific ──────────────────────────────────
+        Syscall::ArchSpecific(nr) => {
+            use rux_arch::ArchSpecificOps;
+            crate::arch::Arch::arch_syscall(nr, a0, a1).unwrap_or(-38)
+        }
+
+        // ── Unknown ────────────────────────────────────────────────
+        Syscall::Unknown(nr) => {
+            use rux_arch::SerialOps;
+            crate::arch::Arch::write_str("rux: unknown syscall ");
+            let mut buf = [0u8; 10];
+            crate::arch::Arch::write_str(crate::write_u32(&mut buf, nr as u32));
+            crate::arch::Arch::write_str("\n");
+            -38
+        }
+    }
+}
+
+/// Trait for arch-specific syscall number translation.
+/// Each architecture maps its Linux syscall numbers to the common Syscall enum.
+pub trait SyscallTranslate {
+    fn translate(nr: u64) -> Syscall;
 }

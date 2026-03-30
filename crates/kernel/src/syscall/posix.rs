@@ -184,8 +184,8 @@ pub fn stat(pathname: u64, buf: u64) -> i64 {
 
 /// fstat(fd, statbuf) — POSIX.1
 use crate::arch::StatLayout;
-const STAT_MODE_OFF: usize = <crate::arch::Arch as StatLayout>::STAT_MODE_OFF;
-const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::STAT_BLKSIZE_OFF;
+const STAT_MODE_OFF: usize = <crate::arch::Arch as StatLayout>::MODE_OFF;
+const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::BLKSIZE_OFF;
 
 pub fn fstat(fd: u64, buf: u64) -> i64 {
     if buf == 0 { return -14; }
