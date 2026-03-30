@@ -63,13 +63,17 @@ pub unsafe fn boot(params: BootParams) -> ! {
     core::ptr::write_bytes(vfs_ptr as *mut u8, 0, core::mem::size_of::<rux_fs::vfs::Vfs>());
     rux_fs::vfs::Vfs::init_at(vfs_ptr, ramfs_ptr);
 
-    // Mount procfs at /proc
+    // Mount procfs at /proc and devfs at /dev
     {
         use rux_fs::FileSystem;
         let vfs = &mut *vfs_ptr;
         let root = vfs.root_inode();
         let _ = vfs.mount(root, b"proc", rux_fs::vfs::MountedFs::Proc(params.procfs));
         log("rux: procfs mounted at /proc\n");
+
+        static mut DEVFS: rux_fs::devfs::DevFs = rux_fs::devfs::DevFs::new();
+        let _ = vfs.mount(root, b"dev", rux_fs::vfs::MountedFs::Dev(&raw mut DEVFS));
+        log("rux: devfs mounted at /dev\n");
     }
 
     // Init kernel state

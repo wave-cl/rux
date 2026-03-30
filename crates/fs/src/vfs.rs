@@ -29,6 +29,7 @@ pub const MAX_MOUNTS: usize = 8;
 pub enum MountedFs {
     Ram(*mut crate::ramfs::RamFs),
     Proc(*mut crate::procfs::ProcFs),
+    Dev(*mut crate::devfs::DevFs),
     None,
 }
 
@@ -121,6 +122,7 @@ impl Vfs {
         match &entry.fs {
             MountedFs::Ram(ptr) => Ok(unsafe { &**ptr }),
             MountedFs::Proc(ptr) => Ok(unsafe { &**ptr }),
+            MountedFs::Dev(ptr) => Ok(unsafe { &**ptr }),
             MountedFs::None => Err(VfsError::NoDevice),
         }
     }
@@ -131,6 +133,7 @@ impl Vfs {
         match &mut entry.fs {
             MountedFs::Ram(ptr) => Ok(unsafe { &mut **ptr }),
             MountedFs::Proc(ptr) => Ok(unsafe { &mut **ptr }),
+            MountedFs::Dev(ptr) => Ok(unsafe { &mut **ptr }),
             MountedFs::None => Err(VfsError::NoDevice),
         }
     }

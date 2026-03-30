@@ -6,6 +6,7 @@ pub mod fdtable;
 pub mod cpio;
 pub mod vfs;
 pub mod procfs;
+pub mod devfs;
 
 // ── POSIX constants ─────────────────────────────────────────────────────
 
