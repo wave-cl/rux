@@ -532,38 +532,10 @@ pub fn mmap(addr: u64, len: u64, _prot: u64, mmap_flags: u64, _fd: u64) -> i64 {
             r
         };
 
-        let alloc = crate::kstate::alloc();
-        let cr3 = arch::page_table_root();
         let pg_flags = rux_mm::MappingFlags::READ
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::USER);
-
-        #[cfg(target_arch = "x86_64")]
-        {
-            let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
-                rux_klib::PhysAddr::new(cr3 as usize));
-            for offset in (0..aligned_len).step_by(4096) {
-                let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("mmap page");
-                let ptr = frame.as_usize() as *mut u8;
-                for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
-                let va = rux_klib::VirtAddr::new((result + offset) as usize);
-                let _ = upt.unmap_4k(va);
-                let _ = upt.map_4k(va, frame, pg_flags, alloc);
-            }
-        }
-        #[cfg(target_arch = "aarch64")]
-        {
-            let mut upt = crate::aarch64::paging::PageTable4Level::from_cr3(
-                rux_klib::PhysAddr::new(cr3 as usize));
-            for offset in (0..aligned_len).step_by(4096) {
-                let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("mmap page");
-                let ptr = frame.as_usize() as *mut u8;
-                for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
-                let va = rux_klib::VirtAddr::new((result + offset) as usize);
-                let _ = upt.unmap_4k(va);
-                let _ = upt.map_4k(va, frame, pg_flags, alloc);
-            }
-        }
+        super::map_user_pages(result, result + aligned_len, pg_flags);
 
         result as i64
     }

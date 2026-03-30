@@ -1,4 +1,5 @@
 pub mod init;
+pub mod loader;
 pub mod serial;
 pub mod exit;
 pub mod gdt;

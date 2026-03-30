@@ -92,6 +92,36 @@ pub static mut CHILD_AVAILABLE: bool = false;
 /// Whether we're in a vfork child context (skip pipe ref counting in close).
 pub static mut IN_VFORK_CHILD: bool = false;
 
+// ── Page table helper (arch-dispatched) ─────────────────────────────
+
+/// Map zeroed pages into the current user page table.
+/// Used by brk() and mmap() to add pages to the user address space.
+pub unsafe fn map_user_pages(
+    start_va: u64,
+    end_va: u64,
+    flags: rux_mm::MappingFlags,
+) {
+    use rux_mm::FrameAllocator;
+    let alloc = crate::kstate::alloc();
+    let cr3 = arch::page_table_root();
+
+    #[cfg(target_arch = "x86_64")]
+    let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+        rux_klib::PhysAddr::new(cr3 as usize));
+    #[cfg(target_arch = "aarch64")]
+    let mut upt = crate::aarch64::paging::PageTable4Level::from_cr3(
+        rux_klib::PhysAddr::new(cr3 as usize));
+
+    for pa in (start_va..end_va).step_by(4096) {
+        let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("map page");
+        let ptr = frame.as_usize() as *mut u8;
+        for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+        let va = rux_klib::VirtAddr::new(pa as usize);
+        let _ = upt.unmap_4k(va);
+        let _ = upt.map_4k(va, frame, flags, alloc);
+    }
+}
+
 // ── Path resolution helper (used by both POSIX and Linux) ───────────
 
 /// Read a C string from user memory into a path slice.

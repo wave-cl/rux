@@ -13,6 +13,7 @@ pub mod task;
 pub mod lifecycle;
 pub mod pid;
 pub mod manager;
+pub mod execargs;
 
 // Re-export core types at crate root
 pub use id::{Pid, Tgid, Pgid, Sid, Uid, Gid};
