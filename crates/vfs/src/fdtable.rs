@@ -14,12 +14,14 @@ pub const FD_STDOUT: usize = 1;
 pub const FD_STDERR: usize = 2;
 pub const FIRST_FILE_FD: usize = 3;
 
-/// Trait for pipe I/O operations, implemented by the kernel.
-pub trait PipeOps {
-    fn pipe_read(&self, pipe_id: u8, buf: *mut u8, len: usize) -> isize;
-    fn pipe_write(&self, pipe_id: u8, buf: *const u8, len: usize) -> isize;
-    fn pipe_close(&self, pipe_id: u8, is_write_end: bool);
-    fn pipe_dup_ref(&self, pipe_id: u8, is_write_end: bool);
+/// Pipe operations as function pointers — no traits, no wrappers.
+/// Pass rux_ipc::pipe functions directly.
+pub struct PipeFns {
+    pub read: fn(u8, *mut u8, usize) -> isize,
+    pub write: fn(u8, *const u8, usize) -> isize,
+    pub close: fn(u8, bool),
+    pub dup_ref: fn(u8, bool),
+    pub alloc: fn() -> Result<u8, isize>,
 }
 
 #[derive(Clone, Copy)]
@@ -120,11 +122,11 @@ pub fn sys_dupfd(oldfd: usize, minfd: usize) -> isize {
 }
 
 /// Duplicate a file descriptor. Real dup2 implementation.
-pub fn sys_dup2(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> isize {
+pub fn sys_dup2(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
     sys_dup2_inner(oldfd, newfd, in_vfork, pipes)
 }
 
-fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> isize {
+fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
     unsafe {
         if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
@@ -132,7 +134,7 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn
         if FD_TABLE[newfd].active {
             if FD_TABLE[newfd].is_pipe && !in_vfork {
                 if let Some(p) = pipes {
-                    p.pipe_close(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
+                    (p.close)(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
                 }
             }
             FD_TABLE[newfd].active = false;
@@ -148,7 +150,7 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn
             // Increment pipe ref count for the dup'd fd (skip in vfork child)
             if FD_TABLE[newfd].is_pipe && !in_vfork {
                 if let Some(p) = pipes {
-                    p.pipe_dup_ref(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
+                    (p.dup_ref)(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
                 }
             }
         }
@@ -157,7 +159,7 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn
 }
 
 /// Close a file descriptor. Returns 0 on success.
-pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> isize {
+pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
     if fd < FIRST_FILE_FD || fd >= MAX_FDS {
         return -9; // -EBADF
     }
@@ -167,7 +169,7 @@ pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> isiz
         }
         if FD_TABLE[fd].is_pipe && !in_vfork {
             if let Some(p) = pipes {
-                p.pipe_close(FD_TABLE[fd].pipe_id, FD_TABLE[fd].pipe_write);
+                (p.close)(FD_TABLE[fd].pipe_id, FD_TABLE[fd].pipe_write);
             }
         }
         FD_TABLE[fd].active = false;
@@ -192,7 +194,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
 }
 
 /// Read from a file descriptor. Returns bytes read, 0 on EOF, negative on error.
-pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut F, pipes: &dyn PipeOps) -> isize {
+pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut F, pipes: &PipeFns) -> isize {
     if fd >= MAX_FDS {
         return -9;
     }
@@ -201,7 +203,7 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
             return -9;
         }
         if FD_TABLE[fd].is_pipe {
-            return pipes.pipe_read(FD_TABLE[fd].pipe_id, buf, len);
+            return (pipes.read)(FD_TABLE[fd].pipe_id, buf, len);
         }
         let f = &mut FD_TABLE[fd];
 
@@ -228,7 +230,7 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
 }
 
 /// Write to a file descriptor. Returns bytes written, negative on error.
-pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &mut F, pipes: &dyn PipeOps) -> isize {
+pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &mut F, pipes: &PipeFns) -> isize {
     if fd >= MAX_FDS {
         return -9;
     }
@@ -237,7 +239,7 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
             return -9;
         }
         if FD_TABLE[fd].is_pipe {
-            return pipes.pipe_write(FD_TABLE[fd].pipe_id, buf, len);
+            return (pipes.write)(FD_TABLE[fd].pipe_id, buf, len);
         }
         let f = &mut FD_TABLE[fd];
 
@@ -294,31 +296,21 @@ pub fn reset() {
 
 // ── Pipe creation ───────────────────────────────────────────────────
 
-/// Trait for allocating/closing pipe ring buffers.
-/// Implemented by the kernel to delegate to rux_ipc::pipe.
-pub trait PipeAllocator {
-    /// Allocate a new pipe ring buffer. Returns pipe_id or error.
-    fn alloc(&self) -> Result<u8, isize>;
-    /// Close one end of a pipe.
-    fn close(&self, pipe_id: u8, is_write_end: bool);
-}
-
 /// Create a new pipe: allocate ring buffer + two fds.
 /// Returns (pipe_id, read_fd, write_fd) or error.
 pub fn create_pipe(
-    pipe_alloc: &dyn PipeAllocator,
-    pipe_ops: &dyn PipeOps,
+    pipes: &PipeFns,
     in_vfork: bool,
 ) -> Result<(u8, isize, isize), isize> {
-    let pipe_id = pipe_alloc.alloc()?;
+    let pipe_id = (pipes.alloc)()?;
 
     let read_fd = alloc_pipe_fd(pipe_id, false)?;
     let write_fd = match alloc_pipe_fd(pipe_id, true) {
         Ok(fd) => fd,
         Err(e) => {
-            unsafe { sys_close(read_fd as usize, in_vfork, Some(pipe_ops)) };
-            pipe_alloc.close(pipe_id, false);
-            pipe_alloc.close(pipe_id, true);
+            unsafe { sys_close(read_fd as usize, in_vfork, Some(pipes)) };
+            (pipes.close)(pipe_id, false);
+            (pipes.close)(pipe_id, true);
             return Err(e);
         }
     };
