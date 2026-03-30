@@ -20,7 +20,12 @@ use arch::Arch;
 #[no_mangle]
 pub extern "C" fn kernel_main(arg: usize) -> ! {
     unsafe { Arch::init(); }
-    Arch::write_str("rux: boot OK\n");
+    {
+        use rux_arch::ArchInfo;
+        Arch::write_str("rux 0.1.0 (");
+        Arch::write_bytes(Arch::MACHINE_NAME);
+        Arch::write_str(")\n");
+    }
 
     Arch::boot_init(arg);
 
