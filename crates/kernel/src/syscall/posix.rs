@@ -339,7 +339,7 @@ pub fn creat(path_ptr: usize) -> isize {
                 let cstr = path_ptr as *const u8;
                 let mut len = 0usize;
                 while *cstr.add(len) != 0 && len < 256 { len += 1; }
-                crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len)) as isize
+                crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
             }
             Err(_) => -17,
         }
