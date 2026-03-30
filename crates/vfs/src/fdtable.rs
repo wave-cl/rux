@@ -292,6 +292,40 @@ pub fn reset() {
     }
 }
 
+// ── Pipe creation ───────────────────────────────────────────────────
+
+/// Trait for allocating/closing pipe ring buffers.
+/// Implemented by the kernel to delegate to rux_ipc::pipe.
+pub trait PipeAllocator {
+    /// Allocate a new pipe ring buffer. Returns pipe_id or error.
+    fn alloc(&self) -> Result<u8, isize>;
+    /// Close one end of a pipe.
+    fn close(&self, pipe_id: u8, is_write_end: bool);
+}
+
+/// Create a new pipe: allocate ring buffer + two fds.
+/// Returns (pipe_id, read_fd, write_fd) or error.
+pub fn create_pipe(
+    pipe_alloc: &dyn PipeAllocator,
+    pipe_ops: &dyn PipeOps,
+    in_vfork: bool,
+) -> Result<(u8, isize, isize), isize> {
+    let pipe_id = pipe_alloc.alloc()?;
+
+    let read_fd = alloc_pipe_fd(pipe_id, false)?;
+    let write_fd = match alloc_pipe_fd(pipe_id, true) {
+        Ok(fd) => fd,
+        Err(e) => {
+            unsafe { sys_close(read_fd as usize, in_vfork, Some(pipe_ops)) };
+            pipe_alloc.close(pipe_id, false);
+            pipe_alloc.close(pipe_id, true);
+            return Err(e);
+        }
+    };
+
+    Ok((pipe_id, read_fd, write_fd))
+}
+
 /// Check if an fd is a serial fd (stdin/stdout/stderr).
 pub fn is_serial_fd(fd: usize) -> bool {
     unsafe {
