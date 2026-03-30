@@ -21,11 +21,12 @@ name = "rux-drivers"
 version = "0.1.0"
 
 [[package]]
+name = "rux-elf"
+version = "0.1.0"
+
+[[package]]
 name = "rux-ipc"
 version = "0.1.0"
-dependencies = [
- "rux-klib",
-]
 
 [[package]]
 name = "rux-kernel"
@@ -33,6 +34,8 @@ version = "0.1.0"
 dependencies = [
  "rux-arch",
  "rux-boot",
+ "rux-elf",
+ "rux-ipc",
  "rux-klib",
  "rux-mm",
  "rux-proc",

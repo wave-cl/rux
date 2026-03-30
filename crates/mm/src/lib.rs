@@ -8,6 +8,7 @@ pub mod pt4;
 pub mod vma;
 pub mod addr_space;
 pub mod slab;
+pub mod slab_simple;
 pub mod fault;
 pub mod cow;
 
@@ -152,6 +153,7 @@ pub trait FrameAllocator {
 pub use frame::BuddyAllocator;
 pub use pt::{PageLevel, PageTablePage, TranslateResult, PageTableWalker};
 pub use pt4::PageTable4Level;
+pub use slab_simple::Slab;
 pub use vma::{Vma, VmaKind, VmaList, VmaOps};
 pub use addr_space::{AddressSpace, AddressSpaceOps};
 pub use slab::SlabCache;

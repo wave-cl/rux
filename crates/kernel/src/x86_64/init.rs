@@ -1,7 +1,7 @@
 /// x86_64 boot initialization: hardware setup, tests, and shell launch.
 
 use super::{serial, exit};
-use crate::{scheduler, slab, elf, pgtrack, write_hex_serial, write_u32, COUNTER_A, COUNTER_B};
+use crate::{scheduler, elf, pgtrack, write_hex_serial, write_u32, COUNTER_A, COUNTER_B};
 
 pub fn x86_64_init(multiboot_info: usize) {
     // Initialize GDT with TSS — use the actual boot_stack_top from boot.S
@@ -106,7 +106,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             // ── Slab allocator test ─────────────────────────────────────
             serial::write_str("rux: slab test...\n");
             {
-                let mut task_slab = slab::Slab::new(1024);
+                let mut task_slab = rux_mm::Slab::new(1024);
                 let obj_a = task_slab.alloc(alloc).expect("slab alloc A");
                 let obj_b = task_slab.alloc(alloc).expect("slab alloc B");
                 let obj_c = task_slab.alloc(alloc).expect("slab alloc C");
@@ -232,7 +232,7 @@ pub fn x86_64_init(multiboot_info: usize) {
         use rux_proc::task::Task;
         unsafe {
             let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
-            let mut task_slab = slab::Slab::new(core::mem::size_of::<Task>());
+            let mut task_slab = rux_mm::Slab::new(core::mem::size_of::<Task>());
             let parent_ptr = task_slab.alloc(alloc).expect("slab parent") as *mut Task;
             core::ptr::write(parent_ptr, Task::new(Pid::new(1), Tgid::new(1)));
             let parent = &mut *parent_ptr;

@@ -7,9 +7,8 @@
 /// When the freelist is empty, a new slab page is allocated from the
 /// buddy allocator.
 
-use rux_klib::PhysAddr;
-use rux_mm::FrameAllocator;
-use rux_mm::PageSize;
+use crate::FrameAllocator;
+use crate::PageSize;
 
 /// A slab cache for fixed-size objects.
 pub struct Slab {

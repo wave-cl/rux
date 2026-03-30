@@ -7,7 +7,6 @@ mod x86_64;
 mod aarch64;
 
 mod scheduler;
-mod slab;
 mod elf;
 mod kstate;
 pub mod fdtable;
