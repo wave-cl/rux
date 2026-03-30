@@ -128,14 +128,14 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // Vfork/exec use generic implementation with arch VforkContext
     match nr {
-        56 | 57 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() },
-        59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0, a1); } return 0; }
+        56 | 57 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64,
+        59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
         _ => {}
     }
 
     // Everything else goes through generic dispatch
     let sc = translate_x86_64(nr);
-    crate::syscall::dispatch(sc, a0, a1, a2, a3, a4)
+    crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64
 }
 
 /// x86_64 Linux syscall number → generic Syscall enum.
@@ -217,11 +217,11 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
 
         // Vfork/exec use generic implementation
         let result: i64 = match nr {
-            57 => crate::syscall::generic_vfork::<super::X86_64>(),
-            59 => { crate::syscall::generic_exec::<super::X86_64>(a0, a1); 0 }
+            57 => crate::syscall::generic_vfork::<super::X86_64>() as i64,
+            59 => { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); 0 }
             _ => {
                 let sc = translate_x86_64(nr);
-                crate::syscall::dispatch(sc, a0, a1, a2, 0, 0)
+                crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, 0, 0) as i64
             }
         };
 

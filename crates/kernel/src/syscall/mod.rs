@@ -60,7 +60,7 @@ pub unsafe fn map_user_pages(
 // ── Path resolution helper (used by both POSIX and Linux) ───────────
 
 /// Read a C string from user memory into a path slice.
-pub unsafe fn read_user_path(path_ptr: u64) -> &'static [u8] {
+pub unsafe fn read_user_path(path_ptr: usize) -> &'static [u8] {
     let cstr = path_ptr as *const u8;
     let mut len = 0usize;
     while *cstr.add(len) != 0 && len < 256 { len += 1; }
@@ -74,7 +74,7 @@ pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_vfs::InodeId, i64> {
 }
 
 /// Resolve a path to (parent_inode, basename).
-pub unsafe fn resolve_parent_and_name(path_ptr: u64) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
+pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
     let path = read_user_path(path_ptr);
     let fs = crate::kstate::fs();
     rux_vfs::path::resolve_parent_and_name(fs, CWD_INODE, path)
@@ -128,8 +128,9 @@ pub enum Syscall {
 }
 
 /// Dispatch a syscall by its architecture-independent identifier.
-/// Called from the arch-specific entry point after translating the number.
-pub fn dispatch(sc: Syscall, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
+/// All arguments are native-width (usize). The arch entry point casts
+/// from register-width to usize before calling.
+pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
     match sc {
         // ── POSIX.1 File I/O ───────────────────────────────────────
         Syscall::Read => posix::read(a0, a1, a2),
@@ -171,9 +172,8 @@ pub fn dispatch(sc: Syscall, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64
         Syscall::Exit => posix::exit(a0 as i32),
         Syscall::ExitGroup => linux::exit_group(a0 as i32),
         Syscall::Kill => 0,
-        // Vfork/Execve are dispatched by the arch entry — they never reach here
-        Syscall::Vfork => 0,   // unreachable in practice
-        Syscall::Execve => 0,  // unreachable in practice
+        Syscall::Vfork => 0,   // dispatched by arch entry, never reaches here
+        Syscall::Execve => 0,
         Syscall::Wait4 => linux::wait4(a0, a1, a2, a3),
         Syscall::Uname => posix::uname(a0),
         Syscall::ClockGettime => posix::clock_gettime(a0, a1),
@@ -206,7 +206,7 @@ pub fn dispatch(sc: Syscall, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64
         Syscall::Poll => 1,
         Syscall::Gettimeofday => {
             use rux_arch::TimerOps;
-            crate::arch::Arch::ticks() as i64
+            crate::arch::Arch::ticks() as isize
         }
         Syscall::Access => 0,
         Syscall::Prlimit64 | Syscall::Rseq => -38,
@@ -214,7 +214,8 @@ pub fn dispatch(sc: Syscall, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64
         // ── Architecture-specific ──────────────────────────────────
         Syscall::ArchSpecific(nr) => {
             use rux_arch::ArchSpecificOps;
-            crate::arch::Arch::arch_syscall(nr, a0, a1).unwrap_or(-38)
+            crate::arch::Arch::arch_syscall(nr as u64, a0 as u64, a1 as u64)
+                .unwrap_or(-38) as isize
         }
 
         // ── Unknown ────────────────────────────────────────────────
@@ -255,7 +256,7 @@ static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::O
 /// # Safety
 /// Manipulates process state, page tables, and performs setjmp/longjmp.
 #[inline(never)]
-pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> i64 {
+pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
     use rux_arch::SerialOps;
     crate::arch::Arch::write_str("rux: vfork()\n");
 
@@ -339,7 +340,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> i64 {
 ///
 /// # Safety
 /// Replaces the current process image.
-pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: u64, argv_ptr: u64) -> ! {
+pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize) -> ! {
     use rux_arch::SerialOps;
     use rux_vfs::FileSystem;
 
@@ -351,7 +352,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: u64, argv_ptr: u
     while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
     let path = core::slice::from_raw_parts(path_cstr, path_len);
 
-    crate::execargs::set_from_user(path, argv_ptr, 0);
+    crate::execargs::set_from_user(path, argv_ptr as u64, 0);
 
     crate::arch::Arch::write_str("rux: exec(\"");
     crate::arch::Arch::write_bytes(path);

@@ -1,8 +1,8 @@
 /// POSIX.1-2008 standardized syscall implementations.
 ///
-/// These syscalls are defined by the POSIX standard and are portable
-/// across Unix-like operating systems. They form the core system
-/// interface that any POSIX-compliant OS must provide.
+/// All arguments use native-width types (usize/isize) instead of u64
+/// so this code works correctly on both 32-bit and 64-bit architectures.
+/// File offsets use i64 since they can exceed 4GB even on 32-bit (lseek64).
 
 use rux_arch::SerialOps;
 use rux_arch::TimerOps;
@@ -11,53 +11,47 @@ type Arch = crate::arch::Arch;
 // ── File I/O (POSIX.1 Section 2) ────────────────────────────────────
 
 /// Check if fd 0-2 should use serial (not redirected to file/pipe).
-fn is_serial_fd(fd: u64) -> bool {
-    crate::fdtable::is_serial_fd(fd)
+fn is_serial_fd(fd: usize) -> bool {
+    crate::fdtable::is_serial_fd(fd as u64)
 }
 
 /// read(fd, buf, count) — POSIX.1
-pub fn read(fd: u64, buf: u64, len: u64) -> i64 {
+pub fn read(fd: usize, buf: usize, len: usize) -> isize {
     if fd == 0 && is_serial_fd(0) {
         // stdin from serial
         unsafe {
             let ptr = buf as *mut u8;
-            for i in 0..len as usize {
+            for i in 0..len {
                 let b = Arch::read_byte();
                 if b == 0x03 {
-                    // Ctrl+C: return -EINTR if we haven't read anything,
-                    // or return what we have so far
-                    if i == 0 {
-                        return -4; // -EINTR
-                    }
-                    return i as i64;
+                    if i == 0 { return -4; } // -EINTR
+                    return i as isize;
                 }
                 *ptr.add(i) = b;
-                // Return after newline (line-buffered input)
                 if b == b'\n' {
-                    return (i + 1) as i64;
+                    return (i + 1) as isize;
                 }
             }
         }
-        return len as i64;
+        return len as isize;
     }
-    crate::fdtable::sys_read_fd(fd as usize, buf as *mut u8, len as usize)
+    crate::fdtable::sys_read_fd(fd, buf as *mut u8, len) as isize
 }
 
 /// write(fd, buf, count) — POSIX.1
-pub fn write(fd: u64, buf: u64, len: u64) -> i64 {
+pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     if fd <= 2 && is_serial_fd(fd) {
-        // stdout/stderr to serial
         unsafe {
             let ptr = buf as *const u8;
-            for i in 0..len as usize { Arch::write_byte(*ptr.add(i)); }
+            for i in 0..len { Arch::write_byte(*ptr.add(i)); }
         }
-        return len as i64;
+        return len as isize;
     }
-    crate::fdtable::sys_write_fd(fd as usize, buf as *const u8, len as usize)
+    crate::fdtable::sys_write_fd(fd, buf as *const u8, len) as isize
 }
 
 /// open(pathname, flags, mode) — POSIX.1
-pub fn open(path_ptr: u64, flags: u64, mode: u64) -> i64 {
+pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
     unsafe {
         let path = super::read_user_path(path_ptr);
         if path.is_empty() { return -2; }
@@ -65,12 +59,12 @@ pub fn open(path_ptr: u64, flags: u64, mode: u64) -> i64 {
         let o_creat = flags & 0x40 != 0;
 
         match super::resolve_with_cwd(path) {
-            Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
+            Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32) as isize,
             Err(_) if o_creat => {
                 use rux_vfs::{FileSystem, FileName};
                 let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
                     Ok(v) => v,
-                    Err(e) => return e,
+                    Err(e) => return e as isize,
                 };
                 let fs = crate::kstate::fs();
                 let fname = match FileName::new(name) {
@@ -78,70 +72,69 @@ pub fn open(path_ptr: u64, flags: u64, mode: u64) -> i64 {
                     Err(_) => return -22,
                 };
                 match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
-                    Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
+                    Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32) as isize,
                     Err(_) => -13,
                 }
             }
-            Err(e) => e,
+            Err(e) => e as isize,
         }
     }
 }
 
 /// openat(dirfd, pathname, flags, mode) — POSIX.1-2008
-pub fn openat(_dirfd: u64, pathname: u64, flags: u64, mode: u64) -> i64 {
+pub fn openat(_dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isize {
     open(pathname, flags, mode)
 }
 
 /// close(fd) — POSIX.1
-pub fn close(fd: u64) -> i64 {
-    crate::fdtable::sys_close(fd as usize)
+pub fn close(fd: usize) -> isize {
+    crate::fdtable::sys_close(fd) as isize
 }
 
 /// dup(oldfd) — POSIX.1: duplicate fd to lowest available fd.
-pub fn dup(oldfd: u64) -> i64 {
-    crate::fdtable::sys_dup(oldfd as usize)
+pub fn dup(oldfd: usize) -> isize {
+    crate::fdtable::sys_dup(oldfd) as isize
 }
 
 /// dup2(oldfd, newfd) — POSIX.1
-pub fn dup2(oldfd: u64, newfd: u64) -> i64 {
-    crate::fdtable::sys_dup2(oldfd as usize, newfd as usize)
+pub fn dup2(oldfd: usize, newfd: usize) -> isize {
+    crate::fdtable::sys_dup2(oldfd, newfd) as isize
 }
 
 /// lseek(fd, offset, whence) — POSIX.1
-pub fn lseek(fd: u64, offset: i64, whence: u64) -> i64 {
-    crate::fdtable::sys_lseek(fd as usize, offset, whence as u32)
+/// offset is i64: file offsets can exceed 4GB even on 32-bit.
+pub fn lseek(fd: usize, offset: i64, whence: usize) -> isize {
+    crate::fdtable::sys_lseek(fd, offset, whence as u32) as isize
 }
 
 /// fcntl(fd, cmd, arg) — POSIX.1
-pub fn fcntl(fd: u64, cmd: u64, arg: u64) -> i64 {
+pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
     match cmd {
-        0 => {
-            // F_DUPFD: dup to lowest fd >= arg
-            crate::fdtable::sys_dupfd(fd as usize, arg as usize)
-        }
-        1 => 0,  // F_GETFD: return 0 (no FD_CLOEXEC)
-        2 => 0,  // F_SETFD: ignore
+        0 => crate::fdtable::sys_dupfd(fd, arg) as isize, // F_DUPFD
+        1 => 0,  // F_GETFD
+        2 => 0,  // F_SETFD
         3 => {
-            // F_GETFL: return stored flags
+            // F_GETFL
             unsafe {
-                if (fd as usize) < 64 && crate::fdtable::FD_TABLE[fd as usize].active {
-                    crate::fdtable::FD_TABLE[fd as usize].flags as i64
+                if fd < 64 && crate::fdtable::FD_TABLE[fd].active {
+                    crate::fdtable::FD_TABLE[fd].flags as isize
                 } else {
                     0
                 }
             }
         }
-        4 => 0,  // F_SETFL: ignore
+        4 => 0,  // F_SETFL
         _ => 0,
     }
 }
 
 /// writev(fd, iov, iovcnt) — POSIX.1
-pub fn writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> i64 {
+pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
     unsafe {
-        let iov = iov_ptr as *const [u64; 2];
-        let mut total: i64 = 0;
-        for i in 0..iovcnt as usize {
+        // iovec: { iov_base: *mut u8, iov_len: usize } — two usize fields
+        let iov = iov_ptr as *const [usize; 2];
+        let mut total: isize = 0;
+        for i in 0..iovcnt {
             let base = (*iov.add(i))[0];
             let len = (*iov.add(i))[1];
             let n = write(fd, base, len);
@@ -153,19 +146,17 @@ pub fn writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> i64 {
 }
 
 /// sendfile(out_fd, in_fd, offset, count) — Linux (widely used by busybox cat)
-pub fn sendfile(out_fd: u64, in_fd: u64, offset_ptr: u64, count: u64) -> i64 {
-    // Read from in_fd, write to out_fd, up to count bytes.
-    // If offset_ptr is non-null, use that offset instead of fd's current offset.
+pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -> isize {
     unsafe {
         let mut buf = [0u8; 4096];
-        let mut total = 0i64;
-        let mut remaining = count as usize;
+        let mut total: isize = 0;
+        let mut remaining = count;
 
         while remaining > 0 {
             let chunk = remaining.min(4096);
-            let n = crate::fdtable::sys_read_fd(in_fd as usize, buf.as_mut_ptr(), chunk);
-            if n <= 0 { break; } // EOF or error
-            let written = write(out_fd, buf.as_ptr() as u64, n as u64);
+            let n = crate::fdtable::sys_read_fd(in_fd, buf.as_mut_ptr(), chunk);
+            if n <= 0 { break; }
+            let written = write(out_fd, buf.as_ptr() as usize, n as usize);
             if written < 0 { return if total > 0 { total } else { written }; }
             total += written;
             remaining -= n as usize;
@@ -177,9 +168,8 @@ pub fn sendfile(out_fd: u64, in_fd: u64, offset_ptr: u64, count: u64) -> i64 {
 // ── File metadata (POSIX.1 Section 2) ───────────────────────────────
 
 /// stat(pathname, statbuf) — POSIX.1
-/// (Delegates to fstatat with AT_FDCWD)
-pub fn stat(pathname: u64, buf: u64) -> i64 {
-    fstatat(0xffffff9cu64, pathname, buf)
+pub fn stat(pathname: usize, buf: usize) -> isize {
+    fstatat(0xffffff9c, pathname, buf)
 }
 
 /// fstat(fd, statbuf) — POSIX.1
@@ -187,53 +177,49 @@ use crate::arch::StatLayout;
 const STAT_MODE_OFF: usize = <crate::arch::Arch as StatLayout>::MODE_OFF;
 const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::BLKSIZE_OFF;
 
-pub fn fstat(fd: u64, buf: u64) -> i64 {
+pub fn fstat(fd: usize, buf: usize) -> isize {
     if buf == 0 { return -14; }
     if fd <= 2 && is_serial_fd(fd) {
-        // Default serial (not redirected to file/pipe)
         unsafe {
             let p = buf as *mut u8;
             for i in 0..144 { *p.add(i) = 0; }
-            *((buf + STAT_MODE_OFF as u64) as *mut u32) = 0o20666; // S_IFCHR | 0666
-            *((buf + STAT_BLKSIZE_OFF as u64) as *mut u32) = 4096;
+            *((buf + STAT_MODE_OFF) as *mut u32) = 0o20666;
+            *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
         }
         return 0;
     }
     if fd <= 2 {
-        // fd 0-2 redirected to pipe — return FIFO stat
         unsafe {
-            let f = &crate::fdtable::FD_TABLE[fd as usize];
+            let f = &crate::fdtable::FD_TABLE[fd];
             if f.is_pipe {
                 let p = buf as *mut u8;
                 for i in 0..144 { *p.add(i) = 0; }
-                *((buf + STAT_MODE_OFF as u64) as *mut u32) = 0o10666; // S_IFIFO | 0666
-                *((buf + STAT_BLKSIZE_OFF as u64) as *mut u32) = 4096;
+                *((buf + STAT_MODE_OFF) as *mut u32) = 0o10666;
+                *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
                 return 0;
             }
         }
     }
-    // Look up real inode stat from VFS
     unsafe {
         use rux_vfs::FileSystem;
-        let f = &crate::fdtable::FD_TABLE[fd as usize];
+        let f = &crate::fdtable::FD_TABLE[fd];
         if !f.active { return -9; }
         let fs = crate::kstate::fs();
         let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
         if fs.stat(f.ino, &mut vfs_stat).is_err() {
-            // Fallback to generic file stat
             let p = buf as *mut u8;
             for i in 0..144 { *p.add(i) = 0; }
-            *((buf + STAT_MODE_OFF as u64) as *mut u32) = 0o100644;
-            *((buf + STAT_BLKSIZE_OFF as u64) as *mut u32) = 4096;
+            *((buf + STAT_MODE_OFF) as *mut u32) = 0o100644;
+            *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
             return 0;
         }
-        super::fill_linux_stat(buf, &vfs_stat);
+        super::fill_linux_stat(buf as u64, &vfs_stat);
     }
     0
 }
 
 /// fstatat(dirfd, pathname, statbuf, flags) — POSIX.1-2008
-pub fn fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
+pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize) -> isize {
     if buf == 0 { return -14; }
     unsafe {
         use rux_vfs::FileSystem;
@@ -241,11 +227,11 @@ pub fn fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
         let fs = crate::kstate::fs();
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
-            Err(e) => return e,
+            Err(e) => return e as isize,
         };
         let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
         if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
-        super::fill_linux_stat(buf, &vfs_stat);
+        super::fill_linux_stat(buf as u64, &vfs_stat);
         0
     }
 }
@@ -253,7 +239,7 @@ pub fn fstatat(_dirfd: u64, pathname: u64, buf: u64) -> i64 {
 // ── Directory operations (POSIX.1) ──────────────────────────────────
 
 /// chdir(path) — POSIX.1
-pub fn chdir(path_ptr: u64) -> i64 {
+pub fn chdir(path_ptr: usize) -> isize {
     unsafe {
         use rux_vfs::FileSystem;
         let path = super::read_user_path(path_ptr);
@@ -262,10 +248,9 @@ pub fn chdir(path_ptr: u64) -> i64 {
         let fs = crate::kstate::fs();
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
-            Err(e) => return e,
+            Err(e) => return e as isize,
         };
 
-        // Verify it's a directory
         let mut stat = core::mem::zeroed::<rux_vfs::InodeStat>();
         if fs.stat(ino, &mut stat).is_err() { return -2; }
         if stat.mode & rux_vfs::S_IFMT != rux_vfs::S_IFDIR {
@@ -274,15 +259,12 @@ pub fn chdir(path_ptr: u64) -> i64 {
 
         super::CWD_INODE = ino;
 
-        // Update CWD_PATH: build absolute path
         if path[0] == b'/' {
-            // Absolute: just copy it
             let len = path.len().min(255);
             super::CWD_PATH[..len].copy_from_slice(&path[..len]);
             super::CWD_PATH[len] = 0;
             super::CWD_PATH_LEN = len;
         } else {
-            // Relative: append to current CWD
             let cur_len = super::CWD_PATH_LEN;
             let need_slash = cur_len > 0 && super::CWD_PATH[cur_len - 1] != b'/';
             let mut pos = cur_len;
@@ -300,12 +282,12 @@ pub fn chdir(path_ptr: u64) -> i64 {
 }
 
 /// mkdir(pathname, mode) — POSIX.1
-pub fn mkdir(path_ptr: u64) -> i64 {
+pub fn mkdir(path_ptr: usize) -> isize {
     unsafe {
         use rux_vfs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
-            Err(e) => return e,
+            Err(e) => return e as isize,
         };
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
@@ -320,12 +302,12 @@ pub fn mkdir(path_ptr: u64) -> i64 {
 }
 
 /// unlink(pathname) — POSIX.1
-pub fn unlink(path_ptr: u64) -> i64 {
+pub fn unlink(path_ptr: usize) -> isize {
     unsafe {
         use rux_vfs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
-            Err(e) => return e,
+            Err(e) => return e as isize,
         };
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
@@ -340,12 +322,12 @@ pub fn unlink(path_ptr: u64) -> i64 {
 }
 
 /// creat(pathname, mode) — POSIX.1 (equivalent to open with O_CREAT|O_WRONLY|O_TRUNC)
-pub fn creat(path_ptr: u64) -> i64 {
+pub fn creat(path_ptr: usize) -> isize {
     unsafe {
         use rux_vfs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
-            Err(e) => return e,
+            Err(e) => return e as isize,
         };
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
@@ -357,7 +339,7 @@ pub fn creat(path_ptr: u64) -> i64 {
                 let cstr = path_ptr as *const u8;
                 let mut len = 0usize;
                 while *cstr.add(len) != 0 && len < 256 { len += 1; }
-                crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
+                crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len)) as isize
             }
             Err(_) => -17,
         }
@@ -386,8 +368,7 @@ pub fn exit(status: i32) -> ! {
 }
 
 /// waitpid(pid, wstatus, options) — POSIX.1
-/// (Also handles Linux wait4 with rusage=NULL)
-pub fn waitpid(_pid: u64, wstatus_ptr: u64, _options: u64) -> i64 {
+pub fn waitpid(_pid: usize, wstatus_ptr: usize, _options: usize) -> isize {
     unsafe {
         if !super::CHILD_AVAILABLE { return -10; } // -ECHILD
         super::CHILD_AVAILABLE = false;
@@ -400,21 +381,21 @@ pub fn waitpid(_pid: u64, wstatus_ptr: u64, _options: u64) -> i64 {
 }
 
 /// getcwd(buf, size) — POSIX.1
-pub fn getcwd(buf: u64, size: u64) -> i64 {
+pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
         let len = super::CWD_PATH_LEN;
-        if buf == 0 || size < (len + 1) as u64 { return -34; } // -ERANGE
+        if buf == 0 || size < len + 1 { return -34; } // -ERANGE
         let ptr = buf as *mut u8;
         for i in 0..len {
             *ptr.add(i) = super::CWD_PATH[i];
         }
         *ptr.add(len) = 0;
     }
-    buf as i64
+    buf as isize
 }
 
 /// uname(buf) — POSIX.1
-pub fn uname(buf: u64) -> i64 {
+pub fn uname(buf: usize) -> isize {
     if buf == 0 { return -14; }
     unsafe {
         let ptr = buf as *mut u8;
@@ -426,11 +407,10 @@ pub fn uname(buf: u64) -> i64 {
             use rux_vfs::FileSystem;
             let mut name = [0u8; 64];
             let mut len = 3usize;
-            name[0] = b'r'; name[1] = b'u'; name[2] = b'x'; // fallback
+            name[0] = b'r'; name[1] = b'u'; name[2] = b'x';
             let fs = crate::kstate::fs();
             if let Ok(ino) = rux_vfs::path::resolve_path(fs, b"/etc/hostname") {
                 if let Ok(n) = fs.read(ino, 0, &mut name) {
-                    // Strip trailing newline
                     len = n;
                     while len > 0 && (name[len - 1] == b'\n' || name[len - 1] == b'\r') {
                         len -= 1;
@@ -457,10 +437,10 @@ pub fn uname(buf: u64) -> i64 {
 // ── Signals (POSIX.1) ───────────────────────────────────────────────
 
 /// sigaction(signum, act, oldact) — POSIX.1
-pub fn sigaction(_signum: u64, _act: u64, _oldact: u64) -> i64 { 0 }
+pub fn sigaction(_signum: usize, _act: usize, _oldact: usize) -> isize { 0 }
 
 /// sigprocmask(how, set, oldset, sigsetsize) — POSIX.1
-pub fn sigprocmask(_how: u64, _set: u64, oldset: u64, sigsetsize: u64) -> i64 {
+pub fn sigprocmask(_how: usize, _set: usize, oldset: usize, sigsetsize: usize) -> isize {
     if oldset != 0 && sigsetsize > 0 && sigsetsize <= 8 {
         unsafe { *(oldset as *mut u64) = 0; }
     }
@@ -470,11 +450,11 @@ pub fn sigprocmask(_how: u64, _set: u64, oldset: u64, sigsetsize: u64) -> i64 {
 // ── Terminal control (POSIX.1 termios) ──────────────────────────────
 
 /// ioctl(fd, request, arg) — POSIX.1 (for terminal operations)
-pub fn ioctl(_fd: u64, request: u64, arg: u64) -> i64 {
-    const TCGETS: u64 = 0x5401;
-    const TIOCGWINSZ: u64 = 0x5413;
-    const TIOCSPGRP: u64 = 0x5410;
-    const TIOCGPGRP: u64 = 0x540F;
+pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
+    const TCGETS: usize = 0x5401;
+    const TIOCGWINSZ: usize = 0x5413;
+    const TIOCSPGRP: usize = 0x5410;
+    const TIOCGPGRP: usize = 0x540F;
 
     match request {
         TIOCGWINSZ => {
@@ -486,10 +466,10 @@ pub fn ioctl(_fd: u64, request: u64, arg: u64) -> i64 {
                 unsafe {
                     let ptr = arg as *mut u8;
                     for i in 0..60 { *ptr.add(i) = 0; }
-                    *(arg as *mut u32) = 0x500;          // c_iflag: ICRNL|IXON
-                    *((arg + 4) as *mut u32) = 0x5;      // c_oflag: OPOST|ONLCR
-                    *((arg + 8) as *mut u32) = 0xBF;     // c_cflag
-                    *((arg + 12) as *mut u32) = 0x8A3B;  // c_lflag: ISIG|ICANON|ECHO|...
+                    *(arg as *mut u32) = 0x500;
+                    *((arg + 4) as *mut u32) = 0x5;
+                    *((arg + 8) as *mut u32) = 0xBF;
+                    *((arg + 12) as *mut u32) = 0x8A3B;
                 }
             }
             0
@@ -506,7 +486,7 @@ pub fn ioctl(_fd: u64, request: u64, arg: u64) -> i64 {
 // ── Time (POSIX.1) ──────────────────────────────────────────────────
 
 /// clock_gettime(clockid, timespec) — POSIX.1-2008
-pub fn clock_gettime(_clockid: u64, tp: u64) -> i64 {
+pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
     if tp == 0 { return -14; }
     let ticks = Arch::ticks();
     unsafe {
@@ -519,26 +499,24 @@ pub fn clock_gettime(_clockid: u64, tp: u64) -> i64 {
 // ── Memory mapping (POSIX.1) ────────────────────────────────────────
 
 /// mmap(addr, length, prot, flags, fd, offset) — POSIX.1
-pub fn mmap(addr: u64, len: u64, _prot: u64, mmap_flags: u64, _fd: u64) -> i64 {
+pub fn mmap(addr: usize, len: usize, _prot: usize, mmap_flags: usize, _fd: usize) -> isize {
     unsafe {
-        use rux_mm::FrameAllocator;
-
         if mmap_flags & 0x20 == 0 { return -12; } // MAP_ANONYMOUS only
 
         let aligned_len = (len + 0xFFF) & !0xFFF;
         let result = if mmap_flags & 0x10 != 0 && addr != 0 {
-            addr & !0xFFF // MAP_FIXED
+            (addr & !0xFFF) as u64 // MAP_FIXED
         } else {
             let r = super::MMAP_BASE;
-            super::MMAP_BASE += aligned_len;
+            super::MMAP_BASE += aligned_len as u64;
             r
         };
 
         let pg_flags = rux_mm::MappingFlags::READ
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::USER);
-        super::map_user_pages(result, result + aligned_len, pg_flags);
+        super::map_user_pages(result, result + aligned_len as u64, pg_flags);
 
-        result as i64
+        result as isize
     }
 }

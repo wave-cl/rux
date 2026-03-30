@@ -1,16 +1,12 @@
 /// Linux-specific syscall extensions.
 ///
 /// These syscalls are Linux kernel extensions not defined by POSIX.
-/// They provide Linux-specific functionality like brk heap management,
-/// getdents64 directory format, exit_group, set_tid_address, etc.
-///
-/// Programs compiled for Linux (like busybox/musl) depend on these.
-
+/// All arguments use native-width types (usize/isize).
 
 // ── Pipes (Linux extension) ──────────────────────────────────────────
 
 /// pipe2(pipefd, flags) — create a pipe.
-pub fn pipe2(pipefd_ptr: u64, _flags: u64) -> i64 {
+pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
     if pipefd_ptr == 0 { return -14; } // -EFAULT
     match crate::pipe::create() {
         Ok((_pipe_id, read_fd, write_fd)) => {
@@ -21,18 +17,18 @@ pub fn pipe2(pipefd_ptr: u64, _flags: u64) -> i64 {
             }
             0
         }
-        Err(e) => e,
+        Err(e) => e as isize,
     }
 }
 
 // ── Memory: brk (Linux historical, not POSIX) ──────────────────────
 
 /// brk(addr) — Linux-specific heap management.
-/// POSIX does not define brk; portable programs use mmap instead.
-pub fn brk(addr: u64) -> i64 {
+pub fn brk(addr: usize) -> isize {
     unsafe {
         if super::PROGRAM_BRK == 0 { super::PROGRAM_BRK = 0x800000; }
-        if addr == 0 { return super::PROGRAM_BRK as i64; }
+        let addr = addr as u64;
+        if addr == 0 { return super::PROGRAM_BRK as isize; }
         if addr >= super::PROGRAM_BRK {
             let old_page = (super::PROGRAM_BRK + 0xFFF) & !0xFFF;
             let new_page = (addr + 0xFFF) & !0xFFF;
@@ -42,27 +38,23 @@ pub fn brk(addr: u64) -> i64 {
             super::map_user_pages(old_page, new_page, flags);
             super::PROGRAM_BRK = addr;
         }
-        super::PROGRAM_BRK as i64
+        super::PROGRAM_BRK as isize
     }
 }
 
 // ── Directory listing (Linux-specific format) ───────────────────────
 
 /// getdents64(fd, dirp, count) — Linux-specific.
-///
-/// POSIX uses readdir(3) which is a libc function, not a syscall.
-/// Linux exposes the raw getdents64 syscall with its own struct format:
-///   struct linux_dirent64 { u64 d_ino, d_off; u16 d_reclen; u8 d_type; char d_name[]; }
-pub fn getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
+pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
     unsafe {
         use rux_vfs::{FileSystem, DirEntry, InodeType};
         let fs = crate::kstate::fs();
         let out = buf_ptr as *mut u8;
-        let limit = bufsize as usize;
+        let limit = bufsize;
         let mut pos = 0usize;
 
         let dir_ino = if fd >= 3 {
-            match crate::fdtable::get_fd_inode(fd as usize) {
+            match crate::fdtable::get_fd_inode(fd) {
                 Some(ino) => ino,
                 None => return -9,
             }
@@ -70,9 +62,8 @@ pub fn getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
             0 // root
         };
 
-        // Use per-fd offset from the fd table (reset on each open)
         let mut offset = if fd < 64 {
-            crate::fdtable::FD_TABLE[fd as usize].offset
+            crate::fdtable::FD_TABLE[fd].offset
         } else {
             0
         };
@@ -89,9 +80,9 @@ pub fn getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
                     *((out.add(pos + 8)) as *mut u64) = (offset + 1) as u64;
                     *((out.add(pos + 16)) as *mut u16) = reclen as u16;
                     let dtype: u8 = match entry.kind {
-                        InodeType::File => 8,       // DT_REG
-                        InodeType::Directory => 4,  // DT_DIR
-                        InodeType::Symlink => 10,   // DT_LNK
+                        InodeType::File => 8,
+                        InodeType::Directory => 4,
+                        InodeType::Symlink => 10,
                         _ => 0,
                     };
                     *out.add(pos + 18) = dtype;
@@ -103,31 +94,27 @@ pub fn getdents64(fd: u64, buf_ptr: u64, bufsize: u64) -> i64 {
                 _ => break,
             }
         }
-        // Save offset back to fd table
         if fd < 64 {
-            crate::fdtable::FD_TABLE[fd as usize].offset = offset;
+            crate::fdtable::FD_TABLE[fd].offset = offset;
         }
         if pos == start_pos { return 0; }
-        pos as i64
+        pos as isize
     }
 }
 
 // ── Process extensions (Linux-specific) ─────────────────────────────
 
 /// exit_group(status) — Linux-specific.
-/// Exits all threads in the thread group. POSIX _exit only exits the calling thread.
 pub fn exit_group(status: i32) -> ! {
-    super::posix::exit(status) // same behavior for single-threaded
+    super::posix::exit(status)
 }
 
 /// wait4(pid, wstatus, options, rusage) — Linux extension of POSIX waitpid.
-/// Adds rusage parameter (which we ignore).
-pub fn wait4(pid: u64, wstatus_ptr: u64, options: u64, _rusage: u64) -> i64 {
+pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> isize {
     super::posix::waitpid(pid, wstatus_ptr, options)
 }
 
 /// set_tid_address(tidptr) — Linux-specific TLS.
-/// Stores the address for the clear_child_tid futex. Returns the caller's TID.
-pub fn set_tid_address(_tidptr: u64) -> i64 {
+pub fn set_tid_address(_tidptr: usize) -> isize {
     1 // TID = 1
 }

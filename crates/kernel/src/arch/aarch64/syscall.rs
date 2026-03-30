@@ -29,12 +29,12 @@ pub fn handle_syscall(frame: *mut u8) {
         let result: i64 = match nr {
             220 => {
                 CURRENT_REGS_PTR = regs;
-                crate::syscall::generic_vfork::<super::Aarch64>()
+                crate::syscall::generic_vfork::<super::Aarch64>() as i64
             }
-            221 => { crate::syscall::generic_exec::<super::Aarch64>(a0, a1); 0 }
+            221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             _ => {
                 let sc = translate_aarch64(nr);
-                crate::syscall::dispatch(sc, a0, a1, a2, a3, a4)
+                crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64
             }
         };
 
