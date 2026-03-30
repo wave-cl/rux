@@ -245,7 +245,7 @@ static mut VFORK_PARENT_CWD_INODE: u64 = 0; // inode IDs are genuinely u64
 static mut VFORK_PARENT_USER_SP: usize = 0;
 static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
 static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
-static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::OpenFile {
+static mut VFORK_PARENT_FDS: [rux_vfs::fdtable::OpenFile; 64] = [rux_vfs::fdtable::OpenFile {
     ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 }; 64];
@@ -269,7 +269,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
     VFORK_PARENT_MMAP_BASE = MMAP_BASE;
     VFORK_PARENT_PROGRAM_BRK = PROGRAM_BRK;
     VFORK_PARENT_CWD_INODE = CWD_INODE;
-    for i in 0..64 { VFORK_PARENT_FDS[i] = crate::fdtable::FD_TABLE[i]; }
+    for i in 0..64 { VFORK_PARENT_FDS[i] = rux_vfs::fdtable::FD_TABLE[i]; }
     CHILD_AVAILABLE = true;
 
     // 3. setjmp — returns 0 on first call, child PID on longjmp
@@ -326,7 +326,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         MMAP_BASE = VFORK_PARENT_MMAP_BASE;
         PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
         CWD_INODE = VFORK_PARENT_CWD_INODE;
-        for i in 0..64 { crate::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
+        for i in 0..64 { rux_vfs::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
 
         // Restore TLS
         V::restore_tls(VFORK_PARENT_TLS);

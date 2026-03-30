@@ -6,13 +6,14 @@
 
 use rux_arch::SerialOps;
 use rux_arch::TimerOps;
+use rux_vfs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 
 // ── File I/O (POSIX.1 Section 2) ────────────────────────────────────
 
 /// Check if fd 0-2 should use serial (not redirected to file/pipe).
 fn is_serial_fd(fd: usize) -> bool {
-    crate::fdtable::is_serial_fd(fd)
+    fdt::is_serial_fd(fd)
 }
 
 /// read(fd, buf, count) — POSIX.1
@@ -35,7 +36,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    crate::fdtable::sys_read_fd(fd, buf as *mut u8, len)
+    unsafe { fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE_OPS) }
 }
 
 /// write(fd, buf, count) — POSIX.1
@@ -47,7 +48,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    crate::fdtable::sys_write_fd(fd, buf as *const u8, len)
+    unsafe { fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE_OPS) }
 }
 
 /// open(pathname, flags, mode) — POSIX.1
@@ -59,7 +60,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
         let o_creat = flags & 0x40 != 0;
 
         match super::resolve_with_cwd(path) {
-            Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
+            Ok(ino) => fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs()),
             Err(_) if o_creat => {
                 use rux_vfs::{FileSystem, FileName};
                 let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
@@ -72,7 +73,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                     Err(_) => return -22,
                 };
                 match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
-                    Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
+                    Ok(ino) => fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs()),
                     Err(_) => -13,
                 }
             }
@@ -88,36 +89,36 @@ pub fn openat(_dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isiz
 
 /// close(fd) — POSIX.1
 pub fn close(fd: usize) -> isize {
-    crate::fdtable::sys_close(fd)
+    unsafe { fdt::sys_close(fd, crate::syscall::IN_VFORK_CHILD, Some(&crate::pipe::PIPE_OPS)) }
 }
 
 /// dup(oldfd) — POSIX.1: duplicate fd to lowest available fd.
 pub fn dup(oldfd: usize) -> isize {
-    crate::fdtable::sys_dup(oldfd)
+    fdt::sys_dup(oldfd)
 }
 
 /// dup2(oldfd, newfd) — POSIX.1
 pub fn dup2(oldfd: usize, newfd: usize) -> isize {
-    crate::fdtable::sys_dup2(oldfd, newfd)
+    unsafe { fdt::sys_dup2(oldfd, newfd, crate::syscall::IN_VFORK_CHILD, Some(&crate::pipe::PIPE_OPS)) }
 }
 
 /// lseek(fd, offset, whence) — POSIX.1
 /// offset is i64: file offsets can exceed 4GB even on 32-bit.
 pub fn lseek(fd: usize, offset: i64, whence: usize) -> isize {
-    crate::fdtable::sys_lseek(fd, offset, whence as u32)
+    unsafe { fdt::sys_lseek(fd, offset, whence as u32, crate::kstate::fs()) }
 }
 
 /// fcntl(fd, cmd, arg) — POSIX.1
 pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
     match cmd {
-        0 => crate::fdtable::sys_dupfd(fd, arg), // F_DUPFD
+        0 => fdt::sys_dupfd(fd, arg), // F_DUPFD
         1 => 0,  // F_GETFD
         2 => 0,  // F_SETFD
         3 => {
             // F_GETFL
             unsafe {
-                if fd < 64 && crate::fdtable::FD_TABLE[fd].active {
-                    crate::fdtable::FD_TABLE[fd].flags as isize
+                if fd < 64 && fdt::FD_TABLE[fd].active {
+                    fdt::FD_TABLE[fd].flags as isize
                 } else {
                     0
                 }
@@ -154,7 +155,7 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
 
         while remaining > 0 {
             let chunk = remaining.min(4096);
-            let n = crate::fdtable::sys_read_fd(in_fd, buf.as_mut_ptr(), chunk);
+            let n = fdt::sys_read_fd(in_fd, buf.as_mut_ptr(), chunk, crate::kstate::fs(), &crate::pipe::PIPE_OPS);
             if n <= 0 { break; }
             let written = write(out_fd, buf.as_ptr() as usize, n as usize);
             if written < 0 { return if total > 0 { total } else { written }; }
@@ -190,7 +191,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
     }
     if fd <= 2 {
         unsafe {
-            let f = &crate::fdtable::FD_TABLE[fd];
+            let f = &fdt::FD_TABLE[fd];
             if f.is_pipe {
                 let p = buf as *mut u8;
                 for i in 0..144 { *p.add(i) = 0; }
@@ -202,7 +203,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
     }
     unsafe {
         use rux_vfs::FileSystem;
-        let f = &crate::fdtable::FD_TABLE[fd];
+        let f = &fdt::FD_TABLE[fd];
         if !f.active { return -9; }
         let fs = crate::kstate::fs();
         let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
@@ -339,7 +340,7 @@ pub fn creat(path_ptr: usize) -> isize {
                 let cstr = path_ptr as *const u8;
                 let mut len = 0usize;
                 while *cstr.add(len) != 0 && len < 256 { len += 1; }
-                crate::fdtable::sys_open(core::slice::from_raw_parts(cstr, len))
+                fdt::sys_open(core::slice::from_raw_parts(cstr, len), crate::kstate::fs())
             }
             Err(_) => -17,
         }

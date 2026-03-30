@@ -53,7 +53,7 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
         let mut pos = 0usize;
 
         let dir_ino = if fd >= 3 {
-            match crate::fdtable::get_fd_inode(fd) {
+            match rux_vfs::fdtable::get_fd_inode(fd) {
                 Some(ino) => ino,
                 None => return -9,
             }
@@ -62,7 +62,7 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
         };
 
         let mut offset = if fd < 64 {
-            crate::fdtable::FD_TABLE[fd].offset
+            rux_vfs::fdtable::FD_TABLE[fd].offset
         } else {
             0
         };
@@ -94,7 +94,7 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
             }
         }
         if fd < 64 {
-            crate::fdtable::FD_TABLE[fd].offset = offset;
+            rux_vfs::fdtable::FD_TABLE[fd].offset = offset;
         }
         if pos == start_pos { return 0; }
         pos as isize

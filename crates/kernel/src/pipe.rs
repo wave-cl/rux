@@ -35,7 +35,7 @@ pub fn create() -> Result<(u8, isize, isize), isize> {
     let write_fd = match rux_vfs::fdtable::alloc_pipe_fd(pipe_id, true) {
         Ok(fd) => fd,
         Err(e) => {
-            crate::fdtable::sys_close(read_fd as usize);
+            unsafe { rux_vfs::fdtable::sys_close(read_fd as usize, crate::syscall::IN_VFORK_CHILD, Some(&PIPE_OPS)) };
             rux_ipc::pipe::close(pipe_id, false);
             rux_ipc::pipe::close(pipe_id, true);
             return Err(e);

@@ -6,7 +6,6 @@ mod arch;
 mod scheduler;
 mod elf;
 mod kstate;
-pub mod fdtable;
 pub mod pipe;
 pub mod execargs;
 pub mod pgtrack;
