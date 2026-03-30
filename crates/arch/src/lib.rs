@@ -87,9 +87,9 @@ pub unsafe trait SerialOps {
 /// Implementations must correctly save and restore all callee-saved registers.
 pub unsafe trait ContextOps {
     /// Switch from current task to another. Saves SP to `old_sp`, loads `new_sp`.
-    unsafe fn context_switch(old_sp: *mut u64, new_sp: u64);
+    unsafe fn context_switch(old_sp: *mut usize, new_sp: usize);
     /// Initialize a new task's kernel stack to "return" to `entry(arg)`.
-    unsafe fn init_task_stack(stack_top: u64, entry: u64, arg: u64) -> u64;
+    unsafe fn init_task_stack(stack_top: usize, entry: usize, arg: usize) -> usize;
 }
 
 /// Enter user mode (ring 3 / EL0).
@@ -97,7 +97,7 @@ pub unsafe trait ContextOps {
 /// # Safety
 /// Caller must ensure user page table is active with valid mappings.
 pub unsafe trait UserModeOps {
-    unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> !;
+    unsafe fn enter_user_mode(entry: usize, user_stack: usize) -> !;
 }
 
 /// Exit the emulator/machine.
@@ -153,14 +153,14 @@ pub trait ArchSpecificOps {
 /// All methods manipulate hardware state (registers, MSRs, page tables).
 pub unsafe trait VforkContext {
     /// Virtual address base for the child's copied stack pages.
-    const CHILD_STACK_VA: u64;
+    const CHILD_STACK_VA: usize;
 
     /// Save the parent's register frame (from syscall stack or exception frame).
     unsafe fn save_regs();
     /// Save the user stack pointer.
-    unsafe fn save_user_sp() -> u64;
+    unsafe fn save_user_sp() -> usize;
     /// Set the user stack pointer (for child stack adjustment).
-    unsafe fn set_user_sp(sp: u64);
+    unsafe fn set_user_sp(sp: usize);
     /// Save the TLS base register. Returns the saved value.
     unsafe fn save_tls() -> u64;
     /// Restore the TLS base register.
@@ -172,12 +172,12 @@ pub unsafe trait VforkContext {
     /// Clear the setjmp state to prevent double-longjmp.
     unsafe fn clear_jmp();
     /// Perform setjmp. Returns 0 on first call, child PID on longjmp return.
-    unsafe fn setjmp() -> i64;
+    unsafe fn setjmp() -> isize;
     /// Check if a vfork parent is waiting (setjmp state is active).
     fn jmp_active() -> bool;
     /// Resume the vfork parent with the given child PID. Does not return.
-    unsafe fn longjmp(child_pid: i64) -> !;
+    unsafe fn longjmp(child_pid: isize) -> !;
     /// Restore parent registers and return to user mode with the given value.
     /// Does not return.
-    unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> !;
+    unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> !;
 }

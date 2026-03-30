@@ -97,6 +97,6 @@ pub unsafe fn load_and_exec_elf(
         in(reg) upt.root_phys().as_usize(),
         options(nostack)
     );
-    let user_sp = crate::execargs::write_to_stack(stack_top);
-    super::syscall::enter_user_mode(elf_info.entry, user_sp);
+    let user_sp = crate::execargs::write_to_stack(stack_top as usize);
+    super::syscall::enter_user_mode(elf_info.entry as usize, user_sp);
 }

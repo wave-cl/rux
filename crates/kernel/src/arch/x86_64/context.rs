@@ -72,9 +72,9 @@ context_switch:
 
 extern "C" {
     /// Switch from the current task to another.
-    /// - `old_rsp`: pointer to a u64 where the current RSP will be saved
-    /// - `new_rsp`: the RSP value to switch to (previously saved by this function)
-    pub fn context_switch(old_rsp: *mut u64, new_rsp: u64);
+    /// - `old_sp`: pointer where the current SP will be saved
+    /// - `new_sp`: the SP value to switch to (previously saved by this function)
+    pub fn context_switch(old_sp: *mut usize, new_sp: usize);
 }
 
 /// Initialize a new kernel stack for a task that will start at `entry`.
@@ -82,34 +82,30 @@ extern "C" {
 /// Pushes a SwitchContext-compatible frame onto the stack so that
 /// context_switch's `ret` will jump to `entry`.
 ///
-/// Returns the initial RSP value to pass to context_switch as `new_rsp`.
-pub unsafe fn init_task_stack(stack_top: u64, entry: u64, _arg: u64) -> u64 {
+/// Returns the initial SP value to pass to context_switch as `new_sp`.
+pub unsafe fn init_task_stack(stack_top: usize, entry: usize, _arg: usize) -> usize {
     let mut sp = stack_top;
+    let w = core::mem::size_of::<usize>();
 
-    // The entry function is the "return address" that context_switch's retq pops.
-    // After context_switch pops r15-r12, rbx, rbp (6 registers), it does retq
-    // which pops the next value as RIP.
-
-    // Push the entry point as the return address
-    sp -= 8;
-    *(sp as *mut u64) = entry;
+    // Push the entry point as the return address (retq pops RIP)
+    sp -= w; *(sp as *mut usize) = entry;
 
     // Push callee-saved registers (all zero for a new task)
-    sp -= 8; *(sp as *mut u64) = 0; // rbp
-    sp -= 8; *(sp as *mut u64) = 0; // rbx
-    sp -= 8; *(sp as *mut u64) = 0; // r12
-    sp -= 8; *(sp as *mut u64) = 0; // r13
-    sp -= 8; *(sp as *mut u64) = 0; // r14
-    sp -= 8; *(sp as *mut u64) = 0; // r15
+    sp -= w; *(sp as *mut usize) = 0; // rbp
+    sp -= w; *(sp as *mut usize) = 0; // rbx
+    sp -= w; *(sp as *mut usize) = 0; // r12
+    sp -= w; *(sp as *mut usize) = 0; // r13
+    sp -= w; *(sp as *mut usize) = 0; // r14
+    sp -= w; *(sp as *mut usize) = 0; // r15
 
     sp
 }
 
 unsafe impl rux_arch::ContextOps for super::X86_64 {
-    unsafe fn context_switch(old_sp: *mut u64, new_sp: u64) {
+    unsafe fn context_switch(old_sp: *mut usize, new_sp: usize) {
         context_switch(old_sp, new_sp)
     }
-    unsafe fn init_task_stack(stack_top: u64, entry: u64, arg: u64) -> u64 {
+    unsafe fn init_task_stack(stack_top: usize, entry: usize, arg: usize) -> usize {
         init_task_stack(stack_top, entry, arg)
     }
 }

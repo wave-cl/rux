@@ -84,7 +84,7 @@ pub fn set(path: &[u8], arg: &[u8]) {
 /// Write Linux-compatible stack layout for the new process.
 ///
 /// Layout: [sp]=argc, argv[0..n], NULL, envp[0..m], NULL, auxv, strings
-pub unsafe fn write_to_stack(stack_top: u64) -> u64 {
+pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     let argc = ARGC;
 
     // Environment strings
@@ -105,22 +105,24 @@ pub unsafe fn write_to_stack(stack_top: u64) -> u64 {
         str_size += env.len();
     }
 
-    // Auxv: 6 pairs × 16 bytes = 96 bytes
-    let auxv_size = 6 * 16;
+    let word = core::mem::size_of::<usize>(); // 8 on 64-bit, 4 on 32-bit
+
+    // Auxv: 6 pairs × 2 words each
+    let auxv_size = 6 * 2 * word;
 
     // Header: argc + argv[0..argc] + NULL + envp[0..3] + NULL
     let header_slots = 1 + argc + 1 + env_strs.len() + 1;
-    let header_size = header_slots * 8;
+    let header_size = header_slots * word;
 
     let total = header_size + auxv_size + str_size;
     let aligned_total = (total + 15) & !15;
 
-    let sp = stack_top - aligned_total as u64;
-    let str_base = sp + (header_size + auxv_size) as u64;
+    let sp = stack_top - aligned_total;
+    let str_base = sp + header_size + auxv_size;
 
     // Write strings
     let mut str_pos = str_base;
-    let mut argv_addrs = [0u64; MAX_ARGS];
+    let mut argv_addrs = [0usize; MAX_ARGS];
 
     for i in 0..argc {
         argv_addrs[i] = str_pos;
@@ -129,22 +131,22 @@ pub unsafe fn write_to_stack(stack_top: u64) -> u64 {
         let off = ARGV_OFFSETS[i];
         for j in 0..len { *p.add(j) = ARGV_BUF[off + j]; }
         *p.add(len) = 0;
-        str_pos += (len + 1) as u64;
+        str_pos += len + 1;
     }
 
-    let mut env_addrs = [0u64; 8]; // room for up to 8 env vars
+    let mut env_addrs = [0usize; 8];
     for (idx, env) in env_strs.iter().enumerate() {
         env_addrs[idx] = str_pos;
         let p = str_pos as *mut u8;
         for (j, &b) in env.iter().enumerate() { *p.add(j) = b; }
-        str_pos += env.len() as u64;
+        str_pos += env.len();
     }
 
-    // Write header
-    let hdr = sp as *mut u64;
+    // Write header (pointer-width slots)
+    let hdr = sp as *mut usize;
     let mut slot = 0;
 
-    *hdr.add(slot) = argc as u64; slot += 1;
+    *hdr.add(slot) = argc; slot += 1;
     for i in 0..argc {
         *hdr.add(slot) = argv_addrs[i]; slot += 1;
     }
@@ -155,8 +157,8 @@ pub unsafe fn write_to_stack(stack_top: u64) -> u64 {
     }
     *hdr.add(slot) = 0; slot += 1; // envp NULL
 
-    // Auxiliary vector
-    let auxv = hdr.add(slot) as *mut [u64; 2];
+    // Auxiliary vector (pointer-width pairs)
+    let auxv = hdr.add(slot) as *mut [usize; 2];
     (*auxv.add(0)) = [6, 4096];   // AT_PAGESZ
     (*auxv.add(1)) = [11, 0];     // AT_UID
     (*auxv.add(2)) = [23, 0];     // AT_EUID

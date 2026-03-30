@@ -6,7 +6,7 @@
 core::arch::global_asm!(r#"
 .global context_switch
 context_switch:
-    // context_switch(old_sp: *mut u64, new_sp: u64)
+    // context_switch(old_sp: *mut usize, new_sp: usize)
     // x0 = pointer to save old SP
     // x1 = new SP to switch to
 
@@ -38,48 +38,36 @@ context_switch:
 "#);
 
 extern "C" {
-    pub fn context_switch(old_sp: *mut u64, new_sp: u64);
+    pub fn context_switch(old_sp: *mut usize, new_sp: usize);
 }
 
 /// Initialize a new kernel stack for a task.
 /// Pushes a callee-saved register frame so that context_switch's first
 /// switch into this task will "return" to `entry`.
-pub unsafe fn init_task_stack(stack_top: u64, entry: u64, _arg: u64) -> u64 {
+pub unsafe fn init_task_stack(stack_top: usize, entry: usize, _arg: usize) -> usize {
     let mut sp = stack_top & !0xF; // ensure 16-byte alignment
 
-    // context_switch pushes in order: x19+x20, x21+x22, ..., x29+x30
-    // So x29+x30 is at the LOWEST address (SP after all pushes).
-    // We must lay out the stack to match the POP order:
-    //   [SP+0]  = x29, x30  (first popped)
+    // 6 pairs × 16 bytes = 96
+    sp -= 96;
+
+    // Layout matches context_switch's ldp order:
+    //   [SP+0]  = x29 (FP), x30 (LR)  — first popped
     //   [SP+16] = x27, x28
-    //   [SP+32] = x25, x26
-    //   [SP+48] = x23, x24
-    //   [SP+64] = x21, x22
-    //   [SP+80] = x19, x20  (last popped)
-
-    sp -= 96; // 6 pairs × 16 bytes = 96
-
-    *((sp + 0) as *mut u64) = 0;          // x29 (FP)
-    *((sp + 8) as *mut u64) = entry;      // x30 (LR) = entry point
-    *((sp + 16) as *mut u64) = 0;         // x27
-    *((sp + 24) as *mut u64) = 0;         // x28
-    *((sp + 32) as *mut u64) = 0;         // x25
-    *((sp + 40) as *mut u64) = 0;         // x26
-    *((sp + 48) as *mut u64) = 0;         // x23
-    *((sp + 56) as *mut u64) = 0;         // x24
-    *((sp + 64) as *mut u64) = 0;         // x21
-    *((sp + 72) as *mut u64) = 0;         // x22
-    *((sp + 80) as *mut u64) = 0;         // x19
-    *((sp + 88) as *mut u64) = 0;         // x20
+    //   ...
+    //   [SP+80] = x19, x20             — last popped
+    let p = sp as *mut usize;
+    *p.add(0) = 0;          // x29 (FP)
+    *p.add(1) = entry;      // x30 (LR) = entry point
+    for i in 2..12 { *p.add(i) = 0; } // x27-x20, x19
 
     sp
 }
 
 unsafe impl rux_arch::ContextOps for super::Aarch64 {
-    unsafe fn context_switch(old_sp: *mut u64, new_sp: u64) {
+    unsafe fn context_switch(old_sp: *mut usize, new_sp: usize) {
         context_switch(old_sp, new_sp)
     }
-    unsafe fn init_task_stack(stack_top: u64, entry: u64, arg: u64) -> u64 {
+    unsafe fn init_task_stack(stack_top: usize, entry: usize, arg: usize) -> usize {
         init_task_stack(stack_top, entry, arg)
     }
 }

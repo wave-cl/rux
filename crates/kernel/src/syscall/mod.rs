@@ -242,7 +242,7 @@ pub trait SyscallTranslate {
 static mut VFORK_PARENT_MMAP_BASE: usize = 0;
 static mut VFORK_PARENT_PROGRAM_BRK: usize = 0;
 static mut VFORK_PARENT_CWD_INODE: u64 = 0; // inode IDs are genuinely u64
-static mut VFORK_PARENT_USER_SP: u64 = 0;   // register-width, set by arch VforkContext
+static mut VFORK_PARENT_USER_SP: usize = 0;
 static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
 static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
 static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::OpenFile {
@@ -283,7 +283,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         let alloc = crate::kstate::alloc();
         let parent_sp = VFORK_PARENT_USER_SP;
         let parent_page_base = parent_sp & !0xFFF;
-        let child_stack_pages = 4u64;
+        let child_stack_pages = 4usize;
         let child_va_base = V::CHILD_STACK_VA;
 
         let pt_root = V::read_pt_root();

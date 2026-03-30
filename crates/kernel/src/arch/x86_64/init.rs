@@ -188,9 +188,9 @@ pub fn x86_64_init(multiboot_info: usize) {
     serial::write_str("rux: context switch test...\n");
     unsafe {
         static mut TASK_B_STACK: [u8; 16384] = [0; 16384];
-        let stack_top = TASK_B_STACK.as_ptr() as u64 + 16384;
+        let stack_top = TASK_B_STACK.as_ptr() as usize + 16384;
         let task_b_rsp = super::context::init_task_stack(
-            stack_top, task_b_entry as u64, 0x42,
+            stack_top, task_b_entry as usize, 0x42,
         );
         super::context::context_switch(&raw mut MAIN_RSP, task_b_rsp);
         serial::write_str("rux: back in main task\n");
@@ -204,8 +204,8 @@ pub fn x86_64_init(multiboot_info: usize) {
         let sched = scheduler::get();
         static mut STACK_A: [u8; 16384] = [0; 16384];
         static mut STACK_B: [u8; 16384] = [0; 16384];
-        sched.create_task(task_counter_a, STACK_A.as_ptr() as u64 + 16384, 0);
-        sched.create_task(task_counter_b, STACK_B.as_ptr() as u64 + 16384, 5);
+        sched.create_task(task_counter_a, STACK_A.as_ptr() as usize + 16384, 0);
+        sched.create_task(task_counter_b, STACK_B.as_ptr() as usize + 16384, 5);
         serial::write_str("rux: created tasks A and B\n");
         sched.need_resched = true;
         sched.schedule();
@@ -310,12 +310,12 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     elf::load_elf_from_inode(init_ino as u64, alloc);
 }
 
-static mut MAIN_RSP: u64 = 0;
+static mut MAIN_RSP: usize = 0;
 
 extern "C" fn task_b_entry() {
     serial::write_str("rux: task B running!\n");
     unsafe {
-        static mut TASK_B_RSP: u64 = 0;
+        static mut TASK_B_RSP: usize = 0;
         super::context::context_switch(&raw mut TASK_B_RSP, MAIN_RSP);
     }
     loop { core::hint::spin_loop(); }

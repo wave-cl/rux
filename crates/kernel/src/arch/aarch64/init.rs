@@ -122,8 +122,8 @@ pub fn aarch64_init(_dtb_addr: usize) {
     serial::write_str("rux: context switch test...\n");
     unsafe {
         static mut STACK_B: [u8; 65536] = [0; 65536];
-        let stack_top = STACK_B.as_ptr() as u64 + 65536;
-        let task_b_rsp = super::context::init_task_stack(stack_top, aarch64_task_b as u64, 0);
+        let stack_top = STACK_B.as_ptr() as usize + 65536;
+        let task_b_rsp = super::context::init_task_stack(stack_top, aarch64_task_b as usize, 0);
         super::context::context_switch(&raw mut MAIN_RSP_AA64, task_b_rsp);
         serial::write_str("rux: back in main task\n");
     }
@@ -137,10 +137,10 @@ pub fn aarch64_init(_dtb_addr: usize) {
         static mut SCHED_STACK_A: [u8; 65536] = [0; 65536];
         static mut SCHED_STACK_B: [u8; 65536] = [0; 65536];
         sched.create_task(
-            aarch64_counter_a, SCHED_STACK_A.as_ptr() as u64 + 65536, 0,
+            aarch64_counter_a, SCHED_STACK_A.as_ptr() as usize + 65536, 0,
         );
         sched.create_task(
-            aarch64_counter_b, SCHED_STACK_B.as_ptr() as u64 + 65536, 5,
+            aarch64_counter_b, SCHED_STACK_B.as_ptr() as usize + 65536, 5,
         );
         serial::write_str("rux: created tasks A and B\n");
         sched.need_resched = true;
@@ -202,12 +202,12 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     elf::load_elf_from_inode(init_ino as u64, alloc);
 }
 
-static mut MAIN_RSP_AA64: u64 = 0;
+static mut MAIN_RSP_AA64: usize = 0;
 
 extern "C" fn aarch64_task_b() {
     serial::write_str("rux: task B running!\n");
     unsafe {
-        static mut TASK_B_RSP: u64 = 0;
+        static mut TASK_B_RSP: usize = 0;
         super::context::context_switch(&raw mut TASK_B_RSP, MAIN_RSP_AA64);
     }
     loop { core::hint::spin_loop(); }

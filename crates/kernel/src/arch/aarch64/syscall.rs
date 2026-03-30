@@ -132,7 +132,7 @@ static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
 static mut SAVED_REGS_PTR: *mut u64 = core::ptr::null_mut();
 
 unsafe impl rux_arch::VforkContext for super::Aarch64 {
-    const CHILD_STACK_VA: u64 = 0x7FFD_0000;
+    const CHILD_STACK_VA: usize = 0x7FFD_0000;
 
     unsafe fn save_regs() {
         let regs = CURRENT_REGS_PTR;
@@ -142,13 +142,13 @@ unsafe impl rux_arch::VforkContext for super::Aarch64 {
         SAVED_REGS_PTR = regs;
     }
 
-    unsafe fn save_user_sp() -> u64 {
+    unsafe fn save_user_sp() -> usize {
         let sp: u64;
         core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
-        sp
+        sp as usize
     }
 
-    unsafe fn set_user_sp(sp: u64) {
+    unsafe fn set_user_sp(sp: usize) {
         core::arch::asm!("msr sp_el0, {}", in(reg) sp, options(nostack));
     }
 
@@ -184,15 +184,15 @@ unsafe impl rux_arch::VforkContext for super::Aarch64 {
 
     unsafe fn clear_jmp() { VFORK_JMP.sp = 0; }
 
-    unsafe fn setjmp() -> i64 { vfork_setjmp(&raw mut VFORK_JMP) }
+    unsafe fn setjmp() -> isize { vfork_setjmp(&raw mut VFORK_JMP) as isize }
 
     fn jmp_active() -> bool { unsafe { VFORK_JMP.sp != 0 } }
 
-    unsafe fn longjmp(child_pid: i64) -> ! {
-        vfork_longjmp(&raw mut VFORK_JMP, child_pid);
+    unsafe fn longjmp(child_pid: isize) -> ! {
+        vfork_longjmp(&raw mut VFORK_JMP, child_pid as i64);
     }
 
-    unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> ! {
+    unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> ! {
         // Restore parent's user stack pointer
         core::arch::asm!("msr sp_el0, {}", in(reg) user_sp, options(nostack));
 
@@ -296,7 +296,7 @@ extern "C" {
 
 /// Enter user mode (EL0) via eret.
 /// Sets ELR_EL1 = entry, SP_EL0 = user_stack, SPSR_EL1 = 0 (EL0t).
-pub unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
+pub unsafe fn enter_user_mode(entry: usize, user_stack: usize) -> ! {
     core::arch::asm!(
         "msr sp_el0, {sp}",         // user stack pointer
         "msr elr_el1, {entry}",     // return-to address
@@ -309,7 +309,7 @@ pub unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
 }
 
 unsafe impl rux_arch::UserModeOps for super::Aarch64 {
-    unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
+    unsafe fn enter_user_mode(entry: usize, user_stack: usize) -> ! {
         self::enter_user_mode(entry, user_stack)
     }
 }

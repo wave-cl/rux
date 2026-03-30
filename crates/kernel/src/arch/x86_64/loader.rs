@@ -88,6 +88,6 @@ pub unsafe fn load_and_exec_elf(
     let stack_top = stack_base + stack_pages * 4096;
 
     super::paging::activate(&upt);
-    let user_sp = crate::execargs::write_to_stack(stack_top);
-    super::syscall::enter_user_mode(elf_info.entry, user_sp);
+    let user_sp = crate::execargs::write_to_stack(stack_top as usize);
+    super::syscall::enter_user_mode(elf_info.entry as usize, user_sp);
 }

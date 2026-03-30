@@ -94,15 +94,15 @@ pub unsafe fn load_elf_from_inode(
     }
 
     // Write exec args to user stack and enter user mode
-    let user_sp = crate::execargs::write_to_stack(stack_top);
+    let user_sp = crate::execargs::write_to_stack(stack_top as usize);
     {
         use rux_arch::SerialOps;
         type A = crate::arch::Arch;
         A::write_str("rux: entry=0x");
         crate::write_hex_serial(elf_info.entry as usize);
         A::write_str(" sp=0x");
-        crate::write_hex_serial(user_sp as usize);
-        let sp_ptr = user_sp as *const u64;
+        crate::write_hex_serial(user_sp);
+        let sp_ptr = user_sp as *const usize;
         A::write_str(" argc=");
         crate::write_hex_serial(*sp_ptr as usize);
         A::write_str(" argv0=0x");
@@ -112,7 +112,7 @@ pub unsafe fn load_elf_from_inode(
 
     {
         use rux_arch::UserModeOps;
-        crate::arch::Arch::enter_user_mode(elf_info.entry, user_sp);
+        crate::arch::Arch::enter_user_mode(elf_info.entry as usize, user_sp);
     }
 }
 

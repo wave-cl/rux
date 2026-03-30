@@ -21,7 +21,7 @@ pub const MAX_TASKS: usize = 16;
 pub struct KernelTask {
     pub entity: SchedEntity,
     /// Saved SP for context_switch (callee-saved regs + return address on stack).
-    pub saved_rsp: u64,
+    pub saved_sp: usize,
     /// Whether this slot is in use.
     pub active: bool,
 }
@@ -29,9 +29,9 @@ pub struct KernelTask {
 /// Context switch function pointers — set once at kernel init.
 pub struct ContextFns {
     /// Architecture-specific context switch: saves SP to *old_sp, loads new_sp.
-    pub context_switch: unsafe fn(*mut u64, u64),
+    pub context_switch: unsafe fn(*mut usize, usize),
     /// Initialize a task stack so context_switch "returns" to entry(arg).
-    pub init_task_stack: unsafe fn(u64, u64, u64) -> u64,
+    pub init_task_stack: unsafe fn(usize, usize, usize) -> usize,
 }
 
 /// Global scheduler state.
@@ -52,7 +52,7 @@ impl Scheduler {
     pub const fn new() -> Self {
         const EMPTY_TASK: KernelTask = KernelTask {
             entity: SchedEntity::new(0),
-            saved_rsp: 0,
+            saved_sp: 0,
             active: false,
         };
         let mut s = Self {
@@ -81,7 +81,7 @@ impl Scheduler {
     pub unsafe fn create_task(
         &mut self,
         entry: extern "C" fn(),
-        stack_top: u64,
+        stack_top: usize,
         nice: i8,
     ) -> usize {
         // Find a free slot
@@ -97,7 +97,7 @@ impl Scheduler {
 
         // Initialize the kernel stack so context_switch "returns" to entry
         let ctx = self.ctx.as_ref().expect("context fns not set");
-        task.saved_rsp = (ctx.init_task_stack)(stack_top, entry as u64, 0);
+        task.saved_sp = (ctx.init_task_stack)(stack_top, entry as usize, 0);
 
         // Enqueue into CFS
         self.cfs.set_clock(0, self.clock_ns);
@@ -155,8 +155,8 @@ impl Scheduler {
         self.current = new_idx;
 
         if new_idx != old_idx {
-            let old_rsp_ptr = &mut self.tasks[old_idx].saved_rsp as *mut u64;
-            let new_rsp = self.tasks[new_idx].saved_rsp;
+            let old_rsp_ptr = &mut self.tasks[old_idx].saved_sp as *mut usize;
+            let new_rsp = self.tasks[new_idx].saved_sp;
 
             let ctx = self.ctx.as_ref().expect("context fns not set");
             (ctx.context_switch)(old_rsp_ptr, new_rsp);

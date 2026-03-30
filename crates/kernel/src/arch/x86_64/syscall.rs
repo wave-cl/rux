@@ -289,7 +289,7 @@ extern "C" {
 }
 
 #[unsafe(naked)]
-pub extern "C" fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
+pub extern "C" fn enter_user_mode(entry: usize, user_stack: usize) -> ! {
     core::arch::naked_asm!(
         "push {user_ds}",
         "push rsi",
@@ -303,7 +303,7 @@ pub extern "C" fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
 }
 
 unsafe impl rux_arch::UserModeOps for super::X86_64 {
-    unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
+    unsafe fn enter_user_mode(entry: usize, user_stack: usize) -> ! {
         self::enter_user_mode(entry, user_stack)
     }
 }
@@ -346,7 +346,7 @@ pub fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
 // ── VforkContext implementation ─────────────────────────────────────────
 
 unsafe impl rux_arch::VforkContext for super::X86_64 {
-    const CHILD_STACK_VA: u64 = 0x7FFE_0000;
+    const CHILD_STACK_VA: usize = 0x7FFE_0000;
 
     unsafe fn save_regs() {
         let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
@@ -355,9 +355,9 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
         }
     }
 
-    unsafe fn save_user_sp() -> u64 { SAVED_USER_RSP }
+    unsafe fn save_user_sp() -> usize { SAVED_USER_RSP as usize }
 
-    unsafe fn set_user_sp(sp: u64) { SAVED_USER_RSP = sp; }
+    unsafe fn set_user_sp(sp: usize) { SAVED_USER_RSP = sp as u64; }
 
     unsafe fn save_tls() -> u64 {
         let lo: u32;
@@ -384,15 +384,15 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
 
     unsafe fn clear_jmp() { VFORK_JMP.rsp = 0; }
 
-    unsafe fn setjmp() -> i64 { vfork_setjmp(&raw mut VFORK_JMP) }
+    unsafe fn setjmp() -> isize { vfork_setjmp(&raw mut VFORK_JMP) as isize }
 
     fn jmp_active() -> bool { unsafe { VFORK_JMP.rsp != 0 } }
 
-    unsafe fn longjmp(child_pid: i64) -> ! {
-        vfork_longjmp(&raw mut VFORK_JMP, child_pid);
+    unsafe fn longjmp(child_pid: isize) -> ! {
+        vfork_longjmp(&raw mut VFORK_JMP, child_pid as i64);
     }
 
-    unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> ! {
+    unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> ! {
         // Write saved regs back to SYSCALL_STACK
         let stack_top = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
         for i in 0..15 {
@@ -400,7 +400,7 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
         }
         // Override RAX slot with child PID (return value)
         *stack_top.sub(9) = return_val as u64; // index 8 = RAX slot
-        SAVED_USER_RSP = user_sp;
+        SAVED_USER_RSP = user_sp as u64;
 
         let pop_rsp = stack_top.sub(15) as u64;
         core::arch::asm!(
