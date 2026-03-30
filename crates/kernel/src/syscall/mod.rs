@@ -352,7 +352,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
     let path = core::slice::from_raw_parts(path_cstr, path_len);
 
-    crate::execargs::set_from_user(path, argv_ptr, 0);
+    rux_proc::execargs::set_from_user(path, argv_ptr, 0);
 
     crate::arch::Arch::write_str("rux: exec(\"");
     crate::arch::Arch::write_bytes(path);

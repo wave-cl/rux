@@ -186,7 +186,7 @@ unsafe fn init_ramfs_and_exec(multiboot_info: usize) -> ! {
 
     let vfs = &mut *vfs_ptr;
     console::write_str("rux: exec /sbin/init\n");
-    crate::execargs::set(b"/bin/sh", b"");
+    rux_proc::execargs::set(b"/bin/sh", b"");
     let init_ino = rux_fs::path::resolve_path(vfs, b"/sbin/init").expect("/sbin/init not found");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
     elf::load_elf_from_inode(init_ino as u64, alloc);

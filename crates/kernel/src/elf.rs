@@ -6,9 +6,6 @@
 
 pub use rux_elf::{parse_elf, ElfInfo, LoadSegment, PF_R, PF_W, PF_X, load_segments};
 
-/// Architecture-specific buffer-based ELF loaders are in:
-/// - `x86_64::loader::load_and_exec_elf`
-/// - `aarch64::loader::load_and_exec_elf`
 
 /// VFS-backed ELF reader — adapts a VFS inode to the `ElfReader` trait.
 struct VfsReader {
@@ -94,7 +91,7 @@ pub unsafe fn load_elf_from_inode(
     }
 
     // Write exec args to user stack and enter user mode
-    let user_sp = crate::execargs::write_to_stack(stack_top as usize);
+    let user_sp = rux_proc::execargs::write_to_stack(stack_top as usize);
     {
         use rux_arch::ConsoleOps;
         type A = crate::arch::Arch;
@@ -117,6 +114,3 @@ pub unsafe fn load_elf_from_inode(
     }
 }
 
-// Buffer-based ELF loaders moved to:
-//   x86_64/loader.rs  — crate::arch::x86_64::loader::load_and_exec_elf
-//   aarch64/loader.rs — crate::arch::aarch64::loader::load_and_exec_elf

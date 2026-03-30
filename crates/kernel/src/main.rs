@@ -7,7 +7,6 @@ mod scheduler;
 mod elf;
 mod kstate;
 pub mod pipe;
-pub mod execargs;
 pub mod pgtrack;
 pub mod syscall;
 

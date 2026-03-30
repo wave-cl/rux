@@ -1,5 +1,4 @@
 pub mod init;
-pub mod loader;
 pub mod console;
 pub mod exit;
 pub mod gdt;

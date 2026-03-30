@@ -131,7 +131,7 @@ unsafe fn init_ramfs_and_exec(dtb_addr: usize) -> ! {
 
     let vfs = &mut *vfs_ptr;
     console::write_str("rux: exec /sbin/init\n");
-    crate::execargs::set(b"/bin/sh", b"");
+    rux_proc::execargs::set(b"/bin/sh", b"");
     let init_ino = rux_fs::path::resolve_path(vfs, b"/sbin/init").expect("/sbin/init not found");
     let alloc = &mut *alloc_ptr;
     elf::load_elf_from_inode(init_ino as u64, alloc);
