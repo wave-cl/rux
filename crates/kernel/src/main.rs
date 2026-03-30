@@ -22,7 +22,7 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
     unsafe { Arch::init(); }
     {
         use rux_arch::ArchInfo;
-        Arch::write_str("rux 0.1.0 (");
+        Arch::write_str(concat!("rux ", env!("CARGO_PKG_VERSION"), " ("));
         Arch::write_bytes(Arch::MACHINE_NAME);
         Arch::write_str(")\n");
     }

@@ -421,7 +421,7 @@ pub fn uname(buf: usize) -> isize {
             for i in 0..len { *ptr.add(65 + i) = name[i]; }
         }
         // release (offset 130)
-        for (i, &b) in b"0.1.0".iter().enumerate() { *ptr.add(130 + i) = b; }
+        for (i, &b) in env!("CARGO_PKG_VERSION").as_bytes().iter().enumerate() { *ptr.add(130 + i) = b; }
         // version (offset 195)
         for (i, &b) in b"#1 SMP".iter().enumerate() { *ptr.add(195 + i) = b; }
         // machine (offset 260)
