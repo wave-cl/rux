@@ -1,12 +1,24 @@
 /// procfs — read-only virtual filesystem that synthesizes content on read.
 ///
-/// Implements the FileSystem trait with fixed inodes for system info files.
+/// Implements the FileSystem trait with:
+/// - Fixed inodes for system info files (/proc/uptime, meminfo, etc.)
+/// - Dynamic inodes for per-PID directories (/proc/1/stat, etc.)
+///
 /// Content is generated on-the-fly from kernel state via injected callbacks.
 
 use crate::{FileSystem, FileName, InodeId, InodeStat, DirEntry, VfsError, InodeType};
 use crate::{S_IFDIR, S_IFREG};
 
-/// Fixed inode assignments.
+// ── Inode scheme ────────────────────────────────────────────────────
+//
+// 0         = /proc (root directory)
+// 1-5       = system files (uptime, meminfo, stat, version, loadavg)
+// 100+pid   = /proc/[pid] directory
+// 1000+pid  = /proc/[pid]/stat
+// 2000+pid  = /proc/[pid]/cmdline
+// 3000+pid  = /proc/[pid]/statm
+// 4000+pid  = /proc/[pid]/status
+
 const INO_ROOT: InodeId = 0;
 const INO_UPTIME: InodeId = 1;
 const INO_MEMINFO: InodeId = 2;
@@ -14,16 +26,38 @@ const INO_STAT: InodeId = 3;
 const INO_VERSION: InodeId = 4;
 const INO_LOADAVG: InodeId = 5;
 
-const NUM_ENTRIES: usize = 5;
+const NUM_SYS_ENTRIES: usize = 5;
 
-/// Entry metadata (name, inode, type).
-const ENTRIES: [(&[u8], InodeId); NUM_ENTRIES] = [
+const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"uptime", INO_UPTIME),
     (b"meminfo", INO_MEMINFO),
     (b"stat", INO_STAT),
     (b"version", INO_VERSION),
     (b"loadavg", INO_LOADAVG),
 ];
+
+const PID_DIR_BASE: InodeId = 100;
+const PID_STAT_BASE: InodeId = 1000;
+const PID_CMDLINE_BASE: InodeId = 2000;
+const PID_STATM_BASE: InodeId = 3000;
+const PID_STATUS_BASE: InodeId = 4000;
+
+const PID_SUBENTRIES: [(&[u8], InodeId); 4] = [
+    (b"stat", PID_STAT_BASE),
+    (b"cmdline", PID_CMDLINE_BASE),
+    (b"statm", PID_STATM_BASE),
+    (b"status", PID_STATUS_BASE),
+];
+
+fn is_pid_dir(ino: InodeId) -> bool { ino >= PID_DIR_BASE && ino < PID_STAT_BASE }
+fn is_pid_file(ino: InodeId) -> bool { ino >= PID_STAT_BASE }
+fn pid_from_dir(ino: InodeId) -> u64 { ino - PID_DIR_BASE }
+fn pid_from_file(ino: InodeId) -> u64 {
+    if ino >= PID_STATUS_BASE { ino - PID_STATUS_BASE }
+    else if ino >= PID_STATM_BASE { ino - PID_STATM_BASE }
+    else if ino >= PID_CMDLINE_BASE { ino - PID_CMDLINE_BASE }
+    else { ino - PID_STAT_BASE }
+}
 
 /// Kernel callbacks for dynamic data.
 pub struct ProcFs {
@@ -41,24 +75,28 @@ impl ProcFs {
         Self { get_ticks, get_total_frames, get_free_frames }
     }
 
+    /// Check if a PID exists (for now: only PID 1).
+    fn pid_exists(&self, pid: u64) -> bool {
+        pid == 1
+    }
+
     /// Generate content for a virtual file into a buffer.
-    /// Returns the number of bytes written.
     fn generate(&self, ino: InodeId, buf: &mut [u8]) -> usize {
         match ino {
             INO_UPTIME => {
                 let ticks = (self.get_ticks)();
                 let secs = ticks / 1000;
-                let frac = (ticks % 1000) / 10; // centiseconds
+                let frac = (ticks % 1000) / 10;
                 fmt_uptime(buf, secs, frac)
             }
             INO_MEMINFO => {
-                let total = (self.get_total_frames)() * 4; // KB (4K pages)
+                let total = (self.get_total_frames)() * 4;
                 let free = (self.get_free_frames)() * 4;
                 fmt_meminfo(buf, total, free)
             }
             INO_STAT => {
                 let ticks = (self.get_ticks)();
-                fmt_stat(buf, ticks)
+                fmt_cpu_stat(buf, ticks)
             }
             INO_VERSION => {
                 let s = concat!("rux version ", env!("CARGO_PKG_VERSION"), "\n");
@@ -67,14 +105,99 @@ impl ProcFs {
                 len
             }
             INO_LOADAVG => {
-                // Stub: 0.00 0.00 0.00 1/1 1
                 let s = b"0.00 0.00 0.00 1/1 1\n";
                 let len = s.len().min(buf.len());
                 buf[..len].copy_from_slice(&s[..len]);
                 len
             }
+            _ if is_pid_file(ino) => {
+                let pid = pid_from_file(ino);
+                if !self.pid_exists(pid) { return 0; }
+                if ino >= PID_STATUS_BASE {
+                    self.gen_pid_status(pid, buf)
+                } else if ino >= PID_STATM_BASE {
+                    self.gen_pid_statm(buf)
+                } else if ino >= PID_CMDLINE_BASE {
+                    self.gen_pid_cmdline(buf)
+                } else {
+                    self.gen_pid_stat(pid, buf)
+                }
+            }
             _ => 0,
         }
+    }
+
+    /// Generate /proc/[pid]/stat
+    /// Format: pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt
+    ///         majflt cmajflt utime stime cutime cstime priority nice threads
+    ///         itrealvalue starttime vsize rss rsslim ...
+    fn gen_pid_stat(&self, pid: u64, buf: &mut [u8]) -> usize {
+        let ticks = (self.get_ticks)();
+        let used_frames = (self.get_total_frames)() - (self.get_free_frames)();
+        let vsize = used_frames * 4096;
+        let rss = used_frames;
+        let mut pos = 0;
+        // pid (comm) state ppid pgrp session tty_nr tpgid flags
+        pos += fmt_u64(&mut buf[pos..], pid);
+        pos += copy_str(&mut buf[pos..], b" (sh) S 0 1 1 0 -1 0 ");
+        // minflt cminflt majflt cmajflt utime stime cutime cstime
+        pos += copy_str(&mut buf[pos..], b"0 0 0 0 ");
+        pos += fmt_u64(&mut buf[pos..], ticks / 10); // utime in ticks (HZ=100)
+        buf[pos] = b' '; pos += 1;
+        pos += copy_str(&mut buf[pos..], b"0 0 0 ");
+        // priority nice num_threads itrealvalue starttime
+        pos += copy_str(&mut buf[pos..], b"20 0 1 0 0 ");
+        // vsize rss rsslim
+        pos += fmt_u64(&mut buf[pos..], vsize as u64);
+        buf[pos] = b' '; pos += 1;
+        pos += fmt_u64(&mut buf[pos..], rss as u64);
+        pos += copy_str(&mut buf[pos..], b" 4294967295");
+        // remaining fields (zeros to fill 44 fields)
+        pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
+        pos
+    }
+
+    /// Generate /proc/[pid]/cmdline — null-separated argv
+    fn gen_pid_cmdline(&self, buf: &mut [u8]) -> usize {
+        let s = b"/bin/sh\0";
+        let len = s.len().min(buf.len());
+        buf[..len].copy_from_slice(&s[..len]);
+        len
+    }
+
+    /// Generate /proc/[pid]/statm — memory in pages
+    /// Format: size resident shared text lib data dt
+    fn gen_pid_statm(&self, buf: &mut [u8]) -> usize {
+        let used = (self.get_total_frames)() - (self.get_free_frames)();
+        let mut pos = 0;
+        pos += fmt_u64(&mut buf[pos..], used as u64); // size
+        buf[pos] = b' '; pos += 1;
+        pos += fmt_u64(&mut buf[pos..], used as u64); // resident
+        pos += copy_str(&mut buf[pos..], b" 0 ");
+        pos += fmt_u64(&mut buf[pos..], (used / 4).max(1) as u64); // text
+        pos += copy_str(&mut buf[pos..], b" 0 ");
+        pos += fmt_u64(&mut buf[pos..], (used * 3 / 4) as u64); // data
+        pos += copy_str(&mut buf[pos..], b" 0\n");
+        pos
+    }
+
+    /// Generate /proc/[pid]/status — human-readable
+    fn gen_pid_status(&self, pid: u64, buf: &mut [u8]) -> usize {
+        let used_kb = ((self.get_total_frames)() - (self.get_free_frames)()) * 4;
+        let mut pos = 0;
+        pos += copy_str(&mut buf[pos..], b"Name:\tsh\n");
+        pos += copy_str(&mut buf[pos..], b"State:\tS (sleeping)\n");
+        pos += copy_str(&mut buf[pos..], b"Pid:\t");
+        pos += fmt_u64(&mut buf[pos..], pid);
+        pos += copy_str(&mut buf[pos..], b"\nPpid:\t0\n");
+        pos += copy_str(&mut buf[pos..], b"Uid:\t0\t0\t0\t0\n");
+        pos += copy_str(&mut buf[pos..], b"Gid:\t0\t0\t0\t0\n");
+        pos += copy_str(&mut buf[pos..], b"VmSize:\t");
+        pos += fmt_u64(&mut buf[pos..], used_kb as u64);
+        pos += copy_str(&mut buf[pos..], b" kB\nVmRSS:\t");
+        pos += fmt_u64(&mut buf[pos..], used_kb as u64);
+        pos += copy_str(&mut buf[pos..], b" kB\nThreads:\t1\n");
+        pos
     }
 }
 
@@ -84,120 +207,150 @@ impl FileSystem for ProcFs {
     fn stat(&self, ino: InodeId, buf: &mut InodeStat) -> Result<(), VfsError> {
         unsafe { *buf = core::mem::MaybeUninit::zeroed().assume_init(); }
         buf.ino = ino;
-        match ino {
-            INO_ROOT => {
-                buf.mode = S_IFDIR | 0o555;
-                buf.nlink = 2;
-                buf.size = 0;
-            }
-            INO_UPTIME | INO_MEMINFO | INO_STAT | INO_VERSION | INO_LOADAVG => {
-                buf.mode = S_IFREG | 0o444;
-                buf.nlink = 1;
-                // Generate content to get the size
-                let mut tmp = [0u8; 512];
-                buf.size = self.generate(ino, &mut tmp) as u64;
-            }
-            _ => return Err(VfsError::NotFound),
-        }
         buf.blksize = 4096;
-        Ok(())
+
+        if ino == INO_ROOT || is_pid_dir(ino) {
+            let pid = if is_pid_dir(ino) { pid_from_dir(ino) } else { 0 };
+            if is_pid_dir(ino) && !self.pid_exists(pid) {
+                return Err(VfsError::NotFound);
+            }
+            buf.mode = S_IFDIR | 0o555;
+            buf.nlink = 2;
+            return Ok(());
+        }
+
+        // System files or PID files
+        if ino <= INO_LOADAVG || is_pid_file(ino) {
+            if is_pid_file(ino) && !self.pid_exists(pid_from_file(ino)) {
+                return Err(VfsError::NotFound);
+            }
+            buf.mode = S_IFREG | 0o444;
+            buf.nlink = 1;
+            let mut tmp = [0u8; 512];
+            buf.size = self.generate(ino, &mut tmp) as u64;
+            return Ok(());
+        }
+
+        Err(VfsError::NotFound)
     }
 
     fn read(&self, ino: InodeId, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError> {
-        if ino == INO_ROOT { return Err(VfsError::IsADirectory); }
-
-        // Generate full content, then copy from offset
+        if ino == INO_ROOT || is_pid_dir(ino) {
+            return Err(VfsError::IsADirectory);
+        }
         let mut tmp = [0u8; 512];
         let total = self.generate(ino, &mut tmp);
+        if total == 0 { return Err(VfsError::NotFound); }
         let off = offset as usize;
         if off >= total { return Ok(0); }
-        let avail = total - off;
-        let to_copy = avail.min(buf.len());
+        let to_copy = (total - off).min(buf.len());
         buf[..to_copy].copy_from_slice(&tmp[off..off + to_copy]);
         Ok(to_copy)
     }
 
-    fn write(&mut self, _ino: InodeId, _offset: u64, _buf: &[u8]) -> Result<usize, VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn truncate(&mut self, _ino: InodeId, _size: u64) -> Result<(), VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
     fn lookup(&self, dir: InodeId, name: FileName<'_>) -> Result<InodeId, VfsError> {
-        if dir != INO_ROOT { return Err(VfsError::NotADirectory); }
         let name_bytes = name.as_bytes();
-        for &(entry_name, entry_ino) in &ENTRIES {
-            if entry_name == name_bytes {
-                return Ok(entry_ino);
+
+        if dir == INO_ROOT {
+            // System files
+            for &(entry_name, entry_ino) in &SYS_ENTRIES {
+                if entry_name == name_bytes {
+                    return Ok(entry_ino);
+                }
             }
+            // PID directories — parse numeric name
+            if let Some(pid) = parse_u64(name_bytes) {
+                if self.pid_exists(pid) {
+                    return Ok(PID_DIR_BASE + pid);
+                }
+            }
+            return Err(VfsError::NotFound);
         }
-        Err(VfsError::NotFound)
-    }
 
-    fn create(&mut self, _dir: InodeId, _name: FileName<'_>, _mode: u32) -> Result<InodeId, VfsError> {
-        Err(VfsError::ReadOnly)
-    }
+        if is_pid_dir(dir) {
+            let pid = pid_from_dir(dir);
+            if !self.pid_exists(pid) { return Err(VfsError::NotFound); }
+            for &(entry_name, base) in &PID_SUBENTRIES {
+                if entry_name == name_bytes {
+                    return Ok(base + pid);
+                }
+            }
+            return Err(VfsError::NotFound);
+        }
 
-    fn mkdir(&mut self, _dir: InodeId, _name: FileName<'_>, _mode: u32) -> Result<InodeId, VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn unlink(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn rmdir(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn link(&mut self, _dir: InodeId, _name: FileName<'_>, _target: InodeId) -> Result<(), VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn symlink(&mut self, _dir: InodeId, _name: FileName<'_>, _target: &[u8]) -> Result<InodeId, VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn readlink(&self, _ino: InodeId, _buf: &mut [u8]) -> Result<usize, VfsError> {
-        Err(VfsError::NotSupported)
+        Err(VfsError::NotADirectory)
     }
 
     fn readdir(&self, dir: InodeId, offset: usize, buf: &mut DirEntry) -> Result<bool, VfsError> {
-        if dir != INO_ROOT { return Err(VfsError::NotADirectory); }
-        if offset >= NUM_ENTRIES { return Ok(false); }
-        let (name, ino) = ENTRIES[offset];
-        buf.ino = ino;
-        buf.kind = InodeType::File;
-        buf.name_len = name.len() as u8;
-        buf.name[..name.len()].copy_from_slice(name);
-        Ok(true)
+        if dir == INO_ROOT {
+            // First: system files
+            if offset < NUM_SYS_ENTRIES {
+                let (name, ino) = SYS_ENTRIES[offset];
+                buf.ino = ino;
+                buf.kind = InodeType::File;
+                buf.name_len = name.len() as u8;
+                buf.name[..name.len()].copy_from_slice(name);
+                return Ok(true);
+            }
+            // Then: PID directories (just PID 1 for now)
+            let pid_offset = offset - NUM_SYS_ENTRIES;
+            if pid_offset == 0 && self.pid_exists(1) {
+                buf.ino = PID_DIR_BASE + 1;
+                buf.kind = InodeType::Directory;
+                buf.name_len = 1;
+                buf.name[0] = b'1';
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
+        if is_pid_dir(dir) {
+            let pid = pid_from_dir(dir);
+            if !self.pid_exists(pid) { return Err(VfsError::NotFound); }
+            if offset >= PID_SUBENTRIES.len() { return Ok(false); }
+            let (name, base) = PID_SUBENTRIES[offset];
+            buf.ino = base + pid;
+            buf.kind = InodeType::File;
+            buf.name_len = name.len() as u8;
+            buf.name[..name.len()].copy_from_slice(name);
+            return Ok(true);
+        }
+
+        Err(VfsError::NotADirectory)
     }
 
-    fn rename(&mut self, _old_dir: InodeId, _old_name: FileName<'_>, _new_dir: InodeId, _new_name: FileName<'_>) -> Result<(), VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn chmod(&mut self, _ino: InodeId, _mode: u32) -> Result<(), VfsError> {
-        Err(VfsError::ReadOnly)
-    }
-
-    fn chown(&mut self, _ino: InodeId, _uid: u32, _gid: u32) -> Result<(), VfsError> {
-        Err(VfsError::ReadOnly)
-    }
+    fn write(&mut self, _ino: InodeId, _offset: u64, _buf: &[u8]) -> Result<usize, VfsError> { Err(VfsError::ReadOnly) }
+    fn truncate(&mut self, _ino: InodeId, _size: u64) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
+    fn create(&mut self, _dir: InodeId, _name: FileName<'_>, _mode: u32) -> Result<InodeId, VfsError> { Err(VfsError::ReadOnly) }
+    fn mkdir(&mut self, _dir: InodeId, _name: FileName<'_>, _mode: u32) -> Result<InodeId, VfsError> { Err(VfsError::ReadOnly) }
+    fn unlink(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
+    fn rmdir(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
+    fn link(&mut self, _dir: InodeId, _name: FileName<'_>, _target: InodeId) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
+    fn symlink(&mut self, _dir: InodeId, _name: FileName<'_>, _target: &[u8]) -> Result<InodeId, VfsError> { Err(VfsError::ReadOnly) }
+    fn readlink(&self, _ino: InodeId, _buf: &mut [u8]) -> Result<usize, VfsError> { Err(VfsError::NotSupported) }
+    fn rename(&mut self, _old_dir: InodeId, _old_name: FileName<'_>, _new_dir: InodeId, _new_name: FileName<'_>) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
+    fn chmod(&mut self, _ino: InodeId, _mode: u32) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
+    fn chown(&mut self, _ino: InodeId, _uid: u32, _gid: u32) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
 }
 
-// ── Formatting helpers ──────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────
+
+fn parse_u64(s: &[u8]) -> Option<u64> {
+    if s.is_empty() { return None; }
+    let mut n = 0u64;
+    for &b in s {
+        if b < b'0' || b > b'9' { return None; }
+        n = n.checked_mul(10)?.checked_add((b - b'0') as u64)?;
+    }
+    Some(n)
+}
 
 fn fmt_uptime(buf: &mut [u8], secs: u64, centisecs: u64) -> usize {
-    // "123.45 123.45\n"
     let mut pos = 0;
     pos += fmt_u64(&mut buf[pos..], secs);
     buf[pos] = b'.'; pos += 1;
     pos += fmt_u64_pad2(&mut buf[pos..], centisecs);
     buf[pos] = b' '; pos += 1;
-    // idle time (approximate — same as uptime for now)
     pos += fmt_u64(&mut buf[pos..], secs);
     buf[pos] = b'.'; pos += 1;
     pos += fmt_u64_pad2(&mut buf[pos..], centisecs);
@@ -217,8 +370,7 @@ fn fmt_meminfo(buf: &mut [u8], total_kb: usize, free_kb: usize) -> usize {
     pos
 }
 
-fn fmt_stat(buf: &mut [u8], ticks: u64) -> usize {
-    // "cpu  0 0 0 <idle> 0 0 0 0 0 0\n"
+fn fmt_cpu_stat(buf: &mut [u8], ticks: u64) -> usize {
     let mut pos = 0;
     pos += copy_str(&mut buf[pos..], b"cpu  0 0 0 ");
     pos += fmt_u64(&mut buf[pos..], ticks);
