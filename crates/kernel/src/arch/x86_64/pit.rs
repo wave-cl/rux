@@ -47,6 +47,20 @@ pub fn tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Stop the PIT timer by masking IRQ0 at the PIC.
+pub unsafe fn stop_timer() {
+    let mask: u8;
+    core::arch::asm!("in al, dx", out("al") mask, in("dx") 0x21u16, options(nostack, preserves_flags));
+    outb(0x21, mask | 0x01);
+}
+
+/// Restart the PIT timer by unmasking IRQ0 at the PIC.
+pub unsafe fn start_timer() {
+    let mask: u8;
+    core::arch::asm!("in al, dx", out("al") mask, in("dx") 0x21u16, options(nostack, preserves_flags));
+    outb(0x21, mask & !0x01);
+}
+
 pub fn now_ns() -> u64 {
     let t = ticks();
     let div = DIVISOR.load(Ordering::Relaxed) as u64;

@@ -126,6 +126,17 @@ pub trait TimerOps {
     fn ticks() -> u64;
 }
 
+/// Timer control for tickless idle.
+///
+/// # Safety
+/// Manipulates hardware timer registers.
+pub unsafe trait TimerControl {
+    /// Stop the periodic timer (enter tickless idle).
+    unsafe fn stop_timer();
+    /// Restart the periodic timer (exit tickless idle).
+    unsafe fn start_timer();
+}
+
 /// Architecture metadata (machine name for uname, etc.).
 pub trait ArchInfo {
     const MACHINE_NAME: &'static [u8];

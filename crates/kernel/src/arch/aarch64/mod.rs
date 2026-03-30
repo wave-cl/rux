@@ -28,6 +28,11 @@ impl rux_arch::TimerOps for Aarch64 {
     fn ticks() -> u64 { timer::ticks() }
 }
 
+unsafe impl rux_arch::TimerControl for Aarch64 {
+    unsafe fn stop_timer() { timer::stop_timer(); }
+    unsafe fn start_timer() { timer::start_timer(); }
+}
+
 impl rux_arch::ArchInfo for Aarch64 {
     const MACHINE_NAME: &'static [u8] = b"aarch64";
 }

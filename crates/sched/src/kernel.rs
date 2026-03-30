@@ -32,6 +32,10 @@ pub struct ContextFns {
     pub context_switch: unsafe fn(*mut usize, usize),
     /// Initialize a task stack so context_switch "returns" to entry(arg).
     pub init_task_stack: unsafe fn(usize, usize, usize) -> usize,
+    /// Stop the periodic timer (enter tickless idle).
+    pub stop_timer: unsafe fn(),
+    /// Restart the periodic timer (exit tickless idle).
+    pub start_timer: unsafe fn(),
 }
 
 /// Global scheduler state.
@@ -154,11 +158,18 @@ impl Scheduler {
 
         self.current = new_idx;
 
+        // Tickless idle: stop timer when going idle, restart when leaving idle
+        let ctx = self.ctx.as_ref().expect("context fns not set");
+        if new_idx == 0 && old_idx != 0 {
+            (ctx.stop_timer)();
+        } else if new_idx != 0 && old_idx == 0 {
+            (ctx.start_timer)();
+        }
+
         if new_idx != old_idx {
             let old_rsp_ptr = &mut self.tasks[old_idx].saved_sp as *mut usize;
             let new_rsp = self.tasks[new_idx].saved_sp;
 
-            let ctx = self.ctx.as_ref().expect("context fns not set");
             (ctx.context_switch)(old_rsp_ptr, new_rsp);
         }
     }

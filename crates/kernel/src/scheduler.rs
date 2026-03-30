@@ -22,9 +22,11 @@ pub unsafe fn get() -> &'static mut Scheduler {
 /// # Safety
 /// Must be called once before any task creation or scheduling.
 pub unsafe fn init_context_fns() {
-    use rux_arch::ContextOps;
+    use rux_arch::{ContextOps, TimerControl};
     get().set_context_fns(ContextFns {
         context_switch: crate::arch::Arch::context_switch,
         init_task_stack: crate::arch::Arch::init_task_stack,
+        stop_timer: crate::arch::Arch::stop_timer,
+        start_timer: crate::arch::Arch::start_timer,
     });
 }

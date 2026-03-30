@@ -35,6 +35,18 @@ pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
 
+/// Stop the periodic timer (tickless idle).
+pub unsafe fn stop_timer() {
+    core::arch::asm!("msr cntp_ctl_el0, xzr", options(nostack));
+}
+
+/// Restart the periodic timer (exit tickless idle).
+pub unsafe fn start_timer() {
+    let interval = INTERVAL.load(Ordering::Relaxed);
+    core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval, options(nostack));
+    core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 1u64, options(nostack));
+}
+
 pub fn now_ns() -> u64 {
     let count: u64;
     unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) count, options(nostack)); }

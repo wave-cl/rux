@@ -33,6 +33,11 @@ impl rux_arch::TimerOps for X86_64 {
     fn ticks() -> u64 { pit::ticks() }
 }
 
+unsafe impl rux_arch::TimerControl for X86_64 {
+    unsafe fn stop_timer() { pit::stop_timer(); }
+    unsafe fn start_timer() { pit::start_timer(); }
+}
+
 
 impl rux_arch::ArchInfo for X86_64 {
     const MACHINE_NAME: &'static [u8] = b"x86_64";
