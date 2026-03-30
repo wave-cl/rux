@@ -40,16 +40,16 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     // TODO: syscall dispatch
                 }
                 _ => {
-                    super::serial::write_str("rux: sync EC=");
+                    super::console::write_str("rux: sync EC=");
                     write_hex(ec as usize);
-                    super::serial::write_str(" ESR=");
+                    super::console::write_str(" ESR=");
                     write_hex(esr as usize);
-                    super::serial::write_str(" ELR=");
+                    super::console::write_str(" ELR=");
                     // Read ELR_EL1 for the faulting PC
                     let elr: u64;
                     unsafe { core::arch::asm!("mrs {}, elr_el1", out(reg) elr, options(nostack)); }
                     write_hex(elr as usize);
-                    super::serial::write_str("\n");
+                    super::console::write_str("\n");
                 }
             }
         }
@@ -72,11 +72,11 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     dump_user_fault("USER INSTR ABORT", far, esr, _frame);
                 }
                 _ => {
-                    super::serial::write_str("rux: user sync EC=");
+                    super::console::write_str("rux: user sync EC=");
                     write_hex(ec as usize);
-                    super::serial::write_str(" ESR=");
+                    super::console::write_str(" ESR=");
                     write_hex(esr as usize);
-                    super::serial::write_str("\n");
+                    super::console::write_str("\n");
                 }
             }
         }
@@ -85,21 +85,21 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             super::gic::handle_irq();
         }
         _ => {
-            super::serial::write_str("rux: unhandled exception type=");
+            super::console::write_str("rux: unhandled exception type=");
             write_hex(exc_type as usize);
-            super::serial::write_str(" ESR=");
+            super::console::write_str(" ESR=");
             write_hex(esr as usize);
-            super::serial::write_str("\n");
+            super::console::write_str("\n");
         }
     }
 }
 
 fn dump_user_fault(label: &str, far: u64, esr: u64, frame: *const u8) {
-    let s = super::serial::write_str;
+    let s = super::console::write_str;
     let h = |v: usize| {
         let mut b = [0u8; 16];
-        super::serial::write_str("0x");
-        super::serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut b, v));
+        super::console::write_str("0x");
+        super::console::write_bytes(rux_klib::fmt::usize_to_hex(&mut b, v));
     };
     unsafe {
         let r = frame as *const u64;
@@ -130,18 +130,18 @@ fn dump_user_fault(label: &str, far: u64, esr: u64, frame: *const u8) {
     super::exit::exit_qemu(super::exit::EXIT_FAILURE);
 }
 
-fn panic_serial(msg: &str, addr: u64) {
-    super::serial::write_str("PANIC: ");
-    super::serial::write_str(msg);
+fn panic_console(msg: &str, addr: u64) {
+    super::console::write_str("PANIC: ");
+    super::console::write_str(msg);
     write_hex(addr as usize);
-    super::serial::write_str("\n");
+    super::console::write_str("\n");
     super::exit::exit_qemu(super::exit::EXIT_FAILURE);
 }
 
 fn write_hex(mut n: usize) {
-    super::serial::write_str("0x");
+    super::console::write_str("0x");
     if n == 0 {
-        super::serial::write_byte(b'0');
+        super::console::write_byte(b'0');
         return;
     }
     let mut buf = [0u8; 16];
@@ -152,5 +152,5 @@ fn write_hex(mut n: usize) {
         buf[i] = if d < 10 { b'0' + d } else { b'a' + d - 10 };
         n >>= 4;
     }
-    super::serial::write_bytes(&buf[i..]);
+    super::console::write_bytes(&buf[i..]);
 }

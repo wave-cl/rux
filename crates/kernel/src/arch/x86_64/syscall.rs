@@ -2,7 +2,7 @@
 /// Supports both INT 0x80 (rux-box) and SYSCALL instruction (Linux ABI).
 
 use super::gdt::{USER_CS, USER_DS};
-use super::serial;
+use super::console;
 
 // ── SYSCALL instruction setup (Linux x86_64 ABI) ───────────────────
 
@@ -40,7 +40,7 @@ pub unsafe fn init_syscall_msrs() {
     efer |= 1; // SCE bit
     core::arch::asm!("wrmsr", in("ecx") 0xC0000080u32, in("eax") efer as u32, in("edx") (efer >> 32) as u32);
 
-    serial::write_str("rux: SYSCALL MSRs initialized\n");
+    console::write_str("rux: SYSCALL MSRs initialized\n");
 }
 
 /// Assembly entry point for the SYSCALL instruction.

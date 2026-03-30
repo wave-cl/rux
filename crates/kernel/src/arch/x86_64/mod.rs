@@ -1,6 +1,6 @@
 pub mod init;
 pub mod loader;
-pub mod serial;
+pub mod console;
 pub mod exit;
 pub mod gdt;
 pub mod idt;

@@ -30,14 +30,14 @@ pub struct OpenFile {
     pub offset: usize,
     pub flags: u32,
     pub active: bool,
-    pub is_serial: bool,  // true = fd routes to serial (stdin/stdout/stderr default)
+    pub is_console: bool,  // true = fd routes to console (stdin/stdout/stderr default)
     pub is_pipe: bool,
     pub pipe_id: u8,
     pub pipe_write: bool,
 }
 
 pub const EMPTY_FD: OpenFile = OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
+    ino: 0, offset: 0, flags: 0, active: false, is_console: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 };
 
@@ -81,7 +81,7 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
                     let _ = fs.truncate(ino, 0);
                 }
                 FD_TABLE[fd] = OpenFile {
-                    ino: ino as u64, offset, flags, active: true, is_serial: false,
+                    ino: ino as u64, offset, flags, active: true, is_console: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                 };
                 return fd as isize;
@@ -139,10 +139,10 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&Pip
             }
             FD_TABLE[newfd].active = false;
         }
-        if oldfd <= 2 && (!FD_TABLE[oldfd].active || FD_TABLE[oldfd].is_serial) {
-            // Duping a serial fd (stdin/stdout/stderr not redirected)
+        if oldfd <= 2 && (!FD_TABLE[oldfd].active || FD_TABLE[oldfd].is_console) {
+            // Duping a console fd (stdin/stdout/stderr not redirected)
             FD_TABLE[newfd] = OpenFile {
-                ino: 0, offset: 0, flags: 0, active: true, is_serial: true,
+                ino: 0, offset: 0, flags: 0, active: true, is_console: true,
                 is_pipe: false, pipe_id: 0, pipe_write: false,
             };
         } else {
@@ -183,7 +183,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if !FD_TABLE[fd].active {
                 FD_TABLE[fd] = OpenFile {
-                    ino: 0, offset: 0, flags: 0, active: true, is_serial: false,
+                    ino: 0, offset: 0, flags: 0, active: true, is_console: false,
                     is_pipe: true, pipe_id, pipe_write: is_write,
                 };
                 return Ok(fd as isize);
@@ -318,10 +318,10 @@ pub fn create_pipe(
     Ok((pipe_id, read_fd, write_fd))
 }
 
-/// Check if an fd is a serial fd (stdin/stdout/stderr).
-pub fn is_serial_fd(fd: usize) -> bool {
+/// Check if an fd is a console fd (stdin/stdout/stderr).
+pub fn is_console_fd(fd: usize) -> bool {
     unsafe {
         if fd >= MAX_FDS { return false; }
-        !FD_TABLE[fd].active || FD_TABLE[fd].is_serial
+        !FD_TABLE[fd].active || FD_TABLE[fd].is_console
     }
 }

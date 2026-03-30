@@ -314,27 +314,27 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 let r = frame as *const u64;
                 // frame layout: r15..r8, rbp, rdi, rsi, rdx, rcx, rbx, rax, vec, err, rip, cs, rfl, rsp, ss
                 let user = error_code & 4 != 0;
-                let w = |s: &str| super::serial::write_str(s);
+                let w = |s: &str| super::console::write_str(s);
                 let h = |v: usize| {
                     let mut b = [0u8; 16];
-                    super::serial::write_str("0x");
-                    super::serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut b, v));
+                    super::console::write_str("0x");
+                    super::console::write_bytes(rux_klib::fmt::usize_to_hex(&mut b, v));
                 };
                 w(if user { "\n=== USER PAGE FAULT ===\n" } else { "\n=== KERNEL PAGE FAULT ===\n" });
                 w("  fault addr: "); h(cr2 as usize);
-                w("  err: "); h(error_code as usize); super::serial::write_byte(b'\n');
+                w("  err: "); h(error_code as usize); super::console::write_byte(b'\n');
                 w("  rip: "); h(*r.add(17) as usize);
-                w("  rsp: "); h(*r.add(20) as usize); super::serial::write_byte(b'\n');
+                w("  rsp: "); h(*r.add(20) as usize); super::console::write_byte(b'\n');
                 w("  rax: "); h(*r.add(14) as usize);
-                w("  rbx: "); h(*r.add(13) as usize); super::serial::write_byte(b'\n');
+                w("  rbx: "); h(*r.add(13) as usize); super::console::write_byte(b'\n');
                 w("  rcx: "); h(*r.add(12) as usize);
-                w("  rdx: "); h(*r.add(11) as usize); super::serial::write_byte(b'\n');
+                w("  rdx: "); h(*r.add(11) as usize); super::console::write_byte(b'\n');
                 w("  rdi: "); h(*r.add(9) as usize);
-                w("  rsi: "); h(*r.add(10) as usize); super::serial::write_byte(b'\n');
+                w("  rsi: "); h(*r.add(10) as usize); super::console::write_byte(b'\n');
                 w("  rbp: "); h(*r.add(8) as usize);
-                w("  r8:  "); h(*r.add(7) as usize); super::serial::write_byte(b'\n');
+                w("  r8:  "); h(*r.add(7) as usize); super::console::write_byte(b'\n');
                 w("  cr3: "); h(cr3 as usize);
-                w("  fs:  "); h(fs_base as usize); super::serial::write_byte(b'\n');
+                w("  fs:  "); h(fs_base as usize); super::console::write_byte(b'\n');
 
                 let upt = crate::arch::x86_64::paging::PageTable4Level::from_cr3(
                     rux_klib::PhysAddr::new(cr3 as usize));
@@ -371,10 +371,10 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             super::syscall::handle_syscall(vector, error_code, frame);
         }
         _ => {
-            crate::arch::x86_64::serial::write_str("INT: vector=");
+            crate::arch::x86_64::console::write_str("INT: vector=");
             let mut buf = [0u8; 10];
-            crate::arch::x86_64::serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, vector as u32));
-            crate::arch::x86_64::serial::write_byte(b'\n');
+            crate::arch::x86_64::console::write_str(rux_klib::fmt::u32_to_str(&mut buf, vector as u32));
+            crate::arch::x86_64::console::write_byte(b'\n');
         }
     }
 }

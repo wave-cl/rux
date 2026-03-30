@@ -220,7 +220,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
 
         // ── Unknown ────────────────────────────────────────────────
         Syscall::Unknown(nr) => {
-            use rux_arch::SerialOps;
+            use rux_arch::ConsoleOps;
             crate::arch::Arch::write_str("rux: unknown syscall ");
             let mut buf = [0u8; 10];
             crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, nr as u32));
@@ -246,7 +246,7 @@ static mut VFORK_PARENT_USER_SP: usize = 0;
 static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
 static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
 static mut VFORK_PARENT_FDS: [rux_vfs::fdtable::OpenFile; 64] = [rux_vfs::fdtable::OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
+    ino: 0, offset: 0, flags: 0, active: false, is_console: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 }; 64];
 
@@ -257,7 +257,7 @@ static mut VFORK_PARENT_FDS: [rux_vfs::fdtable::OpenFile; 64] = [rux_vfs::fdtabl
 /// Manipulates process state, page tables, and performs setjmp/longjmp.
 #[inline(never)]
 pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
-    use rux_arch::SerialOps;
+    use rux_arch::ConsoleOps;
     crate::arch::Arch::write_str("rux: vfork()\n");
 
     // 1. Save arch-specific register state
@@ -341,7 +341,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 /// # Safety
 /// Replaces the current process image.
 pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize) -> ! {
-    use rux_arch::SerialOps;
+    use rux_arch::ConsoleOps;
     use rux_vfs::FileSystem;
 
     let fs = crate::kstate::fs();

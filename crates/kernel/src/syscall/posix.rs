@@ -4,22 +4,22 @@
 /// so this code works correctly on both 32-bit and 64-bit architectures.
 /// File offsets use i64 since they can exceed 4GB even on 32-bit (lseek64).
 
-use rux_arch::SerialOps;
+use rux_arch::ConsoleOps;
 use rux_arch::TimerOps;
 use rux_vfs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 
 // ── File I/O (POSIX.1 Section 2) ────────────────────────────────────
 
-/// Check if fd 0-2 should use serial (not redirected to file/pipe).
-fn is_serial_fd(fd: usize) -> bool {
-    fdt::is_serial_fd(fd)
+/// Check if fd 0-2 should use console (not redirected to file/pipe).
+fn is_console_fd(fd: usize) -> bool {
+    fdt::is_console_fd(fd)
 }
 
 /// read(fd, buf, count) — POSIX.1
 pub fn read(fd: usize, buf: usize, len: usize) -> isize {
-    if fd == 0 && is_serial_fd(0) {
-        // stdin from serial
+    if fd == 0 && is_console_fd(0) {
+        // stdin from console
         unsafe {
             let ptr = buf as *mut u8;
             for i in 0..len {
@@ -41,7 +41,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
 
 /// write(fd, buf, count) — POSIX.1
 pub fn write(fd: usize, buf: usize, len: usize) -> isize {
-    if fd <= 2 && is_serial_fd(fd) {
+    if fd <= 2 && is_console_fd(fd) {
         unsafe {
             let ptr = buf as *const u8;
             for i in 0..len { Arch::write_byte(*ptr.add(i)); }
@@ -180,7 +180,7 @@ const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::BLKSIZE_OFF;
 
 pub fn fstat(fd: usize, buf: usize) -> isize {
     if buf == 0 { return -14; }
-    if fd <= 2 && is_serial_fd(fd) {
+    if fd <= 2 && is_console_fd(fd) {
         unsafe {
             let p = buf as *mut u8;
             for i in 0..144 { *p.add(i) = 0; }

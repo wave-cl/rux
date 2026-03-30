@@ -68,7 +68,7 @@ pub enum Exception {
 ///
 /// # Safety
 /// `init()` may configure hardware registers.
-pub unsafe trait SerialOps {
+pub unsafe trait ConsoleOps {
     unsafe fn init();
     fn write_byte(b: u8);
     fn read_byte() -> u8;

@@ -2,7 +2,7 @@
 /// User code does `svc #0` which traps to EL1.
 /// Uses aarch64 Linux syscall numbers.
 
-use super::serial;
+use super::console;
 
 /// Exception frame layout from exception.S save_context:
 ///   regs[0..30] = x0..x29  (each 8 bytes)

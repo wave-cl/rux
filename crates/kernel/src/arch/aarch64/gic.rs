@@ -67,10 +67,10 @@ pub fn handle_irq() {
             super::timer::handle_tick();
         } else if irq_id < 1020 {
             // Spurious or unhandled
-            super::serial::write_str("IRQ: ");
-            super::serial::write_byte(b'0' + (irq_id / 10) as u8);
-            super::serial::write_byte(b'0' + (irq_id % 10) as u8);
-            super::serial::write_byte(b'\n');
+            super::console::write_str("IRQ: ");
+            super::console::write_byte(b'0' + (irq_id / 10) as u8);
+            super::console::write_byte(b'0' + (irq_id % 10) as u8);
+            super::console::write_byte(b'\n');
         }
 
         // EOI

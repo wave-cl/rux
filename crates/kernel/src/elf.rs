@@ -96,7 +96,7 @@ pub unsafe fn load_elf_from_inode(
     // Write exec args to user stack and enter user mode
     let user_sp = crate::execargs::write_to_stack(stack_top as usize);
     {
-        use rux_arch::SerialOps;
+        use rux_arch::ConsoleOps;
         type A = crate::arch::Arch;
         let mut hb = [0u8; 16];
         A::write_str("rux: entry=0x");

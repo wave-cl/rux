@@ -11,7 +11,7 @@ pub mod execargs;
 pub mod pgtrack;
 pub mod syscall;
 
-use rux_arch::{SerialOps, ExitOps, BootOps};
+use rux_arch::{ConsoleOps, ExitOps, BootOps};
 use arch::Arch;
 
 /// Kernel entry point. Called from boot.S.
@@ -32,11 +32,6 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
     Arch::write_str("rux: all checks passed\n");
     Arch::exit(Arch::EXIT_SUCCESS);
 }
-
-// ── Shared state for preemptive scheduler tests ─────────���───────────
-
-pub static COUNTER_A: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-pub static COUNTER_B: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 // ── Panic handler ───────────────────────────────────────────────────
 
