@@ -145,3 +145,44 @@ pub trait ArchInfo {
 pub trait ArchSpecificOps {
     fn arch_syscall(nr: u64, a0: u64, a1: u64) -> Option<i64>;
 }
+
+/// Vfork/exec context: save and restore arch-specific process state.
+///
+/// Each architecture implements this to handle:
+/// - Register frame save/restore (exception frame or syscall stack)
+/// - User stack pointer (RSP / SP_EL0)
+/// - TLS base register (FS_BASE MSR / TPIDR_EL0)
+/// - Page table root (CR3 / TTBR0_EL1) with TLB management
+/// - Return-to-user mechanism (sysretq / eret)
+///
+/// The generic vfork algorithm calls these methods; the arch provides
+/// only the hardware-specific primitives.
+///
+/// # Safety
+/// All methods manipulate hardware state (registers, MSRs, page tables).
+pub unsafe trait VforkContext {
+    /// Virtual address base for the child's copied stack pages.
+    const CHILD_STACK_VA: u64;
+
+    /// Save the parent's register frame (from syscall stack or exception frame).
+    unsafe fn save_regs();
+    /// Save the user stack pointer.
+    unsafe fn save_user_sp() -> u64;
+    /// Set the user stack pointer (for child stack adjustment).
+    unsafe fn set_user_sp(sp: u64);
+    /// Save the TLS base register. Returns the saved value.
+    unsafe fn save_tls() -> u64;
+    /// Restore the TLS base register.
+    unsafe fn restore_tls(val: u64);
+    /// Read the current page table root register.
+    unsafe fn read_pt_root() -> u64;
+    /// Write the page table root register (with arch-appropriate TLB flush).
+    unsafe fn write_pt_root(root: u64);
+    /// Clear the setjmp state to prevent double-longjmp.
+    unsafe fn clear_jmp();
+    /// Perform setjmp. Returns 0 on first call, child PID on longjmp return.
+    unsafe fn setjmp() -> i64;
+    /// Restore parent registers and return to user mode with the given value.
+    /// Does not return.
+    unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> !;
+}

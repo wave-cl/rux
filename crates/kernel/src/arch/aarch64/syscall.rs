@@ -25,10 +25,13 @@ pub fn handle_syscall(frame: *mut u8) {
         let a3 = *regs.add(3);   // x3
         let a4 = *regs.add(4);   // x4
 
-        // Vfork/exec must be handled here (arch-specific state machine)
+        // Vfork/exec use generic implementation with arch VforkContext
         let result: i64 = match nr {
-            220 => syscall_vfork(regs),           // clone (as vfork)
-            221 => { syscall_exec(a0, a1); 0 }    // execve
+            220 => {
+                CURRENT_REGS_PTR = regs;
+                crate::syscall::generic_vfork::<super::Aarch64>()
+            }
+            221 => { crate::syscall::generic_exec::<super::Aarch64>(a0, a1); 0 }
             _ => {
                 let sc = translate_aarch64(nr);
                 crate::syscall::dispatch(sc, a0, a1, a2, a3, a4)
@@ -114,6 +117,107 @@ fn translate_aarch64(nr: u64) -> crate::syscall::Syscall {
         169 => Syscall::Gettimeofday,
         163 => Syscall::Getrlimit,
         _ => Syscall::Unknown(nr),
+    }
+}
+
+// ── VforkContext implementation ─────────────────────────────────────────
+
+/// Stash the exception frame pointer so VforkContext methods can access it.
+/// Set by handle_syscall before calling generic_vfork.
+static mut CURRENT_REGS_PTR: *mut u64 = core::ptr::null_mut();
+
+unsafe impl rux_arch::VforkContext for super::Aarch64 {
+    const CHILD_STACK_VA: u64 = 0x7FFD_0000;
+
+    unsafe fn save_regs() {
+        let regs = CURRENT_REGS_PTR;
+        for i in 0..FRAME_REGS {
+            SAVED_PARENT_FRAME[i] = *regs.add(i);
+        }
+        SAVED_REGS_PTR = regs;
+    }
+
+    unsafe fn save_user_sp() -> u64 {
+        let sp: u64;
+        core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
+        sp
+    }
+
+    unsafe fn set_user_sp(sp: u64) {
+        core::arch::asm!("msr sp_el0, {}", in(reg) sp, options(nostack));
+    }
+
+    unsafe fn save_tls() -> u64 {
+        let tls: u64;
+        core::arch::asm!("mrs {}, tpidr_el0", out(reg) tls, options(nostack));
+        tls
+    }
+
+    unsafe fn restore_tls(val: u64) {
+        core::arch::asm!("msr tpidr_el0, {}", in(reg) val, options(nostack));
+    }
+
+    unsafe fn read_pt_root() -> u64 {
+        let ttbr0: u64;
+        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
+        ttbr0
+    }
+
+    unsafe fn write_pt_root(root: u64) {
+        core::arch::asm!(
+            "msr ttbr0_el1, {}",
+            "isb",
+            "tlbi vmalle1is",
+            "dsb ish",
+            "ic iallu",
+            "dsb ish",
+            "isb",
+            in(reg) root,
+            options(nostack)
+        );
+    }
+
+    unsafe fn clear_jmp() { VFORK_JMP.sp = 0; }
+
+    unsafe fn setjmp() -> i64 { vfork_setjmp(&raw mut VFORK_JMP) }
+
+    unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> ! {
+        // Restore parent's user stack pointer
+        core::arch::asm!("msr sp_el0, {}", in(reg) user_sp, options(nostack));
+
+        let frame = SAVED_REGS_PTR;
+        for i in 0..FRAME_REGS {
+            *frame.add(i) = SAVED_PARENT_FRAME[i];
+        }
+        *frame.add(0) = return_val as u64; // x0 = child PID
+
+        // Match exception.S restore_context exactly
+        core::arch::asm!(
+            "mov sp, {frame}",
+            "ldp x30, x10, [sp, #240]",
+            "ldr x11, [sp, #256]",
+            "msr elr_el1, x10",
+            "msr spsr_el1, x11",
+            "ldp x0,  x1,  [sp, #0]",
+            "ldp x2,  x3,  [sp, #16]",
+            "ldp x4,  x5,  [sp, #32]",
+            "ldp x6,  x7,  [sp, #48]",
+            "ldp x8,  x9,  [sp, #64]",
+            "ldp x10, x11, [sp, #80]",
+            "ldp x12, x13, [sp, #96]",
+            "ldp x14, x15, [sp, #112]",
+            "ldp x16, x17, [sp, #128]",
+            "ldp x18, x19, [sp, #144]",
+            "ldp x20, x21, [sp, #160]",
+            "ldp x22, x23, [sp, #176]",
+            "ldp x24, x25, [sp, #192]",
+            "ldp x26, x27, [sp, #208]",
+            "ldp x28, x29, [sp, #224]",
+            "add sp, sp, #272",
+            "eret",
+            frame = in(reg) frame,
+            options(noreturn)
+        );
     }
 }
 

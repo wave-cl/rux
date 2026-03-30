@@ -126,10 +126,10 @@ unsafe extern "C" fn syscall_entry() {
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
     use crate::syscall::Syscall;
 
-    // Vfork/exec must be handled here (arch-specific state machine)
+    // Vfork/exec use generic implementation with arch VforkContext
     match nr {
-        56 | 57 => return syscall_vfork_linux(),  // clone/fork as vfork
-        59 => { unsafe { syscall_exec(a0, a1); } return 0; } // execve
+        56 | 57 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() },
+        59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0, a1); } return 0; }
         _ => {}
     }
 
@@ -215,10 +215,10 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let a1 = *regs.add(10);   // RSI
         let a2 = *regs.add(11);   // RDX
 
-        // Vfork/exec must be handled here (arch-specific state machine)
+        // Vfork/exec use generic implementation
         let result: i64 = match nr {
-            57 => syscall_vfork(regs),
-            59 => { syscall_exec(a0, a1); 0 }
+            57 => crate::syscall::generic_vfork::<super::X86_64>(),
+            59 => { crate::syscall::generic_exec::<super::X86_64>(a0, a1); 0 }
             _ => {
                 let sc = translate_x86_64(nr);
                 crate::syscall::dispatch(sc, a0, a1, a2, 0, 0)
@@ -436,6 +436,74 @@ pub fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
             }
             _ => -22 // -EINVAL
         }
+    }
+}
+
+// ── VforkContext implementation ─────────────────────────────────────────
+
+unsafe impl rux_arch::VforkContext for super::X86_64 {
+    const CHILD_STACK_VA: u64 = 0x7FFE_0000;
+
+    unsafe fn save_regs() {
+        let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
+        for i in 0..15 {
+            VFORK_PARENT_REGS[i] = *stack_top.sub(i + 1);
+        }
+    }
+
+    unsafe fn save_user_sp() -> u64 { SAVED_USER_RSP }
+
+    unsafe fn set_user_sp(sp: u64) { SAVED_USER_RSP = sp; }
+
+    unsafe fn save_tls() -> u64 {
+        let lo: u32;
+        let hi: u32;
+        core::arch::asm!("rdmsr", in("ecx") 0xC0000100u32, out("eax") lo, out("edx") hi, options(nostack));
+        (hi as u64) << 32 | lo as u64
+    }
+
+    unsafe fn restore_tls(val: u64) {
+        let lo = val as u32;
+        let hi = (val >> 32) as u32;
+        core::arch::asm!("wrmsr", in("ecx") 0xC0000100u32, in("eax") lo, in("edx") hi, options(nostack));
+    }
+
+    unsafe fn read_pt_root() -> u64 {
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
+        cr3
+    }
+
+    unsafe fn write_pt_root(root: u64) {
+        core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack));
+    }
+
+    unsafe fn clear_jmp() { VFORK_JMP.rsp = 0; }
+
+    unsafe fn setjmp() -> i64 { vfork_setjmp(&raw mut VFORK_JMP) }
+
+    unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> ! {
+        // Write saved regs back to SYSCALL_STACK
+        let stack_top = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+        for i in 0..15 {
+            *stack_top.sub(i + 1) = VFORK_PARENT_REGS[i];
+        }
+        // Override RAX slot with child PID (return value)
+        *stack_top.sub(9) = return_val as u64; // index 8 = RAX slot
+        SAVED_USER_RSP = user_sp;
+
+        let pop_rsp = stack_top.sub(15) as u64;
+        core::arch::asm!(
+            "mov rsp, {rsp}",
+            "pop r9", "pop r8", "pop r10", "pop rdx", "pop rsi", "pop rdi", "pop rax",
+            "pop r15", "pop r14", "pop r13", "pop r12", "pop rbp", "pop rbx",
+            "pop r11", "pop rcx",
+            "mov rsp, [{saved_user_rsp}]",
+            "sysretq",
+            rsp = in(reg) pop_rsp,
+            saved_user_rsp = sym SAVED_USER_RSP,
+            options(noreturn)
+        );
     }
 }
 

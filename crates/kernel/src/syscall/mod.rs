@@ -234,3 +234,140 @@ pub fn dispatch(sc: Syscall, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64
 pub trait SyscallTranslate {
     fn translate(nr: u64) -> Syscall;
 }
+
+// ── Generic vfork/exec ─────────────────────────────────────────────────
+
+/// Saved parent process state for vfork (architecture-independent).
+static mut VFORK_PARENT_MMAP_BASE: u64 = 0;
+static mut VFORK_PARENT_PROGRAM_BRK: u64 = 0;
+static mut VFORK_PARENT_CWD_INODE: u64 = 0;
+static mut VFORK_PARENT_USER_SP: u64 = 0;
+static mut VFORK_PARENT_TLS: u64 = 0;
+static mut VFORK_PARENT_PT_ROOT: u64 = 0;
+static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::OpenFile {
+    ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
+    is_pipe: false, pipe_id: 0, pipe_write: false,
+}; 64];
+
+/// Generic vfork implementation. The arch provides hardware primitives
+/// via the `VforkContext` trait; this function handles the algorithm.
+///
+/// # Safety
+/// Manipulates process state, page tables, and performs setjmp/longjmp.
+#[inline(never)]
+pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> i64 {
+    use rux_arch::SerialOps;
+    crate::arch::Arch::write_str("rux: vfork()\n");
+
+    // 1. Save arch-specific register state
+    V::save_regs();
+    VFORK_PARENT_USER_SP = V::save_user_sp();
+    VFORK_PARENT_TLS = V::save_tls();
+
+    // 2. Save process state that exec resets
+    VFORK_PARENT_MMAP_BASE = MMAP_BASE;
+    VFORK_PARENT_PROGRAM_BRK = PROGRAM_BRK;
+    VFORK_PARENT_CWD_INODE = CWD_INODE;
+    for i in 0..64 { VFORK_PARENT_FDS[i] = crate::fdtable::FD_TABLE[i]; }
+    CHILD_AVAILABLE = true;
+
+    // 3. setjmp — returns 0 on first call, child PID on longjmp
+    let val = V::setjmp();
+    if val == 0 {
+        // ── Child path ─────────────────────────────────────────────
+        IN_VFORK_CHILD = true;
+
+        // Copy parent stack pages to child VA to prevent corruption
+        use rux_mm::FrameAllocator;
+        let alloc = crate::kstate::alloc();
+        let parent_sp = VFORK_PARENT_USER_SP;
+        let parent_page_base = parent_sp & !0xFFF;
+        let child_stack_pages = 4u64;
+        let child_va_base = V::CHILD_STACK_VA;
+
+        let pt_root = V::read_pt_root();
+        let mut upt = crate::arch::PageTable::from_root(
+            rux_klib::PhysAddr::new(pt_root as usize));
+        let flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::USER);
+
+        for p in 0..child_stack_pages {
+            let src_va = parent_page_base - (child_stack_pages - 1 - p) * 4096;
+            let dst_va = child_va_base + p * 4096;
+            let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
+            let src = src_va as *const u8;
+            let dst = frame.as_usize() as *mut u8;
+            for j in 0..4096 { *dst.add(j) = *src.add(j); }
+            let _ = upt.unmap_4k(rux_klib::VirtAddr::new(dst_va as usize));
+            let _ = upt.map_4k(rux_klib::VirtAddr::new(dst_va as usize), frame, flags, alloc);
+        }
+
+        // Adjust SP to child stack
+        let offset_in_page = parent_sp - parent_page_base;
+        let child_top_va = child_va_base + (child_stack_pages - 1) * 4096;
+        V::set_user_sp(child_top_va + offset_in_page);
+
+        return 0; // child gets fork return 0
+    } else {
+        // ── Parent resume ──────────────────────────────────────────
+
+        // Restore page table root (exec replaced it)
+        if VFORK_PARENT_PT_ROOT != 0 {
+            V::write_pt_root(VFORK_PARENT_PT_ROOT);
+        }
+
+        crate::arch::Arch::write_str("rux: vfork parent resumed\n");
+        V::clear_jmp();
+        IN_VFORK_CHILD = false;
+
+        // Restore process state
+        MMAP_BASE = VFORK_PARENT_MMAP_BASE;
+        PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
+        CWD_INODE = VFORK_PARENT_CWD_INODE;
+        for i in 0..64 { crate::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
+
+        // Restore TLS
+        V::restore_tls(VFORK_PARENT_TLS);
+
+        // Restore registers and return to user mode
+        V::restore_and_return_to_user(val, VFORK_PARENT_USER_SP);
+    }
+}
+
+/// Generic exec implementation.
+///
+/// # Safety
+/// Replaces the current process image.
+pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: u64, argv_ptr: u64) -> ! {
+    use rux_arch::SerialOps;
+    use rux_vfs::FileSystem;
+
+    let fs = crate::kstate::fs();
+    let alloc = crate::kstate::alloc();
+
+    let path_cstr = path_ptr as *const u8;
+    let mut path_len = 0usize;
+    while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
+    let path = core::slice::from_raw_parts(path_cstr, path_len);
+
+    crate::execargs::set_from_user(path, argv_ptr, 0);
+
+    crate::arch::Arch::write_str("rux: exec(\"");
+    crate::arch::Arch::write_bytes(path);
+    crate::arch::Arch::write_str("\")\n");
+
+    let ino = match rux_vfs::path::resolve_path(fs, path) {
+        Ok(ino) => ino,
+        Err(_) => { crate::arch::Arch::write_str("rux: exec: not found\n"); loop {} }
+    };
+
+    // Save page table root so parent can restore on vfork resume.
+    // The exec will create a new page table, replacing the current one.
+    VFORK_PARENT_PT_ROOT = V::read_pt_root();
+
+    crate::pgtrack::begin_child(alloc);
+
+    crate::arch::Arch::write_str("rux: entering user mode...\n");
+    crate::elf::load_elf_from_inode(ino as u64, alloc);
+}
