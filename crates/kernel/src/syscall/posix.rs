@@ -521,3 +521,109 @@ pub fn mmap(addr: usize, len: usize, _prot: usize, mmap_flags: usize, _fd: usize
         result as isize
     }
 }
+
+// ── Path operations ─────────────────────────────────────────────────
+
+/// rename(oldpath, newpath) — POSIX.1
+pub fn rename(old_ptr: usize, new_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        let (old_dir, old_name) = match super::resolve_parent_and_name(old_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let (new_dir, new_name) = match super::resolve_parent_and_name(new_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let old_fname = match FileName::new(old_name) { Ok(f) => f, Err(_) => return -22 };
+        let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return -22 };
+        match fs.rename(old_dir, old_fname, new_dir, new_fname) {
+            Ok(()) => 0,
+            Err(_) => -2,
+        }
+    }
+}
+
+/// symlink(target, linkpath) — POSIX.1
+pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        let target = super::read_user_path(target_ptr);
+        let (dir_ino, name) = match super::resolve_parent_and_name(link_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return -22 };
+        match fs.symlink(dir_ino, fname, target) {
+            Ok(_) => 0,
+            Err(_) => -17,
+        }
+    }
+}
+
+/// readlink(pathname, buf, bufsiz) — POSIX.1
+/// Must NOT follow the symlink — resolve parent, lookup name, readlink on the symlink inode.
+pub fn readlink(path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        // Resolve parent directory and get the basename (the symlink itself)
+        let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return -22 };
+        // Lookup the name in the parent — this gives us the symlink inode
+        let ino = match fs.lookup(dir_ino, fname) {
+            Ok(ino) => ino,
+            Err(_) => return -2,
+        };
+        let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, bufsiz);
+        match fs.readlink(ino, user_buf) {
+            Ok(n) => n as isize,
+            Err(_) => -22, // -EINVAL (not a symlink)
+        }
+    }
+}
+
+// ── Sleep ───────────────────────────────────────────────────────────
+
+/// nanosleep(req, rem) — POSIX.1
+pub fn nanosleep(req_ptr: usize) -> isize {
+    if req_ptr == 0 { return -14; }
+    unsafe {
+        let tv_sec = *(req_ptr as *const u64);
+        let tv_nsec = *((req_ptr + 8) as *const u64);
+        let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
+        let target = Arch::ticks() + ms;
+        while Arch::ticks() < target {
+            // Sleep until next interrupt
+            #[cfg(target_arch = "x86_64")]
+            core::arch::asm!("sti; hlt; cli", options(nostack, nomem));
+            #[cfg(target_arch = "aarch64")]
+            core::arch::asm!(
+                "msr daifclr, #2", "wfi", "msr daifset, #2",
+                options(nostack, nomem)
+            );
+        }
+    }
+    0
+}
+
+// ── Resource limits ─────────────────────────────────────────────────
+
+/// prlimit64(pid, resource, new_limit, old_limit) — Linux
+pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: usize) -> isize {
+    // Return RLIM_INFINITY for all resources
+    if old_limit != 0 {
+        unsafe {
+            let rlim_infinity: u64 = !0;
+            *(old_limit as *mut u64) = rlim_infinity; // rlim_cur
+            *((old_limit + 8) as *mut u64) = rlim_infinity; // rlim_max
+        }
+    }
+    0
+}

@@ -175,8 +175,14 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         78 | 217 => Syscall::Getdents64,
         79 => Syscall::Getcwd,
         80 => Syscall::Chdir,
+        82 | 264 => Syscall::Rename,       // rename / renameat
         83 => Syscall::Mkdir,
+        86 | 265 => Syscall::Link,          // link / linkat
         87 => Syscall::Unlink,
+        88 | 266 => Syscall::Symlink,       // symlink / symlinkat
+        89 | 267 => Syscall::Readlink,      // readlink / readlinkat
+        90 | 91 => Syscall::Chmod,          // chmod / fchmod
+        92 | 93 => Syscall::Chown,          // chown / fchown
         96 => Syscall::Gettimeofday,
         97 => Syscall::Getrlimit,
         102 | 107 => Syscall::Getuid,
@@ -199,6 +205,8 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         262 => Syscall::FstatAt,
         269 => Syscall::Faccessat,
         273 => Syscall::SetRobustList,
+        280 => Syscall::Utimensat,
+        292 => Syscall::Dup2,               // dup3 → dup2 (ignore flags)
         302 => Syscall::Prlimit64,
         334 => Syscall::Rseq,
         // x86_64-specific

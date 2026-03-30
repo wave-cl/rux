@@ -63,14 +63,20 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         // File metadata
         79 => Syscall::FstatAt,
         80 => Syscall::Fstat,
-        78 => Syscall::Stat,
+        78 => Syscall::Readlink,            // readlinkat
         48 => Syscall::Faccessat,
-        // Directory ops
+        // Directory / path ops
         17 => Syscall::Getcwd,
-        33 => Syscall::Creat,
-        34 => Syscall::Mkdir,
-        35 => Syscall::Unlink,
+        33 => Syscall::Creat,               // mknodat → creat
+        34 => Syscall::Mkdir,               // mkdirat
+        35 => Syscall::Unlink,              // unlinkat
+        36 => Syscall::Symlink,             // symlinkat
+        37 => Syscall::Link,                // linkat
+        38 => Syscall::Rename,              // renameat
         49 => Syscall::Chdir,
+        52 | 53 => Syscall::Chmod,          // fchmod/fchmodat
+        54 | 55 => Syscall::Chown,          // fchown/fchownat
+        88 => Syscall::Utimensat,
         // Memory
         222 => Syscall::Mmap,
         215 => Syscall::Munmap,

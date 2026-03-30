@@ -96,9 +96,11 @@ pub enum Syscall {
     Read, Write, Open, OpenAt, Close, Lseek, Dup, Dup2, Fcntl,
     Writev, Sendfile, Ioctl, Pipe2,
     // File metadata
-    Stat, Fstat, FstatAt, Faccessat,
-    // Directory ops
-    Getcwd, Creat, Mkdir, Unlink, Chdir,
+    Stat, Fstat, FstatAt, Faccessat, Readlink,
+    // Directory / path ops
+    Getcwd, Creat, Mkdir, Unlink, Chdir, Rename, Symlink,
+    // Permissions (stubs)
+    Chmod, Chown, Utimensat,
     // Memory
     Mmap, Munmap, Mprotect, Brk,
     // Process
@@ -118,7 +120,7 @@ pub enum Syscall {
     SetRobustList, Futex, Tgkill, Tkill,
     SchedGetaffinity, Getrlimit,
     Poll, Gettimeofday,
-    Prctl, Alarm, Access,
+    Prctl, Alarm, Access, Link,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -152,13 +154,19 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Fstat => posix::fstat(a0, a1),
         Syscall::FstatAt => posix::fstatat(a0, a1, a2),
         Syscall::Faccessat => 0,
+        Syscall::Readlink => posix::readlink(a0, a1, a2),
 
-        // ── Directory ops ──────────────────────────────────────────
+        // ── Directory / path ops ──────────────────────────────────
         Syscall::Getcwd => posix::getcwd(a0, a1),
         Syscall::Creat => posix::creat(a0),
         Syscall::Mkdir => posix::mkdir(a0),
         Syscall::Unlink => posix::unlink(a0),
         Syscall::Chdir => posix::chdir(a0),
+        Syscall::Rename => posix::rename(a0, a1),
+        Syscall::Symlink => posix::symlink(a0, a1),
+
+        // ── Permissions (stubs) ───────────────────────────────────
+        Syscall::Chmod | Syscall::Chown | Syscall::Utimensat | Syscall::Link => 0,
 
         // ── Memory ─────────────────────────────────────────────────
         Syscall::Mmap => posix::mmap(a0, a1, a2, a3, a4),
@@ -181,10 +189,11 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         // ── Signals ────────────────────────────────────────────────
         Syscall::Sigaction => posix::sigaction(a0, a1, a2),
         Syscall::Sigprocmask => posix::sigprocmask(a0, a1, a2, a3),
-        Syscall::Sigaltstack => -38,
+        Syscall::Sigaltstack => 0, // accept and ignore
 
         // ── Terminal / scheduling ──────────────────────────────────
-        Syscall::SchedYield | Syscall::Nanosleep | Syscall::Alarm => 0,
+        Syscall::SchedYield | Syscall::Alarm => 0,
+        Syscall::Nanosleep => posix::nanosleep(a0),
 
         // ── User/group IDs ─────────────────────────────────────────
         Syscall::Getuid | Syscall::Geteuid |
@@ -209,7 +218,8 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
             crate::arch::Arch::ticks() as isize
         }
         Syscall::Access => 0,
-        Syscall::Prlimit64 | Syscall::Rseq => -38,
+        Syscall::Prlimit64 => posix::prlimit64(a0, a1, a2, a3),
+        Syscall::Rseq => -38,
 
         // ── Architecture-specific ──────────────────────────────────
         Syscall::ArchSpecific(nr) => {
