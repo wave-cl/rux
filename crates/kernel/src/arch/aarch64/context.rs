@@ -74,3 +74,12 @@ pub unsafe fn init_task_stack(stack_top: u64, entry: u64, _arg: u64) -> u64 {
 
     sp
 }
+
+unsafe impl rux_arch::ContextOps for super::Aarch64 {
+    unsafe fn context_switch(old_sp: *mut u64, new_sp: u64) {
+        context_switch(old_sp, new_sp)
+    }
+    unsafe fn init_task_stack(stack_top: u64, entry: u64, arg: u64) -> u64 {
+        init_task_stack(stack_top, entry, arg)
+    }
+}

@@ -18,3 +18,9 @@ pub fn exit_qemu(code: u32) -> ! {
 
 pub const EXIT_SUCCESS: u32 = 0x10;
 pub const EXIT_FAILURE: u32 = 0x11;
+
+impl rux_arch::ExitOps for super::X86_64 {
+    const EXIT_SUCCESS: u32 = 0x10;
+    const EXIT_FAILURE: u32 = 0x11;
+    fn exit(code: u32) -> ! { exit_qemu(code) }
+}

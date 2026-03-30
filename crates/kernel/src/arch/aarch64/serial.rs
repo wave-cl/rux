@@ -60,3 +60,11 @@ pub fn read_byte() -> u8 {
         mmio_read(UARTDR) as u8
     }
 }
+
+unsafe impl rux_arch::SerialOps for super::Aarch64 {
+    unsafe fn init() { init() }
+    fn write_byte(b: u8) { write_byte(b) }
+    fn read_byte() -> u8 { read_byte() }
+    fn write_bytes(buf: &[u8]) { write_bytes(buf) }
+    fn write_str(s: &str) { write_str(s) }
+}

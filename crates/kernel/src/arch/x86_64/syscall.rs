@@ -416,6 +416,12 @@ pub extern "C" fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
     );
 }
 
+unsafe impl rux_arch::UserModeOps for super::X86_64 {
+    unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
+        self::enter_user_mode(entry, user_stack)
+    }
+}
+
 fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
     const ARCH_SET_FS: u64 = 0x1002;
     const ARCH_SET_GS: u64 = 0x1001;

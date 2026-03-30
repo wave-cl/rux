@@ -68,3 +68,14 @@ pub unsafe fn activate(pt: &PageTable4Level) {
         options(nostack, preserves_flags)
     );
 }
+
+unsafe impl rux_arch::PageTableRootOps for super::X86_64 {
+    fn read() -> u64 {
+        let val: u64;
+        unsafe { core::arch::asm!("mov {}, cr3", out(reg) val, options(nostack)); }
+        val
+    }
+    unsafe fn write(root: u64) {
+        core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
+    }
+}

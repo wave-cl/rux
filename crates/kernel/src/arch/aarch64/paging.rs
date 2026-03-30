@@ -97,3 +97,17 @@ pub unsafe fn activate(pt: &PageTable4Level) {
     core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr, options(nostack));
     core::arch::asm!("isb", options(nostack));
 }
+
+unsafe impl rux_arch::PageTableRootOps for super::Aarch64 {
+    fn read() -> u64 {
+        let val: u64;
+        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) val, options(nostack)); }
+        val
+    }
+    unsafe fn write(root: u64) {
+        core::arch::asm!(
+            "msr ttbr0_el1, {}", "isb", "tlbi vmalle1is", "dsb ish", "isb",
+            in(reg) root, options(nostack)
+        );
+    }
+}

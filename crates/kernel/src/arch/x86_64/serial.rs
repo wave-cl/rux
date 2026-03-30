@@ -60,3 +60,13 @@ pub fn read_byte() -> u8 {
         inb(COM1)
     }
 }
+
+// ── Trait implementation ────────────────────────────────────────────
+
+unsafe impl rux_arch::SerialOps for super::X86_64 {
+    unsafe fn init() { init() }
+    fn write_byte(b: u8) { write_byte(b) }
+    fn read_byte() -> u8 { read_byte() }
+    fn write_bytes(buf: &[u8]) { write_bytes(buf) }
+    fn write_str(s: &str) { write_str(s) }
+}

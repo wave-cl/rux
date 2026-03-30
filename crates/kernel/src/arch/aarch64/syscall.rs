@@ -400,3 +400,9 @@ pub unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
         options(noreturn)
     );
 }
+
+unsafe impl rux_arch::UserModeOps for super::Aarch64 {
+    unsafe fn enter_user_mode(entry: u64, user_stack: u64) -> ! {
+        self::enter_user_mode(entry, user_stack)
+    }
+}
