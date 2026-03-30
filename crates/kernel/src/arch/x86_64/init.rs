@@ -199,6 +199,7 @@ pub fn x86_64_init(multiboot_info: usize) {
     // ── Preemptive scheduling test ─────────────────────────────────────
     serial::write_str("rux: preemptive scheduler test...\n");
     unsafe {
+        scheduler::init_context_fns();
         use rux_sched::SchedClassOps;
         let sched = scheduler::get();
         static mut STACK_A: [u8; 16384] = [0; 16384];

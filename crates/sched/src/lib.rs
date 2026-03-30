@@ -9,6 +9,7 @@ mod ext;
 pub mod fair;
 mod policy;
 mod task;
+pub mod kernel;
 
 pub use class::{SchedClass, SchedClassOps};
 pub use cpu::{CpuId, CpuMask, RunQueue};

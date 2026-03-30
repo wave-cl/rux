@@ -4,17 +4,15 @@
 /// across Unix-like operating systems. They form the core system
 /// interface that any POSIX-compliant OS must provide.
 
-use super::arch;
+use rux_arch::SerialOps;
+use rux_arch::TimerOps;
+type Arch = crate::arch::Arch;
 
 // ── File I/O (POSIX.1 Section 2) ────────────────────────────────────
 
 /// Check if fd 0-2 should use serial (not redirected to file/pipe).
 fn is_serial_fd(fd: u64) -> bool {
-    if fd > 2 { return false; }
-    unsafe {
-        let f = &crate::fdtable::FD_TABLE[fd as usize];
-        !f.active || f.is_serial
-    }
+    crate::fdtable::is_serial_fd(fd)
 }
 
 /// read(fd, buf, count) — POSIX.1
@@ -24,7 +22,7 @@ pub fn read(fd: u64, buf: u64, len: u64) -> i64 {
         unsafe {
             let ptr = buf as *mut u8;
             for i in 0..len as usize {
-                let b = arch::serial_read_byte();
+                let b = Arch::read_byte();
                 if b == 0x03 {
                     // Ctrl+C: return -EINTR if we haven't read anything,
                     // or return what we have so far
@@ -51,7 +49,7 @@ pub fn write(fd: u64, buf: u64, len: u64) -> i64 {
         // stdout/stderr to serial
         unsafe {
             let ptr = buf as *const u8;
-            for i in 0..len as usize { arch::serial_write_byte(*ptr.add(i)); }
+            for i in 0..len as usize { Arch::write_byte(*ptr.add(i)); }
         }
         return len as i64;
     }
@@ -185,17 +183,9 @@ pub fn stat(pathname: u64, buf: u64) -> i64 {
 }
 
 /// fstat(fd, statbuf) — POSIX.1
-/// Offset of st_mode within struct stat (differs per arch).
-#[cfg(target_arch = "x86_64")]
-const STAT_MODE_OFF: usize = 24;
-#[cfg(target_arch = "aarch64")]
-const STAT_MODE_OFF: usize = 16;
-
-/// Offset of st_blksize within struct stat.
-#[cfg(target_arch = "x86_64")]
-const STAT_BLKSIZE_OFF: usize = 56;
-#[cfg(target_arch = "aarch64")]
-const STAT_BLKSIZE_OFF: usize = 56;
+use crate::arch::StatLayout;
+const STAT_MODE_OFF: usize = <crate::arch::Arch as StatLayout>::STAT_MODE_OFF;
+const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::STAT_BLKSIZE_OFF;
 
 pub fn fstat(fd: u64, buf: u64) -> i64 {
     if buf == 0 { return -14; }
@@ -378,24 +368,17 @@ pub fn creat(path_ptr: u64) -> i64 {
 
 /// _exit(status) — POSIX.1
 pub fn exit(status: i32) -> ! {
-    arch::serial_write_str("rux: user exit(");
+    Arch::write_str("rux: user exit(");
     let mut buf = [0u8; 10];
-    arch::serial_write_str(crate::write_u32(&mut buf, status as u32));
-    arch::serial_write_str(")\n");
+    Arch::write_str(crate::write_u32(&mut buf, status as u32));
+    Arch::write_str(")\n");
 
     unsafe { super::LAST_CHILD_EXIT = status; }
 
-    // Vfork longjmp is deeply arch-specific (stays cfg-dispatched)
-    #[cfg(target_arch = "x86_64")]
     unsafe {
-        if crate::arch::x86_64::syscall::vfork_jmp_active() {
-            crate::arch::x86_64::syscall::vfork_longjmp_to_parent(42);
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        if crate::arch::aarch64::syscall::vfork_jmp_active() {
-            crate::arch::aarch64::syscall::vfork_longjmp_to_parent(42);
+        use rux_arch::VforkOps;
+        if crate::arch::Arch::vfork_jmp_active() {
+            crate::arch::Arch::vfork_longjmp_to_parent(42);
         }
     }
     use rux_arch::ExitOps;
@@ -445,10 +428,12 @@ pub fn uname(buf: u64) -> i64 {
         // version (offset 195)
         for (i, &b) in b"#1 SMP".iter().enumerate() { *ptr.add(195 + i) = b; }
         // machine (offset 260)
-        #[cfg(target_arch = "x86_64")]
-        for (i, &b) in b"x86_64".iter().enumerate() { *ptr.add(260 + i) = b; }
-        #[cfg(target_arch = "aarch64")]
-        for (i, &b) in b"aarch64".iter().enumerate() { *ptr.add(260 + i) = b; }
+        {
+            use rux_arch::ArchInfo;
+            for (i, &b) in crate::arch::Arch::MACHINE_NAME.iter().enumerate() {
+                *ptr.add(260 + i) = b;
+            }
+        }
     }
     0
 }
@@ -507,7 +492,7 @@ pub fn ioctl(_fd: u64, request: u64, arg: u64) -> i64 {
 /// clock_gettime(clockid, timespec) — POSIX.1-2008
 pub fn clock_gettime(_clockid: u64, tp: u64) -> i64 {
     if tp == 0 { return -14; }
-    let ticks = arch::ticks();
+    let ticks = Arch::ticks();
     unsafe {
         *(tp as *mut u64) = ticks / 1000;
         *((tp + 8) as *mut u64) = (ticks % 1000) * 1_000_000;

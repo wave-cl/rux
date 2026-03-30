@@ -23,6 +23,10 @@ version = "0.1.0"
 [[package]]
 name = "rux-elf"
 version = "0.1.0"
+dependencies = [
+ "rux-klib",
+ "rux-mm",
+]
 
 [[package]]
 name = "rux-ipc"

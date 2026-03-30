@@ -6,32 +6,6 @@
 pub mod posix;
 pub mod linux;
 
-// ── Arch-dispatched helpers (trait-based, zero-cost) ────────────────
-//
-// These wrap the trait methods so existing call sites (`arch::serial_write_str`)
-// keep working during migration. Eventually call sites will use `Arch::*` directly.
-
-pub mod arch {
-    use rux_arch::{SerialOps, PageTableRootOps};
-    type A = crate::arch::Arch;
-
-    #[inline(always)] pub fn serial_write_byte(b: u8) { A::write_byte(b) }
-    #[inline(always)] pub fn serial_read_byte() -> u8 { A::read_byte() }
-    pub fn serial_write_str(s: &str) { A::write_str(s) }
-    pub fn serial_write_bytes(b: &[u8]) { A::write_bytes(b) }
-
-    /// Timer ticks — stays cfg-dispatched (different APIs per arch).
-    #[inline(always)]
-    pub fn ticks() -> u64 {
-        #[cfg(target_arch = "x86_64")]
-        { crate::arch::x86_64::pit::ticks() }
-        #[cfg(target_arch = "aarch64")]
-        { crate::arch::aarch64::timer::ticks() }
-    }
-
-    #[inline(always)] pub fn page_table_root() -> u64 { A::read() }
-}
-
 // ── Shared process state ────────────────────────────────────────────
 
 /// Program break for brk().
@@ -69,21 +43,18 @@ pub unsafe fn map_user_pages(
     end_va: u64,
     flags: rux_mm::MappingFlags,
 ) {
-    use rux_mm::FrameAllocator;
     use rux_arch::PageTableRootOps;
     let alloc = crate::kstate::alloc();
     let cr3 = crate::arch::Arch::read();
     let mut upt = crate::arch::PageTable::from_cr3(
         rux_klib::PhysAddr::new(cr3 as usize));
 
-    for pa in (start_va..end_va).step_by(4096) {
-        let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("map page");
-        let ptr = frame.as_usize() as *mut u8;
-        for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
-        let va = rux_klib::VirtAddr::new(pa as usize);
-        let _ = upt.unmap_4k(va);
-        let _ = upt.map_4k(va, frame, flags, alloc);
-    }
+    let upt_ptr = &mut upt as *mut crate::arch::PageTable;
+    rux_mm::map_zeroed_pages(
+        alloc, start_va, end_va, flags,
+        &mut |va, phys, f, a| { let _ = (*upt_ptr).map_4k(va, phys, f, a); },
+        &mut |va| { let _ = (*upt_ptr).unmap_4k(va); },
+    );
 }
 
 // ── Path resolution helper (used by both POSIX and Linux) ───────────
@@ -99,86 +70,22 @@ pub unsafe fn read_user_path(path_ptr: u64) -> &'static [u8] {
 /// Resolve a path using CWD for relative paths.
 pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_vfs::InodeId, i64> {
     let fs = crate::kstate::fs();
-    rux_vfs::path::resolve_path_at(fs, CWD_INODE, path).map_err(|_| -2i64)
+    rux_vfs::path::resolve_with_cwd(fs, CWD_INODE, path)
 }
 
 /// Resolve a path to (parent_inode, basename).
 pub unsafe fn resolve_parent_and_name(path_ptr: u64) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
-    use rux_vfs::FileSystem;
     let path = read_user_path(path_ptr);
-
-    let mut last_slash = None;
-    for j in 0..path.len() {
-        if path[j] == b'/' { last_slash = Some(j); }
-    }
-
     let fs = crate::kstate::fs();
-    match last_slash {
-        Some(0) => {
-            // "/foo" → parent is root, name is everything after '/'
-            let name = &path[1..];
-            Ok((fs.root_inode(), name))
-        }
-        Some(s) => {
-            // "/a/b/foo" or "a/b/foo" → resolve parent, name is after last slash
-            let parent_path = &path[..s];
-            let name = &path[s + 1..];
-            match rux_vfs::path::resolve_path_at(fs, CWD_INODE, parent_path) {
-                Ok(parent_ino) => Ok((parent_ino, name)),
-                Err(_) => Err(-2),
-            }
-        }
-        None => {
-            // "foo" (no slash) → parent is CWD
-            Ok((CWD_INODE, path))
-        }
-    }
+    rux_vfs::path::resolve_parent_and_name(fs, CWD_INODE, path)
 }
 
 /// Fill a Linux struct stat from VFS InodeStat.
 ///
-/// The struct stat layout differs between x86_64 and aarch64:
-///
-/// x86_64 (144 bytes):                    aarch64 (128 bytes):
-///   0: st_dev      u64                     0: st_dev      u64
-///   8: st_ino      u64                     8: st_ino      u64
-///  16: st_nlink    u64  ← 8 bytes         16: st_mode     u32  ← 4 bytes
-///  24: st_mode     u32                    20: st_nlink    u32  ← 4 bytes
-///  28: st_uid      u32                    24: st_uid      u32
-///  32: st_gid      u32                    28: st_gid      u32
-///  48: st_size     i64                    32: st_rdev     u64
-///  56: st_blksize  i64                    48: st_size     i64
-///  64: st_blocks   i64                    56: st_blksize  i32
-///                                         64: st_blocks   i64
+/// Delegates to the architecture's `StatLayout::fill_stat` impl because
+/// the struct stat layout differs between x86_64 and aarch64 (st_nlink
+/// width, field order, st_blksize type).
 pub unsafe fn fill_linux_stat(buf: u64, vfs_stat: &rux_vfs::InodeStat) {
-    let p = buf as *mut u8;
-    for i in 0..144 { *p.add(i) = 0; }
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        *(buf as *mut u64) = 0;                            // st_dev
-        *((buf + 8) as *mut u64) = vfs_stat.ino;           // st_ino
-        *((buf + 16) as *mut u64) = vfs_stat.nlink as u64; // st_nlink (u64!)
-        *((buf + 24) as *mut u32) = vfs_stat.mode;         // st_mode
-        *((buf + 28) as *mut u32) = vfs_stat.uid;          // st_uid
-        *((buf + 32) as *mut u32) = vfs_stat.gid;          // st_gid
-        *((buf + 48) as *mut i64) = vfs_stat.size as i64;  // st_size
-        *((buf + 56) as *mut i64) = 4096;                  // st_blksize
-        *((buf + 64) as *mut i64) = vfs_stat.blocks as i64; // st_blocks
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        *(buf as *mut u64) = 0;                            // st_dev
-        *((buf + 8) as *mut u64) = vfs_stat.ino;           // st_ino
-        *((buf + 16) as *mut u32) = vfs_stat.mode;         // st_mode (u32)
-        *((buf + 20) as *mut u32) = vfs_stat.nlink;        // st_nlink (u32)
-        *((buf + 24) as *mut u32) = vfs_stat.uid;          // st_uid
-        *((buf + 28) as *mut u32) = vfs_stat.gid;          // st_gid
-        *((buf + 32) as *mut u64) = 0;                     // st_rdev
-        *((buf + 40) as *mut u64) = 0;                     // __pad1
-        *((buf + 48) as *mut i64) = vfs_stat.size as i64;  // st_size
-        *((buf + 56) as *mut i32) = 4096;                  // st_blksize (i32)
-        *((buf + 64) as *mut i64) = vfs_stat.blocks as i64; // st_blocks
-    }
+    use crate::arch::StatLayout;
+    crate::arch::Arch::fill_stat(buf, vfs_stat);
 }

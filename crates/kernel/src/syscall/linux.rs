@@ -6,7 +6,6 @@
 ///
 /// Programs compiled for Linux (like busybox/musl) depend on these.
 
-use super::arch;
 
 // ── Pipes (Linux extension) ──────────────────────────────────────────
 

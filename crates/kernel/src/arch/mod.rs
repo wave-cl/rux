@@ -22,3 +22,25 @@ pub type PageTable = x86_64::paging::PageTable4Level;
 #[cfg(target_arch = "aarch64")]
 pub type PageTable = aarch64::paging::PageTable4Level;
 
+/// Fill a Linux struct stat buffer from VFS metadata.
+/// Layout differs between architectures (st_nlink width, field order).
+pub trait StatLayout {
+    unsafe fn fill_stat(buf: u64, stat: &rux_vfs::InodeStat);
+    /// Offset of st_mode within struct stat.
+    const STAT_MODE_OFF: usize;
+    /// Offset of st_blksize within struct stat.
+    const STAT_BLKSIZE_OFF: usize;
+}
+
+/// Map kernel identity pages into a user page table.
+/// Each arch has different physical ranges and device maps.
+///
+/// # Safety
+/// Modifies page table mappings.
+pub unsafe trait KernelMapOps {
+    unsafe fn map_kernel_pages(
+        pt: &mut PageTable,
+        alloc: &mut dyn rux_mm::FrameAllocator,
+    );
+}
+

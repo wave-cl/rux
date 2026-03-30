@@ -5,3 +5,7 @@ edition = "2021"
 
 [lib]
 name = "rux_elf"
+
+[dependencies]
+rux-klib = { path = "../klib" }
+rux-mm = { path = "../mm" }

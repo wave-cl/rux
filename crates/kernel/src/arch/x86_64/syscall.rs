@@ -172,7 +172,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         80 => posix::chdir(a0),
         83 => posix::mkdir(a0),
         87 => posix::unlink(a0),
-        96 => crate::syscall::arch::ticks() as i64,
+        96 => { use rux_arch::TimerOps; super::X86_64::ticks() as i64 },
         97 => 0,                                // getrlimit
         102 => 0, 104 => 0, 107 => 0, 108 => 0, // uid/gid
         109 => 0,                               // setpgid

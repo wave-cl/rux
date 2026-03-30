@@ -133,6 +133,46 @@ fn resolve_path_inner<F: FileSystem>(
     Ok(current)
 }
 
+/// Resolve a path using a CWD inode for relative paths.
+/// Returns the resolved inode ID, or a negative errno on failure.
+pub fn resolve_with_cwd<F: FileSystem>(fs: &F, cwd: InodeId, path: &[u8]) -> Result<InodeId, i64> {
+    resolve_path_at(fs, cwd, path).map_err(|_| -2i64)
+}
+
+/// Resolve a path to (parent_inode, basename).
+/// Used by open/creat/unlink/mkdir to find the parent directory.
+pub fn resolve_parent_and_name<'a, F: FileSystem>(
+    fs: &F,
+    cwd: InodeId,
+    path: &'a [u8],
+) -> Result<(InodeId, &'a [u8]), i64> {
+    let mut last_slash = None;
+    for j in 0..path.len() {
+        if path[j] == b'/' { last_slash = Some(j); }
+    }
+
+    match last_slash {
+        Some(0) => {
+            // "/foo" → parent is root, name is everything after '/'
+            let name = &path[1..];
+            Ok((fs.root_inode(), name))
+        }
+        Some(s) => {
+            // "/a/b/foo" or "a/b/foo" → resolve parent, name is after last slash
+            let parent_path = &path[..s];
+            let name = &path[s + 1..];
+            match resolve_path_at(fs, cwd, parent_path) {
+                Ok(parent_ino) => Ok((parent_ino, name)),
+                Err(_) => Err(-2),
+            }
+        }
+        None => {
+            // "foo" (no slash) → parent is CWD
+            Ok((cwd, path))
+        }
+    }
+}
+
 /// Check if an inode is a symlink by reading its stat.
 fn is_symlink<F: FileSystem>(fs: &F, ino: InodeId) -> bool {
     let mut stat = InodeStat {

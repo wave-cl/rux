@@ -131,6 +131,7 @@ pub fn aarch64_init(_dtb_addr: usize) {
     // ── Preemptive scheduling test ──────────────────────────────────
     serial::write_str("rux: preemptive scheduler test...\n");
     unsafe {
+        scheduler::init_context_fns();
         use rux_sched::SchedClassOps;
         let sched = scheduler::get();
         static mut SCHED_STACK_A: [u8; 65536] = [0; 65536];

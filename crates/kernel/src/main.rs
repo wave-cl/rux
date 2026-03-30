@@ -13,7 +13,7 @@ pub mod pgtrack;
 pub mod rootfs;
 pub mod syscall;
 
-use rux_arch::{SerialOps, ExitOps};
+use rux_arch::{SerialOps, ExitOps, BootOps};
 use arch::Arch;
 
 /// Kernel entry point. Called from boot.S.
@@ -24,11 +24,7 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
     unsafe { Arch::init(); }
     Arch::write_str("rux: boot OK\n");
 
-    #[cfg(target_arch = "x86_64")]
-    arch::x86_64::init::x86_64_init(arg);
-
-    #[cfg(target_arch = "aarch64")]
-    arch::aarch64::init::aarch64_init(arg);
+    Arch::boot_init(arg);
 
     Arch::write_str("rux: all checks passed\n");
     Arch::exit(Arch::EXIT_SUCCESS);

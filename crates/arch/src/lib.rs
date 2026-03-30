@@ -115,3 +115,27 @@ pub unsafe trait PageTableRootOps {
     fn read() -> u64;
     unsafe fn write(root: u64);
 }
+
+/// Architecture boot initialization (GDT/IDT, GIC, timer, frame allocator, etc.).
+pub trait BootOps {
+    fn boot_init(arg: usize);
+}
+
+/// Timer tick counter.
+pub trait TimerOps {
+    fn ticks() -> u64;
+}
+
+/// Vfork setjmp/longjmp control flow.
+///
+/// # Safety
+/// `vfork_longjmp_to_parent` performs non-local control flow (longjmp).
+pub unsafe trait VforkOps {
+    fn vfork_jmp_active() -> bool;
+    unsafe fn vfork_longjmp_to_parent(child_pid: i64) -> !;
+}
+
+/// Architecture metadata (machine name for uname, etc.).
+pub trait ArchInfo {
+    const MACHINE_NAME: &'static [u8];
+}

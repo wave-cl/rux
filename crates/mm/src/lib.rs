@@ -11,6 +11,7 @@ pub mod slab;
 pub mod slab_simple;
 pub mod fault;
 pub mod cow;
+pub mod pgtrack;
 
 // ── Page sizes ──────────────────────────────────────────────────────────
 
@@ -149,7 +150,36 @@ pub trait FrameAllocator {
     fn available_frames(&self, size: PageSize) -> usize;
 }
 
-// ── Re-exports ──────────────────────────────────────────────────────────
+// ── Utility: map zeroed pages ────────────────────────────────────────────
+
+/// Map zeroed pages into a page table.
+///
+/// Allocates a frame for each 4K page in `[start_va, end_va)`, zeros it,
+/// and maps it with the given flags. Used by brk() and mmap().
+///
+/// `map_fn` and `unmap_fn` abstract over the page table type.
+///
+/// # Safety
+/// Modifies page table mappings and writes to physical memory.
+pub unsafe fn map_zeroed_pages(
+    alloc: &mut dyn FrameAllocator,
+    start_va: u64,
+    end_va: u64,
+    flags: MappingFlags,
+    map_fn: &mut dyn FnMut(VirtAddr, PhysAddr, MappingFlags, &mut dyn FrameAllocator),
+    unmap_fn: &mut dyn FnMut(VirtAddr),
+) {
+    for pa in (start_va..end_va).step_by(4096) {
+        let frame = alloc.alloc(PageSize::FourK).expect("map page");
+        let ptr = frame.as_usize() as *mut u8;
+        for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+        let va = VirtAddr::new(pa as usize);
+        unmap_fn(va);
+        map_fn(va, frame, flags, alloc);
+    }
+}
+
+// ── Re-exports ───────────────────────────────��──────────────────────────
 pub use frame::BuddyAllocator;
 pub use pt::{PageLevel, PageTablePage, TranslateResult, PageTableWalker};
 pub use pt4::PageTable4Level;
