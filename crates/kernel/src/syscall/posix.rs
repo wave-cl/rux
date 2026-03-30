@@ -421,8 +421,24 @@ pub fn uname(buf: u64) -> i64 {
         for i in 0..325 { *ptr.add(i) = 0; }
         // sysname
         for (i, &b) in b"rux".iter().enumerate() { *ptr.add(i) = b; }
-        // nodename (offset 65)
-        for (i, &b) in b"rux".iter().enumerate() { *ptr.add(65 + i) = b; }
+        // nodename (offset 65) — read from /etc/hostname
+        {
+            use rux_vfs::FileSystem;
+            let mut name = [0u8; 64];
+            let mut len = 3usize;
+            name[0] = b'r'; name[1] = b'u'; name[2] = b'x'; // fallback
+            let fs = crate::kstate::fs();
+            if let Ok(ino) = rux_vfs::path::resolve_path(fs, b"/etc/hostname") {
+                if let Ok(n) = fs.read(ino, 0, &mut name) {
+                    // Strip trailing newline
+                    len = n;
+                    while len > 0 && (name[len - 1] == b'\n' || name[len - 1] == b'\r') {
+                        len -= 1;
+                    }
+                }
+            }
+            for i in 0..len { *ptr.add(65 + i) = name[i]; }
+        }
         // release (offset 130)
         for (i, &b) in b"0.1.0".iter().enumerate() { *ptr.add(130 + i) = b; }
         // version (offset 195)
