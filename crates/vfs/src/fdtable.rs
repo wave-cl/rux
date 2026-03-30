@@ -16,8 +16,8 @@ pub const FIRST_FILE_FD: usize = 3;
 
 /// Trait for pipe I/O operations, implemented by the kernel.
 pub trait PipeOps {
-    fn pipe_read(&self, pipe_id: u8, buf: *mut u8, len: usize) -> i64;
-    fn pipe_write(&self, pipe_id: u8, buf: *const u8, len: usize) -> i64;
+    fn pipe_read(&self, pipe_id: u8, buf: *mut u8, len: usize) -> isize;
+    fn pipe_write(&self, pipe_id: u8, buf: *const u8, len: usize) -> isize;
     fn pipe_close(&self, pipe_id: u8, is_write_end: bool);
     fn pipe_dup_ref(&self, pipe_id: u8, is_write_end: bool);
 }
@@ -53,7 +53,7 @@ pub fn get_fd_inode(fd: usize) -> Option<u64> {
 }
 
 /// Open a file by path (absolute only — legacy). Returns fd.
-pub fn sys_open<F: FileSystem>(path: &[u8], fs: &mut F) -> i64 {
+pub fn sys_open<F: FileSystem>(path: &[u8], fs: &mut F) -> isize {
     let ino = match crate::path::resolve_path(fs, path) {
         Ok(ino) => ino,
         Err(_) => return -2,
@@ -62,7 +62,7 @@ pub fn sys_open<F: FileSystem>(path: &[u8], fs: &mut F) -> i64 {
 }
 
 /// Open a file by inode with flags. Returns fd on success, negative errno on failure.
-pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) -> i64 {
+pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) -> isize {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if !FD_TABLE[fd].active {
@@ -82,7 +82,7 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
                     ino: ino as u64, offset, flags, active: true, is_serial: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                 };
-                return fd as i64;
+                return fd as isize;
             }
         }
         -24 // -EMFILE
@@ -90,7 +90,7 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
 }
 
 /// Duplicate a file descriptor to the lowest available fd (>= 3).
-pub fn sys_dup(oldfd: usize) -> i64 {
+pub fn sys_dup(oldfd: usize) -> isize {
     if oldfd >= MAX_FDS { return -9; }
     unsafe {
         if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
@@ -105,7 +105,7 @@ pub fn sys_dup(oldfd: usize) -> i64 {
 
 /// Duplicate a file descriptor to the lowest available fd >= minfd.
 /// Used by fcntl(F_DUPFD).
-pub fn sys_dupfd(oldfd: usize, minfd: usize) -> i64 {
+pub fn sys_dupfd(oldfd: usize, minfd: usize) -> isize {
     if oldfd >= MAX_FDS { return -9; }
     unsafe {
         if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
@@ -120,11 +120,11 @@ pub fn sys_dupfd(oldfd: usize, minfd: usize) -> i64 {
 }
 
 /// Duplicate a file descriptor. Real dup2 implementation.
-pub fn sys_dup2(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> i64 {
+pub fn sys_dup2(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> isize {
     sys_dup2_inner(oldfd, newfd, in_vfork, pipes)
 }
 
-fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> i64 {
+fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> isize {
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
     unsafe {
         if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
@@ -153,11 +153,11 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&dyn
             }
         }
     }
-    newfd as i64
+    newfd as isize
 }
 
 /// Close a file descriptor. Returns 0 on success.
-pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> i64 {
+pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> isize {
     if fd < FIRST_FILE_FD || fd >= MAX_FDS {
         return -9; // -EBADF
     }
@@ -176,7 +176,7 @@ pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&dyn PipeOps>) -> i64 
 }
 
 /// Allocate an fd for a pipe end. Returns fd number.
-pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<i64, i64> {
+pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if !FD_TABLE[fd].active {
@@ -184,7 +184,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<i64, i64> {
                     ino: 0, offset: 0, flags: 0, active: true, is_serial: false,
                     is_pipe: true, pipe_id, pipe_write: is_write,
                 };
-                return Ok(fd as i64);
+                return Ok(fd as isize);
             }
         }
         Err(-24) // -EMFILE
@@ -192,7 +192,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<i64, i64> {
 }
 
 /// Read from a file descriptor. Returns bytes read, 0 on EOF, negative on error.
-pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut F, pipes: &dyn PipeOps) -> i64 {
+pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut F, pipes: &dyn PipeOps) -> isize {
     if fd >= MAX_FDS {
         return -9;
     }
@@ -220,7 +220,7 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
         match fs.read(f.ino, f.offset as u64, user_buf) {
             Ok(n) => {
                 f.offset += n;
-                n as i64
+                n as isize
             }
             Err(_) => -5,
         }
@@ -228,7 +228,7 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
 }
 
 /// Write to a file descriptor. Returns bytes written, negative on error.
-pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &mut F, pipes: &dyn PipeOps) -> i64 {
+pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &mut F, pipes: &dyn PipeOps) -> isize {
     if fd >= MAX_FDS {
         return -9;
     }
@@ -245,7 +245,7 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
         match fs.write(f.ino, f.offset as u64, user_buf) {
             Ok(n) => {
                 f.offset += n;
-                n as i64
+                n as isize
             }
             Err(_) => -5,
         }
@@ -253,7 +253,7 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
 }
 
 /// Seek on a file descriptor. Returns new offset, negative on error.
-pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> i64 {
+pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> isize {
     if fd < FIRST_FILE_FD || fd >= MAX_FDS {
         return -9; // -EBADF
     }
@@ -262,7 +262,7 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
             return -9;
         }
         let f = &mut FD_TABLE[fd];
-        let new_off = match whence {
+        let new_off: i64 = match whence {
             0 => offset, // SEEK_SET
             1 => f.offset as i64 + offset, // SEEK_CUR
             2 => {
@@ -279,7 +279,7 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
             return -22; // -EINVAL
         }
         f.offset = new_off as usize;
-        new_off
+        new_off as isize
     }
 }
 

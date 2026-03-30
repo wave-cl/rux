@@ -13,10 +13,10 @@ pub static PIPE_OPS: KernelPipeOps = KernelPipeOps;
 pub struct KernelPipeOps;
 
 impl rux_vfs::fdtable::PipeOps for KernelPipeOps {
-    fn pipe_read(&self, pipe_id: u8, buf: *mut u8, len: usize) -> i64 {
+    fn pipe_read(&self, pipe_id: u8, buf: *mut u8, len: usize) -> isize {
         rux_ipc::pipe::read(pipe_id, buf, len)
     }
-    fn pipe_write(&self, pipe_id: u8, buf: *const u8, len: usize) -> i64 {
+    fn pipe_write(&self, pipe_id: u8, buf: *const u8, len: usize) -> isize {
         rux_ipc::pipe::write(pipe_id, buf, len)
     }
     fn pipe_close(&self, pipe_id: u8, is_write_end: bool) {
@@ -28,7 +28,7 @@ impl rux_vfs::fdtable::PipeOps for KernelPipeOps {
 }
 
 /// Create a new pipe. Returns (pipe_id, read_fd, write_fd) or error.
-pub fn create() -> Result<(u8, i64, i64), i64> {
+pub fn create() -> Result<(u8, isize, isize), isize> {
     let pipe_id = rux_ipc::pipe::alloc()?;
 
     let read_fd = rux_vfs::fdtable::alloc_pipe_fd(pipe_id, false)?;

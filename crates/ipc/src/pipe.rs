@@ -27,10 +27,10 @@ static mut PIPES: [PipeBuf; MAX_PIPES] = {
 };
 
 /// Allocate a pipe slot. Returns pipe_id or -EMFILE.
-pub fn alloc() -> Result<u8, i64> {
+pub fn alloc() -> Result<u8, isize> {
     unsafe {
         let pipe_id = PIPES.iter().position(|p| !p.active)
-            .ok_or(-24i64)? as u8;
+            .ok_or(-24isize)? as u8;
         PIPES[pipe_id as usize] = PipeBuf {
             buf: [0; PIPE_BUF_SIZE],
             read_pos: 0, write_pos: 0, count: 0,
@@ -41,7 +41,7 @@ pub fn alloc() -> Result<u8, i64> {
 }
 
 /// Read from a pipe. Returns bytes read, 0 on EOF (no writers left).
-pub fn read(pipe_id: u8, buf: *mut u8, len: usize) -> i64 {
+pub fn read(pipe_id: u8, buf: *mut u8, len: usize) -> isize {
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
         if !p.active { return -9; }
@@ -54,12 +54,12 @@ pub fn read(pipe_id: u8, buf: *mut u8, len: usize) -> i64 {
             p.read_pos = (p.read_pos + 1) % PIPE_BUF_SIZE;
         }
         p.count -= to_read;
-        to_read as i64
+        to_read as isize
     }
 }
 
 /// Write to a pipe. Returns bytes written, -EPIPE if no readers.
-pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> i64 {
+pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> isize {
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
         if !p.active { return -9; }
@@ -71,7 +71,7 @@ pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> i64 {
             p.write_pos = (p.write_pos + 1) % PIPE_BUF_SIZE;
         }
         p.count += to_write;
-        to_write as i64
+        to_write as isize
     }
 }
 

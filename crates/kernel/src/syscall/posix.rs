@@ -35,7 +35,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    crate::fdtable::sys_read_fd(fd, buf as *mut u8, len) as isize
+    crate::fdtable::sys_read_fd(fd, buf as *mut u8, len)
 }
 
 /// write(fd, buf, count) — POSIX.1
@@ -47,7 +47,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    crate::fdtable::sys_write_fd(fd, buf as *const u8, len) as isize
+    crate::fdtable::sys_write_fd(fd, buf as *const u8, len)
 }
 
 /// open(pathname, flags, mode) — POSIX.1
@@ -59,12 +59,12 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
         let o_creat = flags & 0x40 != 0;
 
         match super::resolve_with_cwd(path) {
-            Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32) as isize,
+            Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
             Err(_) if o_creat => {
                 use rux_vfs::{FileSystem, FileName};
                 let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
                     Ok(v) => v,
-                    Err(e) => return e as isize,
+                    Err(e) => return e,
                 };
                 let fs = crate::kstate::fs();
                 let fname = match FileName::new(name) {
@@ -72,11 +72,11 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                     Err(_) => return -22,
                 };
                 match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
-                    Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32) as isize,
+                    Ok(ino) => crate::fdtable::sys_open_ino(ino, flags as u32),
                     Err(_) => -13,
                 }
             }
-            Err(e) => e as isize,
+            Err(e) => e,
         }
     }
 }
@@ -88,29 +88,29 @@ pub fn openat(_dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isiz
 
 /// close(fd) — POSIX.1
 pub fn close(fd: usize) -> isize {
-    crate::fdtable::sys_close(fd) as isize
+    crate::fdtable::sys_close(fd)
 }
 
 /// dup(oldfd) — POSIX.1: duplicate fd to lowest available fd.
 pub fn dup(oldfd: usize) -> isize {
-    crate::fdtable::sys_dup(oldfd) as isize
+    crate::fdtable::sys_dup(oldfd)
 }
 
 /// dup2(oldfd, newfd) — POSIX.1
 pub fn dup2(oldfd: usize, newfd: usize) -> isize {
-    crate::fdtable::sys_dup2(oldfd, newfd) as isize
+    crate::fdtable::sys_dup2(oldfd, newfd)
 }
 
 /// lseek(fd, offset, whence) — POSIX.1
 /// offset is i64: file offsets can exceed 4GB even on 32-bit.
 pub fn lseek(fd: usize, offset: i64, whence: usize) -> isize {
-    crate::fdtable::sys_lseek(fd, offset, whence as u32) as isize
+    crate::fdtable::sys_lseek(fd, offset, whence as u32)
 }
 
 /// fcntl(fd, cmd, arg) — POSIX.1
 pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
     match cmd {
-        0 => crate::fdtable::sys_dupfd(fd, arg) as isize, // F_DUPFD
+        0 => crate::fdtable::sys_dupfd(fd, arg), // F_DUPFD
         1 => 0,  // F_GETFD
         2 => 0,  // F_SETFD
         3 => {
@@ -227,7 +227,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize) -> isize {
         let fs = crate::kstate::fs();
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
-            Err(e) => return e as isize,
+            Err(e) => return e,
         };
         let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
         if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
@@ -248,7 +248,7 @@ pub fn chdir(path_ptr: usize) -> isize {
         let fs = crate::kstate::fs();
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
-            Err(e) => return e as isize,
+            Err(e) => return e,
         };
 
         let mut stat = core::mem::zeroed::<rux_vfs::InodeStat>();
@@ -287,7 +287,7 @@ pub fn mkdir(path_ptr: usize) -> isize {
         use rux_vfs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
-            Err(e) => return e as isize,
+            Err(e) => return e,
         };
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
@@ -307,7 +307,7 @@ pub fn unlink(path_ptr: usize) -> isize {
         use rux_vfs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
-            Err(e) => return e as isize,
+            Err(e) => return e,
         };
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
@@ -327,7 +327,7 @@ pub fn creat(path_ptr: usize) -> isize {
         use rux_vfs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
-            Err(e) => return e as isize,
+            Err(e) => return e,
         };
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {

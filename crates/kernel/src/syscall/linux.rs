@@ -17,7 +17,7 @@ pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
             }
             0
         }
-        Err(e) => e as isize,
+        Err(e) => e,
     }
 }
 
