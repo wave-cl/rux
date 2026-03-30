@@ -26,8 +26,11 @@ const INO_STAT: InodeId = 3;
 const INO_VERSION: InodeId = 4;
 const INO_LOADAVG: InodeId = 5;
 const INO_SELF: InodeId = 6; // symlink "self" → "1"
+const INO_MOUNTS: InodeId = 7;
+const INO_FILESYSTEMS: InodeId = 8;
+const INO_CMDLINE: InodeId = 9;
 
-const NUM_SYS_ENTRIES: usize = 6;
+const NUM_SYS_ENTRIES: usize = 9;
 
 const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"uptime", INO_UPTIME),
@@ -36,6 +39,9 @@ const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"version", INO_VERSION),
     (b"loadavg", INO_LOADAVG),
     (b"self", INO_SELF),
+    (b"mounts", INO_MOUNTS),
+    (b"filesystems", INO_FILESYSTEMS),
+    (b"cmdline", INO_CMDLINE),
 ];
 
 const PID_DIR_BASE: InodeId = 100;
@@ -111,6 +117,24 @@ impl ProcFs {
                 let len = s.len().min(buf.len());
                 buf[..len].copy_from_slice(&s[..len]);
                 len
+            }
+            INO_MOUNTS => {
+                // Linux /proc/mounts format: device mountpoint fstype options dump pass
+                let s = b"rootfs / ramfs rw 0 0\nproc /proc proc ro 0 0\ndev /dev devfs rw 0 0\n";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                len
+            }
+            INO_FILESYSTEMS => {
+                let s = b"nodev\tramfs\nnodev\tprocfs\nnodev\tdevfs\n";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                len
+            }
+            INO_CMDLINE => {
+                // Kernel command line (empty for now)
+                buf[0] = b'\n';
+                1
             }
             _ if is_pid_file(ino) => {
                 let pid = pid_from_file(ino);
@@ -229,7 +253,7 @@ impl FileSystem for ProcFs {
         }
 
         // System files or PID files
-        if ino <= INO_LOADAVG || is_pid_file(ino) {
+        if (ino >= INO_UPTIME && ino <= INO_CMDLINE && ino != INO_SELF) || is_pid_file(ino) {
             if is_pid_file(ino) && !self.pid_exists(pid_from_file(ino)) {
                 return Err(VfsError::NotFound);
             }

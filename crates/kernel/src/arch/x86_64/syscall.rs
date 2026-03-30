@@ -186,6 +186,7 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         96 => Syscall::Gettimeofday,
         97 => Syscall::Getrlimit,
         99 => Syscall::Sysinfo,
+        137 | 138 => Syscall::Statfs, // statfs / fstatfs
         102 | 107 => Syscall::Getuid,
         104 | 108 => Syscall::Getgid,
         109 => Syscall::Setpgid,

@@ -113,6 +113,34 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> 
     super::posix::waitpid(pid, wstatus_ptr, options)
 }
 
+/// statfs(path, buf) — Linux filesystem stats.
+/// Used by `df` to show disk space.
+pub fn statfs(_path_ptr: usize, buf_ptr: usize) -> isize {
+    if buf_ptr == 0 { return -14; }
+    unsafe {
+        use rux_mm::FrameAllocator;
+        let total_frames = 16384usize;
+        let free_frames = crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK);
+
+        let w = core::mem::size_of::<usize>();
+        let p = buf_ptr;
+        // Zero the struct (120 bytes on 64-bit)
+        for i in 0..120 { *(buf_ptr as *mut u8).add(i) = 0; }
+
+        *(p as *mut usize) = 0x858458F6; // f_type: RAMFS_MAGIC
+        *((p + w) as *mut usize) = 4096;  // f_bsize: block size
+        *((p + 2*w) as *mut usize) = total_frames; // f_blocks
+        *((p + 3*w) as *mut usize) = free_frames;  // f_bfree
+        *((p + 4*w) as *mut usize) = free_frames;  // f_bavail
+        *((p + 5*w) as *mut usize) = 65536;        // f_files (max inodes)
+        *((p + 6*w) as *mut usize) = 65536;        // f_ffree
+        // f_fsid at 7*w (8 bytes) = 0
+        *((p + 9*w) as *mut usize) = 255;          // f_namelen
+        *((p + 10*w) as *mut usize) = 4096;        // f_frsize
+    }
+    0
+}
+
 /// set_tid_address(tidptr) — Linux-specific TLS.
 pub fn set_tid_address(_tidptr: usize) -> isize {
     1 // TID = 1

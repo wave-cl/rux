@@ -110,6 +110,7 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         124 => Syscall::SchedYield,
         // Linux extensions
         61 => Syscall::Getdents64,
+        43 | 44 => Syscall::Statfs, // statfs / fstatfs
         179 => Syscall::Sysinfo,
         96 => Syscall::SetTidAddress,
         178 => Syscall::Gettid,

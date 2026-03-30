@@ -120,7 +120,7 @@ pub enum Syscall {
     SetRobustList, Futex, Tgkill, Tkill,
     SchedGetaffinity, Getrlimit,
     Poll, Gettimeofday,
-    Prctl, Alarm, Access, Link, Sysinfo,
+    Prctl, Alarm, Access, Link, Sysinfo, Statfs,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -220,6 +220,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         }
         Syscall::Access => 0,
         Syscall::Sysinfo => linux::sysinfo(a0),
+        Syscall::Statfs => linux::statfs(a0, a1),
         Syscall::Prlimit64 => posix::prlimit64(a0, a1, a2, a3),
         Syscall::Rseq => -38,
 
