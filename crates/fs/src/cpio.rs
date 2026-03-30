@@ -1,7 +1,8 @@
 /// CPIO newc (SVR4) archive unpacker for initramfs.
 ///
 /// Parses a cpio archive and extracts files, directories, and symlinks
-/// into a RamFs. This is the same format Linux uses for initramfs.
+/// into any filesystem that implements the FileSystem trait.
+/// This is the same format Linux uses for initramfs.
 ///
 /// Format per entry:
 ///   - 110-byte ASCII header ("070701" magic + 13 hex fields)
@@ -37,8 +38,8 @@ fn align4(n: usize) -> usize {
 
 /// Resolve a path, creating parent directories as needed.
 /// Returns the inode of the final component's parent and the basename.
-fn resolve_or_create_parents<'a>(
-    fs: &mut crate::ramfs::RamFs,
+fn resolve_or_create_parents<'a, F: FileSystem>(
+    fs: &mut F,
     path: &'a [u8],
 ) -> (u64, &'a [u8]) {
     let root = fs.root_inode();
@@ -102,12 +103,12 @@ fn resolve_or_create_parents<'a>(
     (current, basename)
 }
 
-/// Unpack a cpio newc archive into a RamFs.
+/// Unpack a cpio newc archive into a filesystem.
 ///
 /// `data` is the raw cpio archive bytes (uncompressed).
 /// `log` is an optional logging callback.
-pub fn unpack_cpio(
-    fs: &mut crate::ramfs::RamFs,
+pub fn unpack_cpio<F: FileSystem>(
+    fs: &mut F,
     data: &[u8],
     log: Option<fn(&str)>,
 ) {
