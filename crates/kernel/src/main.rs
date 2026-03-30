@@ -1,10 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[cfg(target_arch = "x86_64")]
-mod x86_64;
-#[cfg(target_arch = "aarch64")]
-mod aarch64;
+mod arch;
 
 mod scheduler;
 mod elf;
@@ -14,12 +11,9 @@ pub mod pipe;
 pub mod execargs;
 pub mod pgtrack;
 pub mod rootfs;
-pub mod syscall_impl;
+pub mod syscall;
 
-#[cfg(target_arch = "x86_64")]
-use x86_64::{serial, exit};
-#[cfg(target_arch = "aarch64")]
-use aarch64::{serial, exit};
+use arch::{serial, exit};
 
 /// Kernel entry point. Called from boot.S.
 /// On x86_64: `arg` is the multiboot info physical address.
@@ -30,10 +24,10 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
     serial::write_str("rux: boot OK\n");
 
     #[cfg(target_arch = "x86_64")]
-    x86_64::init::x86_64_init(arg);
+    arch::x86_64::init::x86_64_init(arg);
 
     #[cfg(target_arch = "aarch64")]
-    aarch64::init::aarch64_init(arg);
+    arch::aarch64::init::aarch64_init(arg);
 
     serial::write_str("rux: all checks passed\n");
     exit::exit_qemu(exit::EXIT_SUCCESS);

@@ -187,7 +187,7 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    let box_data: &[u8] = include_bytes!("../../../../user/busybox_aarch64");
+    let box_data: &[u8] = include_bytes!("../../../../../user/busybox_aarch64");
     crate::rootfs::populate(fs, box_data);
 
     crate::kstate::init(fs_ptr, alloc_ptr);

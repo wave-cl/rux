@@ -13,43 +13,43 @@ pub mod arch {
     #[inline(always)]
     pub fn serial_write_byte(b: u8) {
         #[cfg(target_arch = "x86_64")]
-        crate::x86_64::serial::write_byte(b);
+        crate::arch::x86_64::serial::write_byte(b);
         #[cfg(target_arch = "aarch64")]
-        crate::aarch64::serial::write_byte(b);
+        crate::arch::aarch64::serial::write_byte(b);
     }
 
     /// Read a byte from the serial console (blocking).
     #[inline(always)]
     pub fn serial_read_byte() -> u8 {
         #[cfg(target_arch = "x86_64")]
-        { crate::x86_64::serial::read_byte() }
+        { crate::arch::x86_64::serial::read_byte() }
         #[cfg(target_arch = "aarch64")]
-        { crate::aarch64::serial::read_byte() }
+        { crate::arch::aarch64::serial::read_byte() }
     }
 
     /// Write a string to serial.
     pub fn serial_write_str(s: &str) {
         #[cfg(target_arch = "x86_64")]
-        crate::x86_64::serial::write_str(s);
+        crate::arch::x86_64::serial::write_str(s);
         #[cfg(target_arch = "aarch64")]
-        crate::aarch64::serial::write_str(s);
+        crate::arch::aarch64::serial::write_str(s);
     }
 
     /// Write bytes to serial.
     pub fn serial_write_bytes(b: &[u8]) {
         #[cfg(target_arch = "x86_64")]
-        crate::x86_64::serial::write_bytes(b);
+        crate::arch::x86_64::serial::write_bytes(b);
         #[cfg(target_arch = "aarch64")]
-        crate::aarch64::serial::write_bytes(b);
+        crate::arch::aarch64::serial::write_bytes(b);
     }
 
     /// Get timer ticks.
     #[inline(always)]
     pub fn ticks() -> u64 {
         #[cfg(target_arch = "x86_64")]
-        { crate::x86_64::pit::ticks() }
+        { crate::arch::x86_64::pit::ticks() }
         #[cfg(target_arch = "aarch64")]
-        { crate::aarch64::timer::ticks() }
+        { crate::arch::aarch64::timer::ticks() }
     }
 
     /// Read the current page table root address (CR3 / TTBR0_EL1).
@@ -106,10 +106,10 @@ pub unsafe fn map_user_pages(
     let cr3 = arch::page_table_root();
 
     #[cfg(target_arch = "x86_64")]
-    let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+    let mut upt = crate::arch::x86_64::paging::PageTable4Level::from_cr3(
         rux_klib::PhysAddr::new(cr3 as usize));
     #[cfg(target_arch = "aarch64")]
-    let mut upt = crate::aarch64::paging::PageTable4Level::from_cr3(
+    let mut upt = crate::arch::aarch64::paging::PageTable4Level::from_cr3(
         rux_klib::PhysAddr::new(cr3 as usize));
 
     for pa in (start_va..end_va).step_by(4096) {

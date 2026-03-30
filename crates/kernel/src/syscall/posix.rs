@@ -387,17 +387,17 @@ pub fn exit(status: i32) -> ! {
 
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        if crate::x86_64::syscall::vfork_jmp_active() {
-            crate::x86_64::syscall::vfork_longjmp_to_parent(42);
+        if crate::arch::x86_64::syscall::vfork_jmp_active() {
+            crate::arch::x86_64::syscall::vfork_longjmp_to_parent(42);
         }
-        crate::x86_64::exit::exit_qemu(crate::x86_64::exit::EXIT_SUCCESS);
+        crate::arch::x86_64::exit::exit_qemu(crate::arch::x86_64::exit::EXIT_SUCCESS);
     }
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        if crate::aarch64::syscall::vfork_jmp_active() {
-            crate::aarch64::syscall::vfork_longjmp_to_parent(42);
+        if crate::arch::aarch64::syscall::vfork_jmp_active() {
+            crate::arch::aarch64::syscall::vfork_longjmp_to_parent(42);
         }
-        crate::aarch64::exit::exit_qemu(crate::aarch64::exit::EXIT_SUCCESS);
+        crate::arch::aarch64::exit::exit_qemu(crate::arch::aarch64::exit::EXIT_SUCCESS);
     }
 }
 

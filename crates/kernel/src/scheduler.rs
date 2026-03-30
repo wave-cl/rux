@@ -78,11 +78,11 @@ impl Scheduler {
         // Initialize the kernel stack so context_switch "returns" to entry
         #[cfg(target_arch = "x86_64")]
         {
-            task.saved_rsp = crate::x86_64::context::init_task_stack(stack_top, entry as u64, 0);
+            task.saved_rsp = crate::arch::x86_64::context::init_task_stack(stack_top, entry as u64, 0);
         }
         #[cfg(target_arch = "aarch64")]
         {
-            task.saved_rsp = crate::aarch64::context::init_task_stack(stack_top, entry as u64, 0);
+            task.saved_rsp = crate::arch::aarch64::context::init_task_stack(stack_top, entry as u64, 0);
         }
 
         // Enqueue into CFS
@@ -146,9 +146,9 @@ impl Scheduler {
             let new_rsp = self.tasks[new_idx].saved_rsp;
 
             #[cfg(target_arch = "x86_64")]
-            crate::x86_64::context::context_switch(old_rsp_ptr, new_rsp);
+            crate::arch::x86_64::context::context_switch(old_rsp_ptr, new_rsp);
             #[cfg(target_arch = "aarch64")]
-            crate::aarch64::context::context_switch(old_rsp_ptr, new_rsp);
+            crate::arch::aarch64::context::context_switch(old_rsp_ptr, new_rsp);
         }
     }
 }

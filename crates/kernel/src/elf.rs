@@ -44,7 +44,7 @@ pub unsafe fn load_elf_from_inode(
 
     #[cfg(target_arch = "x86_64")]
     let mut upt = {
-        let mut upt = crate::x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
+        let mut upt = crate::arch::x86_64::paging::PageTable4Level::new(alloc).expect("user pt");
         let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
         upt.identity_map_range(PhysAddr::new(0), 128 * 1024 * 1024, kflags, alloc)
             .expect("kernel map");
@@ -53,7 +53,7 @@ pub unsafe fn load_elf_from_inode(
 
     #[cfg(target_arch = "aarch64")]
     let mut upt = {
-        let mut upt = crate::aarch64::paging::PageTable4Level::new(alloc).expect("user pt");
+        let mut upt = crate::arch::aarch64::paging::PageTable4Level::new(alloc).expect("user pt");
         let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
         upt.identity_map_range(PhysAddr::new(0x40000000), 128 * 1024 * 1024, kflags, alloc)
             .expect("kernel map");
@@ -137,8 +137,8 @@ pub unsafe fn load_elf_from_inode(
             let end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
             if end > max_end { max_end = end; }
         }
-        crate::syscall_impl::PROGRAM_BRK = max_end;
-        crate::syscall_impl::MMAP_BASE = 0x10000000;
+        crate::syscall::PROGRAM_BRK = max_end;
+        crate::syscall::MMAP_BASE = 0x10000000;
         crate::fdtable::reset();
     }
 
@@ -148,7 +148,7 @@ pub unsafe fn load_elf_from_inode(
     // ── Step 4: Activate page table, write stack, enter user mode ────
 
     #[cfg(target_arch = "x86_64")]
-    crate::x86_64::paging::activate(&upt);
+    crate::arch::x86_64::paging::activate(&upt);
 
     #[cfg(target_arch = "aarch64")]
     core::arch::asm!(
@@ -162,24 +162,24 @@ pub unsafe fn load_elf_from_inode(
     );
 
     let user_sp = crate::execargs::write_to_stack(stack_top);
-    crate::syscall_impl::arch::serial_write_str("rux: entry=0x");
+    crate::syscall::arch::serial_write_str("rux: entry=0x");
     crate::write_hex_serial(elf_info.entry as usize);
-    crate::syscall_impl::arch::serial_write_str(" sp=0x");
+    crate::syscall::arch::serial_write_str(" sp=0x");
     crate::write_hex_serial(user_sp as usize);
     let sp_ptr = user_sp as *const u64;
-    crate::syscall_impl::arch::serial_write_str(" argc=");
+    crate::syscall::arch::serial_write_str(" argc=");
     crate::write_hex_serial(*sp_ptr as usize);
-    crate::syscall_impl::arch::serial_write_str(" argv0=0x");
+    crate::syscall::arch::serial_write_str(" argv0=0x");
     crate::write_hex_serial(*sp_ptr.add(1) as usize);
-    crate::syscall_impl::arch::serial_write_str("\n");
+    crate::syscall::arch::serial_write_str("\n");
 
     #[cfg(target_arch = "x86_64")]
-    crate::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
+    crate::arch::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
 
     #[cfg(target_arch = "aarch64")]
-    crate::aarch64::syscall::enter_user_mode(elf_info.entry, user_sp);
+    crate::arch::aarch64::syscall::enter_user_mode(elf_info.entry, user_sp);
 }
 
 // Buffer-based ELF loaders moved to:
-//   x86_64/loader.rs  — crate::x86_64::loader::load_and_exec_elf
-//   aarch64/loader.rs — crate::aarch64::loader::load_and_exec_elf
+//   x86_64/loader.rs  — crate::arch::x86_64::loader::load_and_exec_elf
+//   aarch64/loader.rs — crate::arch::aarch64::loader::load_and_exec_elf

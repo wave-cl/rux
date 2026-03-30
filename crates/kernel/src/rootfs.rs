@@ -241,10 +241,10 @@ pub fn populate(
         let n = match fs.write(box_ino, offset, chunk) {
             Ok(n) => n,
             Err(_) => {
-                crate::syscall_impl::arch::serial_write_str("rootfs: write failed at page ");
+                crate::syscall::arch::serial_write_str("rootfs: write failed at page ");
                 let mut buf = [0u8; 10];
-                crate::syscall_impl::arch::serial_write_str(crate::write_u32(&mut buf, pages_written));
-                crate::syscall_impl::arch::serial_write_str("\n");
+                crate::syscall::arch::serial_write_str(crate::write_u32(&mut buf, pages_written));
+                crate::syscall::arch::serial_write_str("\n");
                 break;
             }
         };

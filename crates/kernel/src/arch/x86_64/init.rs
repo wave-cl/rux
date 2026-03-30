@@ -296,7 +296,7 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    let box_data: &[u8] = include_bytes!("../../../../user/busybox_x86_64");
+    let box_data: &[u8] = include_bytes!("../../../../../user/busybox_x86_64");
     crate::rootfs::populate(fs, box_data);
 
     crate::kstate::init(fs_ptr, alloc_ptr);

@@ -331,7 +331,7 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 super::serial::write_str("  fs:  "); crate::write_hex_serial(fs_base as usize); super::serial::write_byte(b'\n');
 
                 // Translate a few interesting VAs through the current page table
-                let upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+                let upt = crate::arch::x86_64::paging::PageTable4Level::from_cr3(
                     rux_klib::PhysAddr::new(cr3 as usize));
                 for &va in &[cr2 as usize, 0x10001000usize] {
                     match upt.translate(rux_klib::VirtAddr::new(va)) {
@@ -372,10 +372,10 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             super::syscall::handle_syscall(vector, error_code, frame);
         }
         _ => {
-            crate::x86_64::serial::write_str("INT: vector=");
+            crate::arch::x86_64::serial::write_str("INT: vector=");
             let mut buf = [0u8; 10];
-            crate::x86_64::serial::write_str(crate::write_u32(&mut buf, vector as u32));
-            crate::x86_64::serial::write_byte(b'\n');
+            crate::arch::x86_64::serial::write_str(crate::write_u32(&mut buf, vector as u32));
+            crate::arch::x86_64::serial::write_byte(b'\n');
         }
     }
 }

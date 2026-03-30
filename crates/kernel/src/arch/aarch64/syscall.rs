@@ -15,7 +15,7 @@ const FRAME_REGS: usize = 34;
 /// Handle SVC from user mode. Called from exception_dispatch.
 pub fn handle_syscall(frame: *mut u8) {
     unsafe {
-        use crate::syscall_impl::{posix, linux};
+        use crate::syscall::{posix, linux};
 
         let regs = frame as *mut u64;
 
@@ -144,17 +144,17 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
         core::arch::asm!("mrs {}, tpidr_el0", out(reg) SAVED_TPIDR, options(nostack));
 
         // Save process state that exec resets
-        SAVED_MMAP_BASE = crate::syscall_impl::MMAP_BASE;
-        SAVED_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
+        SAVED_MMAP_BASE = crate::syscall::MMAP_BASE;
+        SAVED_PROGRAM_BRK = crate::syscall::PROGRAM_BRK;
         static mut SAVED_CWD_INODE: u64 = 0;
-        SAVED_CWD_INODE = crate::syscall_impl::CWD_INODE;
+        SAVED_CWD_INODE = crate::syscall::CWD_INODE;
         for i in 0..64 { SAVED_FDS[i] = crate::fdtable::FD_TABLE[i]; }
 
-        crate::syscall_impl::CHILD_AVAILABLE = true;
+        crate::syscall::CHILD_AVAILABLE = true;
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {
-            crate::syscall_impl::IN_VFORK_CHILD = true;
+            crate::syscall::IN_VFORK_CHILD = true;
             // Copy 4 pages of the parent's stack for the child.
             use rux_mm::FrameAllocator;
             let alloc = crate::kstate::alloc();
@@ -165,7 +165,7 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
 
             let mut ttbr0: u64;
             core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
-            let mut upt = crate::aarch64::paging::PageTable4Level::from_cr3(
+            let mut upt = crate::arch::aarch64::paging::PageTable4Level::from_cr3(
                 rux_klib::PhysAddr::new(ttbr0 as usize));
             let flags = rux_mm::MappingFlags::READ
                 .or(rux_mm::MappingFlags::WRITE)
@@ -219,10 +219,10 @@ fn syscall_vfork(regs: *mut u64) -> i64 {
             core::arch::asm!("msr tpidr_el0, {}", in(reg) SAVED_TPIDR, options(nostack));
 
             // Restore process state that exec reset
-            crate::syscall_impl::IN_VFORK_CHILD = false;
-            crate::syscall_impl::MMAP_BASE = SAVED_MMAP_BASE;
-            crate::syscall_impl::PROGRAM_BRK = SAVED_PROGRAM_BRK;
-            crate::syscall_impl::CWD_INODE = SAVED_CWD_INODE;
+            crate::syscall::IN_VFORK_CHILD = false;
+            crate::syscall::MMAP_BASE = SAVED_MMAP_BASE;
+            crate::syscall::PROGRAM_BRK = SAVED_PROGRAM_BRK;
+            crate::syscall::CWD_INODE = SAVED_CWD_INODE;
             for i in 0..64 { crate::fdtable::FD_TABLE[i] = SAVED_FDS[i]; }
 
             // Restore frame and eret directly (kernel stack is corrupted).

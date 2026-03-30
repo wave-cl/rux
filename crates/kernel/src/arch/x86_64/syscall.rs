@@ -129,7 +129,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     let mut nb = [0u8; 10]; let _ = nb;
 
-    use crate::syscall_impl::{posix, linux};
+    use crate::syscall::{posix, linux};
 
     let result = match nr {
         // ── POSIX.1 syscalls ────────────────────────────────────────
@@ -172,7 +172,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         80 => posix::chdir(a0),
         83 => posix::mkdir(a0),
         87 => posix::unlink(a0),
-        96 => crate::syscall_impl::arch::ticks() as i64,
+        96 => crate::syscall::arch::ticks() as i64,
         97 => 0,                                // getrlimit
         102 => 0, 104 => 0, 107 => 0, 108 => 0, // uid/gid
         109 => 0,                               // setpgid
@@ -217,7 +217,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
 pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
     unsafe {
-        use crate::syscall_impl::{posix, linux};
+        use crate::syscall::{posix, linux};
 
         let regs = frame as *mut u64;
         let syscall_nr = *regs.add(14); // RAX
@@ -503,18 +503,18 @@ fn syscall_vfork_linux() -> i64 {
         }
 
         // Save process state that exec resets
-        VFORK_PARENT_MMAP_BASE = crate::syscall_impl::MMAP_BASE;
-        VFORK_PARENT_PROGRAM_BRK = crate::syscall_impl::PROGRAM_BRK;
-        VFORK_PARENT_CWD_INODE = crate::syscall_impl::CWD_INODE;
+        VFORK_PARENT_MMAP_BASE = crate::syscall::MMAP_BASE;
+        VFORK_PARENT_PROGRAM_BRK = crate::syscall::PROGRAM_BRK;
+        VFORK_PARENT_CWD_INODE = crate::syscall::CWD_INODE;
         // Save fd 0-2 (child's dup2 for redirection modifies shared FD_TABLE)
         // Save all fds (child's exec/close/dup2 modifies shared FD_TABLE)
         for i in 0..64 { VFORK_PARENT_FDS[i] = crate::fdtable::FD_TABLE[i]; }
 
-        crate::syscall_impl::CHILD_AVAILABLE = true;
+        crate::syscall::CHILD_AVAILABLE = true;
 
         let val = vfork_setjmp(&raw mut VFORK_JMP);
         if val == 0 {
-            crate::syscall_impl::IN_VFORK_CHILD = true;
+            crate::syscall::IN_VFORK_CHILD = true;
             // Child path: give it a COPY of the parent's stack so it doesn't
             // corrupt the parent's stack between fork-return and execve.
             use rux_mm::FrameAllocator;
@@ -530,7 +530,7 @@ fn syscall_vfork_linux() -> i64 {
 
             let mut cr3: u64;
             core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
-            let mut upt = crate::x86_64::paging::PageTable4Level::from_cr3(
+            let mut upt = crate::arch::x86_64::paging::PageTable4Level::from_cr3(
                 rux_klib::PhysAddr::new(cr3 as usize));
             let flags = rux_mm::MappingFlags::READ
                 .or(rux_mm::MappingFlags::WRITE)
@@ -560,12 +560,12 @@ fn syscall_vfork_linux() -> i64 {
             }
             serial::write_str("rux: vfork parent resumed\n");
             VFORK_JMP.rsp = 0;
-            crate::syscall_impl::IN_VFORK_CHILD = false;
+            crate::syscall::IN_VFORK_CHILD = false;
 
             // Restore process state that exec reset
-            crate::syscall_impl::MMAP_BASE = VFORK_PARENT_MMAP_BASE;
-            crate::syscall_impl::PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
-            crate::syscall_impl::CWD_INODE = VFORK_PARENT_CWD_INODE;
+            crate::syscall::MMAP_BASE = VFORK_PARENT_MMAP_BASE;
+            crate::syscall::PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
+            crate::syscall::CWD_INODE = VFORK_PARENT_CWD_INODE;
             // Restore fd 0-2 (child's dup2 may have redirected them)
             // Restore all fds (child's exec reset closed fds >= 3,
             // child's dup2 may have changed fd 0-2)
