@@ -4,7 +4,7 @@ use super::serial;
 use super::exit;
 use crate::{scheduler, elf, pgtrack, write_hex_serial, write_u32, COUNTER_A, COUNTER_B};
 
-pub fn aarch64_init(_dtb_addr: usize) {
+pub fn aarch64_init(dtb_addr: usize) {
     serial::write_str("rux: aarch64 running in EL1\n");
 
     unsafe { super::exception::init(); }
@@ -162,14 +162,13 @@ pub fn aarch64_init(_dtb_addr: usize) {
         exit::exit_qemu(exit::EXIT_FAILURE);
     }
 
-    // ── Shell via ramfs + vfork/exec/wait ─────────────────────────
-    unsafe { aarch64_init_ramfs_and_exec_shell(); }
+    // ── RamFs + initramfs + exec /sbin/init ──────────────────────
+    unsafe { init_ramfs_and_exec(dtb_addr); }
 }
 
 #[inline(never)]
-unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
-    use rux_mm::FrameAllocator;
-    use rux_vfs::{FileSystem, FileName};
+unsafe fn init_ramfs_and_exec(dtb_addr: usize) -> ! {
+    use rux_vfs::FileSystem;
 
     serial::write_str("rux: init ramfs...\n");
     let alloc_ptr = 0x43000000 as *mut rux_mm::frame::BuddyAllocator;
@@ -189,17 +188,58 @@ unsafe fn aarch64_init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    let box_data: &[u8] = include_bytes!("../../../../../user/busybox_aarch64");
-    crate::rootfs::populate(fs, box_data);
+    // Unpack initramfs from DTB /chosen node (passed via -initrd)
+    // Find initramfs: try DTB first, then scan RAM for cpio magic.
+    let initrd = if dtb_addr != 0 {
+        super::devicetree::get_initrd(dtb_addr)
+    } else {
+        None
+    }.or_else(|| find_cpio_in_ram(0x44100000, 0x47F00000));
+    if let Some((initrd_start, initrd_size)) = initrd {
+        serial::write_str("rux: initrd at ");
+        write_hex_serial(initrd_start);
+        serial::write_str(" (");
+        let mut buf = [0u8; 10];
+        serial::write_str(write_u32(&mut buf, initrd_size as u32));
+        serial::write_str(" bytes)\n");
+        let data = core::slice::from_raw_parts(initrd_start as *const u8, initrd_size);
+        rux_vfs::cpio::unpack_cpio(fs, data, Some(serial::write_str));
+    } else {
+        serial::write_str("rux: no initrd found!\n");
+    }
 
     crate::kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
     serial::write_str("rux: exec /sbin/init\n");
     crate::execargs::set(b"/bin/sh", b"");
-    let init_ino = rux_vfs::path::resolve_path(fs, b"/bin/busybox").expect("busybox not found");
+    let init_ino = rux_vfs::path::resolve_path(fs, b"/sbin/init").expect("/sbin/init not found");
     let alloc = &mut *alloc_ptr;
     elf::load_elf_from_inode(init_ino as u64, alloc);
+}
+
+/// Scan RAM for a cpio newc archive (magic "070701").
+/// Returns (start_addr, size) if found. Uses all remaining mapped RAM
+/// as the size since scanning for TRAILER is unreliable (binary data
+/// may contain that string).
+unsafe fn find_cpio_in_ram(start: usize, end: usize) -> Option<(usize, usize)> {
+    let magic = *b"070701";
+    let mut addr = start;
+    while addr + 6 < end {
+        let p = addr as *const [u8; 6];
+        if *p == magic {
+            let size = end - addr;
+            serial::write_str("rux: initrd found at ");
+            write_hex_serial(addr);
+            serial::write_str(" (");
+            let mut buf = [0u8; 10];
+            serial::write_str(write_u32(&mut buf, size as u32));
+            serial::write_str(" bytes)\n");
+            return Some((addr, size));
+        }
+        addr += 4096;
+    }
+    None
 }
 
 static mut MAIN_RSP_AA64: usize = 0;

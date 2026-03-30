@@ -2,8 +2,8 @@
 
 pub mod ramfs;
 pub mod path;
-pub mod rootfs;
 pub mod fdtable;
+pub mod cpio;
 
 // ── POSIX constants ─────────────────────────────────────────────────────
 

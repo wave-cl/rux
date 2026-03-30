@@ -269,14 +269,13 @@ pub fn x86_64_init(multiboot_info: usize) {
         }
     }
 
-    // ── RamFs + shell exec ─────────────────────────────────────────────
-    unsafe { init_ramfs_and_exec_shell(); }
+    // ── RamFs + initramfs + exec /sbin/init ──────────────────────────
+    unsafe { init_ramfs_and_exec(multiboot_info); }
 }
 
 #[inline(never)]
-unsafe fn init_ramfs_and_exec_shell() -> ! {
-    use rux_mm::FrameAllocator;
-    use rux_vfs::{FileSystem, FileName};
+unsafe fn init_ramfs_and_exec(multiboot_info: usize) -> ! {
+    use rux_vfs::FileSystem;
 
     serial::write_str("rux: init ramfs...\n");
     let alloc_ptr = 0x300000 as *mut rux_mm::frame::BuddyAllocator;
@@ -287,9 +286,6 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     for i in 0..fs_qwords {
         core::ptr::write_volatile((fs_ptr as *mut u64).add(i), 0u64);
     }
-    for i in 0..fs_qwords {
-        core::ptr::write_volatile((fs_ptr as *mut u64).add(i), 0u64);
-    }
     serial::write_str("rux: zeroing done\n");
 
     let alloc_dyn: *mut dyn rux_mm::FrameAllocator =
@@ -297,15 +293,26 @@ unsafe fn init_ramfs_and_exec_shell() -> ! {
     rux_vfs::ramfs::RamFs::init_at(fs_ptr, alloc_dyn);
     let fs = &mut *fs_ptr;
 
-    let box_data: &[u8] = include_bytes!("../../../../../user/busybox_x86_64");
-    crate::rootfs::populate(fs, box_data);
+    // Unpack initramfs from multiboot module (passed via -initrd)
+    if let Some((initrd_start, initrd_size)) = super::multiboot::get_initrd(multiboot_info) {
+        serial::write_str("rux: initrd at ");
+        write_hex_serial(initrd_start);
+        serial::write_str(" (");
+        let mut buf = [0u8; 10];
+        serial::write_str(write_u32(&mut buf, initrd_size as u32));
+        serial::write_str(" bytes)\n");
+        let data = core::slice::from_raw_parts(initrd_start as *const u8, initrd_size);
+        rux_vfs::cpio::unpack_cpio(fs, data, Some(serial::write_str));
+    } else {
+        serial::write_str("rux: no initrd found!\n");
+    }
 
     crate::kstate::init(fs_ptr, alloc_ptr);
     serial::write_str("rux: kernel state initialized\n");
 
     serial::write_str("rux: exec /sbin/init\n");
     crate::execargs::set(b"/bin/sh", b"");
-    let init_ino = rux_vfs::path::resolve_path(fs, b"/bin/busybox").expect("busybox not found");
+    let init_ino = rux_vfs::path::resolve_path(fs, b"/sbin/init").expect("/sbin/init not found");
     let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
     elf::load_elf_from_inode(init_ino as u64, alloc);
 }

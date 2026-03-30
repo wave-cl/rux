@@ -11,8 +11,8 @@ struct MultibootInfo {
     mem_upper: u32,     // KB of upper memory (above 1MB)
     _boot_device: u32,
     _cmdline: u32,
-    _mods_count: u32,
-    _mods_addr: u32,
+    mods_count: u32,
+    mods_addr: u32,
     _syms: [u32; 4],
     mmap_length: u32,   // total size of memory map buffer
     mmap_addr: u32,     // physical address of memory map
@@ -120,4 +120,36 @@ pub unsafe fn parse_memory_map(info_addr: usize) -> MemoryMap {
     }
 
     map
+}
+
+/// Multiboot module entry.
+#[repr(C)]
+struct MultibootModule {
+    mod_start: u32,
+    mod_end: u32,
+    _string: u32,
+    _reserved: u32,
+}
+
+/// Get the first multiboot module (initramfs).
+/// Returns (start_addr, size) or None if no modules.
+///
+/// # Safety
+/// `info_addr` must be a valid MultibootInfo pointer.
+pub unsafe fn get_initrd(info_addr: usize) -> Option<(usize, usize)> {
+    let info = &*(info_addr as *const MultibootInfo);
+
+    // Check if modules are present (flag bit 3)
+    if info.flags & (1 << 3) == 0 || info.mods_count == 0 {
+        return None;
+    }
+
+    let module = &*(info.mods_addr as *const MultibootModule);
+    let start = module.mod_start as usize;
+    let end = module.mod_end as usize;
+    if end > start {
+        Some((start, end - start))
+    } else {
+        None
+    }
 }

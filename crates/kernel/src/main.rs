@@ -9,7 +9,6 @@ mod kstate;
 pub mod pipe;
 pub mod execargs;
 pub mod pgtrack;
-pub mod rootfs;
 pub mod syscall;
 
 use rux_arch::{SerialOps, ExitOps, BootOps};

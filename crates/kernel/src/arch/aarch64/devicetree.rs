@@ -151,6 +151,89 @@ pub unsafe fn parse_dtb(dtb_addr: usize) -> MemoryMap {
     map
 }
 
+/// Parse DTB for initrd location from `/chosen` node.
+/// QEMU sets `linux,initrd-start` and `linux,initrd-end` when `-initrd` is used.
+///
+/// # Safety
+/// `dtb_addr` must point to a valid FDT blob.
+pub unsafe fn get_initrd(dtb_addr: usize) -> Option<(usize, usize)> {
+    if dtb_addr == 0 { return None; }
+    let base = dtb_addr as *const u8;
+
+    let magic = be32(base);
+    if magic != FDT_MAGIC { return None; }
+
+    let struct_off = be32(base.add(8)) as usize;
+    let strings_off = be32(base.add(12)) as usize;
+    let strings_base = base.add(strings_off);
+
+    let mut pos = struct_off;
+    let mut in_chosen = false;
+    let mut depth = 0u32;
+    let mut chosen_depth = 0u32;
+    let mut initrd_start: u64 = 0;
+    let mut initrd_end: u64 = 0;
+
+    loop {
+        let token = be32(base.add(pos));
+        pos += 4;
+
+        match token {
+            FDT_BEGIN_NODE => {
+                depth += 1;
+                let name_ptr = base.add(pos);
+                let name_len = str_len(name_ptr);
+
+                if depth == 1 && starts_with(name_ptr, b"chosen") {
+                    in_chosen = true;
+                    chosen_depth = depth;
+                }
+
+                pos += (name_len + 4) & !3;
+            }
+            FDT_END_NODE => {
+                if in_chosen && depth == chosen_depth {
+                    in_chosen = false;
+                }
+                depth -= 1;
+            }
+            FDT_PROP => {
+                let val_len = be32(base.add(pos)) as usize;
+                let name_off = be32(base.add(pos + 4)) as usize;
+                pos += 8;
+
+                if in_chosen {
+                    let prop_name = strings_base.add(name_off);
+                    if starts_with(prop_name, b"linux,initrd-start") && val_len >= 4 {
+                        initrd_start = if val_len >= 8 {
+                            be64(base.add(pos))
+                        } else {
+                            be32(base.add(pos)) as u64
+                        };
+                    } else if starts_with(prop_name, b"linux,initrd-end") && val_len >= 4 {
+                        initrd_end = if val_len >= 8 {
+                            be64(base.add(pos))
+                        } else {
+                            be32(base.add(pos)) as u64
+                        };
+                    }
+                }
+
+                pos += (val_len + 3) & !3;
+            }
+            FDT_NOP => {}
+            FDT_END => break,
+            _ => break,
+        }
+    }
+
+    if initrd_start > 0 && initrd_end > initrd_start {
+        Some((initrd_start as usize, (initrd_end - initrd_start) as usize))
+    } else {
+        None
+    }
+}
+
 unsafe fn str_len(ptr: *const u8) -> usize {
     let mut len = 0;
     while *ptr.add(len) != 0 {
