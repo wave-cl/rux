@@ -134,12 +134,12 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     }
 
     // Everything else goes through generic dispatch
-    let sc = translate_x86_64(nr);
+    let sc = translate_x86_64(nr as usize);
     crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64
 }
 
 /// x86_64 Linux syscall number → generic Syscall enum.
-fn translate_x86_64(nr: u64) -> crate::syscall::Syscall {
+fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
     use crate::syscall::Syscall;
     match nr {
         0 => Syscall::Read,
@@ -220,7 +220,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
             57 => crate::syscall::generic_vfork::<super::X86_64>() as i64,
             59 => { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); 0 }
             _ => {
-                let sc = translate_x86_64(nr);
+                let sc = translate_x86_64(nr as usize);
                 crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, 0, 0) as i64
             }
         };

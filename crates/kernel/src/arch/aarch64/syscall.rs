@@ -33,7 +33,7 @@ pub fn handle_syscall(frame: *mut u8) {
             }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             _ => {
-                let sc = translate_aarch64(nr);
+                let sc = translate_aarch64(nr as usize);
                 crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64
             }
         };
@@ -44,7 +44,7 @@ pub fn handle_syscall(frame: *mut u8) {
 }
 
 /// aarch64 Linux syscall number → generic Syscall enum.
-fn translate_aarch64(nr: u64) -> crate::syscall::Syscall {
+fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
     use crate::syscall::Syscall;
     match nr {
         // File I/O

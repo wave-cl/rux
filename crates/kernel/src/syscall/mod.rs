@@ -68,13 +68,13 @@ pub unsafe fn read_user_path(path_ptr: usize) -> &'static [u8] {
 }
 
 /// Resolve a path using CWD for relative paths.
-pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_vfs::InodeId, i64> {
+pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_vfs::InodeId, isize> {
     let fs = crate::kstate::fs();
     rux_vfs::path::resolve_with_cwd(fs, CWD_INODE, path)
 }
 
 /// Resolve a path to (parent_inode, basename).
-pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_vfs::InodeId, &'static [u8]), i64> {
+pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_vfs::InodeId, &'static [u8]), isize> {
     let path = read_user_path(path_ptr);
     let fs = crate::kstate::fs();
     rux_vfs::path::resolve_parent_and_name(fs, CWD_INODE, path)
@@ -122,9 +122,9 @@ pub enum Syscall {
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
-    ArchSpecific(u64),
+    ArchSpecific(usize),
     // Unknown
-    Unknown(u64),
+    Unknown(usize),
 }
 
 /// Dispatch a syscall by its architecture-independent identifier.
@@ -233,7 +233,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
 /// Trait for arch-specific syscall number translation.
 /// Each architecture maps its Linux syscall numbers to the common Syscall enum.
 pub trait SyscallTranslate {
-    fn translate(nr: u64) -> Syscall;
+    fn translate(nr: usize) -> Syscall;
 }
 
 // ── Generic vfork/exec ─────────────────────────────────────────────────

@@ -135,8 +135,8 @@ fn resolve_path_inner<F: FileSystem>(
 
 /// Resolve a path using a CWD inode for relative paths.
 /// Returns the resolved inode ID, or a negative errno on failure.
-pub fn resolve_with_cwd<F: FileSystem>(fs: &F, cwd: InodeId, path: &[u8]) -> Result<InodeId, i64> {
-    resolve_path_at(fs, cwd, path).map_err(|_| -2i64)
+pub fn resolve_with_cwd<F: FileSystem>(fs: &F, cwd: InodeId, path: &[u8]) -> Result<InodeId, isize> {
+    resolve_path_at(fs, cwd, path).map_err(|_| -2isize)
 }
 
 /// Resolve a path to (parent_inode, basename).
@@ -145,7 +145,7 @@ pub fn resolve_parent_and_name<'a, F: FileSystem>(
     fs: &F,
     cwd: InodeId,
     path: &'a [u8],
-) -> Result<(InodeId, &'a [u8]), i64> {
+) -> Result<(InodeId, &'a [u8]), isize> {
     let mut last_slash = None;
     for j in 0..path.len() {
         if path[j] == b'/' { last_slash = Some(j); }
