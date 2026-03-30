@@ -1,15 +1,17 @@
 #![no_std]
 
 // ── Per-architecture modules ────────────────────────────────────────────
-#[cfg(target_arch = "x86_64")]
+// Each contains context.rs, cpu.rs, pte.rs with arch-specific types.
+#[cfg(any(target_arch = "x86_64", test))]
 pub mod x86_64;
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", test))]
 pub mod aarch64;
 
+// Re-export the current arch's types at the crate root for convenience.
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::*;
+pub use x86_64::context::*;
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::*;
+pub use aarch64::context::*;
 
 // ── Architecture-independent modules ────────────────────────────────────
 pub mod pte;
@@ -18,8 +20,6 @@ pub mod syscall;
 pub mod stack;
 pub mod barrier;
 pub mod tlb;
-pub mod timer;
-pub mod serial;
 pub mod irq;
 
 // ── Re-exports ──────────────────────────────────────────────────────────

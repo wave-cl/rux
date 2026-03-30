@@ -45,8 +45,8 @@ pub struct CpuContext {
     pub ss: u64,
 }
 
-// ── Compile-time layout assertions ──────────────────────────────────────
 // 20 × u64 = 160 bytes of data, padded to 192 by align(64).
+#[cfg(target_arch = "x86_64")]
 const _: () = {
     assert!(core::mem::size_of::<CpuContext>() == 192);
     assert!(core::mem::align_of::<CpuContext>() >= 64);

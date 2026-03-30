@@ -5,7 +5,7 @@
 /// The generic 4-level walker lives in `rux_mm::pt4`.
 
 use rux_klib::{PhysAddr, VirtAddr};
-use rux_arch::pte::x86_64::{self as pte, X86_64Pte};
+use rux_arch::x86_64::pte::{self as pte, X86_64Pte};
 use rux_mm::{ArchPaging, MappingFlags};
 
 /// x86_64 architecture paging configuration.

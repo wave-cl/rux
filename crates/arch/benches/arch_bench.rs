@@ -8,7 +8,7 @@ use test::Bencher;
 
 // Benchmarks use aarch64 PTE on this host (aarch64-apple-darwin).
 // x86_64 PTE is only available under cfg(test), not bench.
-use rux_arch::pte::aarch64::{Aarch64Pte, VALID, TABLE, AF, SH_INNER, ATTR_NORMAL, AP_EL0_RW};
+use rux_arch::aarch64::pte::{Aarch64Pte, VALID, TABLE, AF, SH_INNER, ATTR_NORMAL, AP_EL0_RW};
 
 #[bench]
 fn bench_pte_encode_4096(b: &mut Bencher) {

@@ -47,8 +47,8 @@ pub struct CpuContext {
     pub pstate: u64,
 }
 
-// ── Compile-time layout assertions ──────────────────────────────────────
 // 34 × u64 = 272 bytes of data, padded to 384 by align(128).
+#[cfg(target_arch = "aarch64")]
 const _: () = {
     assert!(core::mem::size_of::<CpuContext>() == 384);
     assert!(core::mem::align_of::<CpuContext>() >= 128);
@@ -66,6 +66,7 @@ pub struct PageFaultInfo {
 
 /// Save the current interrupt state and disable IRQs.
 /// Returns true if IRQs were enabled before disabling.
+#[cfg(target_arch = "aarch64")]
 #[inline(always)]
 pub fn save_irqs_and_disable() -> bool {
     let daif: u64;
@@ -77,6 +78,7 @@ pub fn save_irqs_and_disable() -> bool {
 }
 
 /// Restore interrupt state. Unmasks IRQs if `was_enabled` is true.
+#[cfg(target_arch = "aarch64")]
 #[inline(always)]
 pub fn restore_irqs(was_enabled: bool) {
     if was_enabled {
