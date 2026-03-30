@@ -51,13 +51,19 @@ pub fn write_str(s: &str) {
 }
 
 /// Read a single byte, blocking until data is available.
+/// Uses HLT to sleep the CPU between checks — woken by any interrupt.
 pub fn read_byte() -> u8 {
     unsafe {
-        // Wait for data ready (bit 0 of LSR)
-        while inb(COM1 + 5) & 0x01 == 0 {
-            core::hint::spin_loop();
+        loop {
+            // Check if data is ready (bit 0 of LSR)
+            if inb(COM1 + 5) & 0x01 != 0 {
+                return inb(COM1);
+            }
+            // Enable interrupts and halt atomically — STI + HLT
+            // guarantees the CPU sleeps until the next interrupt.
+            // (SYSCALL disables IF via SFMASK, so we must re-enable.)
+            core::arch::asm!("sti; hlt; cli", options(nostack, nomem));
         }
-        inb(COM1)
     }
 }
 

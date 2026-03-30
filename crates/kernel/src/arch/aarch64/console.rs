@@ -51,13 +51,22 @@ pub fn write_str(s: &str) {
 }
 
 /// Read a single byte, blocking until data is available.
+/// Uses WFI to sleep the CPU between checks — woken by any interrupt.
 pub fn read_byte() -> u8 {
     unsafe {
-        // Wait for RXFE (receive FIFO empty) to clear
-        while mmio_read(UARTFR) & UARTFR_RXFE != 0 {
-            core::hint::spin_loop();
+        loop {
+            if mmio_read(UARTFR) & UARTFR_RXFE == 0 {
+                return mmio_read(UARTDR) as u8;
+            }
+            // Unmask IRQs, wait for interrupt, re-mask.
+            // (SVC entry masks IRQs, so we must unmask for WFI to wake.)
+            core::arch::asm!(
+                "msr daifclr, #2",  // unmask IRQ
+                "wfi",              // sleep until interrupt
+                "msr daifset, #2",  // re-mask IRQ
+                options(nostack, nomem)
+            );
         }
-        mmio_read(UARTDR) as u8
     }
 }
 
