@@ -36,7 +36,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    unsafe { fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE_OPS) }
+    unsafe { fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE) }
 }
 
 /// write(fd, buf, count) — POSIX.1
@@ -48,7 +48,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    unsafe { fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE_OPS) }
+    unsafe { fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE) }
 }
 
 /// open(pathname, flags, mode) — POSIX.1
@@ -89,7 +89,7 @@ pub fn openat(_dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isiz
 
 /// close(fd) — POSIX.1
 pub fn close(fd: usize) -> isize {
-    unsafe { fdt::sys_close(fd, crate::syscall::IN_VFORK_CHILD, Some(&crate::pipe::PIPE_OPS)) }
+    unsafe { fdt::sys_close(fd, crate::syscall::IN_VFORK_CHILD, Some(&crate::pipe::PIPE)) }
 }
 
 /// dup(oldfd) — POSIX.1: duplicate fd to lowest available fd.
@@ -99,7 +99,7 @@ pub fn dup(oldfd: usize) -> isize {
 
 /// dup2(oldfd, newfd) — POSIX.1
 pub fn dup2(oldfd: usize, newfd: usize) -> isize {
-    unsafe { fdt::sys_dup2(oldfd, newfd, crate::syscall::IN_VFORK_CHILD, Some(&crate::pipe::PIPE_OPS)) }
+    unsafe { fdt::sys_dup2(oldfd, newfd, crate::syscall::IN_VFORK_CHILD, Some(&crate::pipe::PIPE)) }
 }
 
 /// lseek(fd, offset, whence) — POSIX.1
@@ -155,7 +155,7 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
 
         while remaining > 0 {
             let chunk = remaining.min(4096);
-            let n = fdt::sys_read_fd(in_fd, buf.as_mut_ptr(), chunk, crate::kstate::fs(), &crate::pipe::PIPE_OPS);
+            let n = fdt::sys_read_fd(in_fd, buf.as_mut_ptr(), chunk, crate::kstate::fs(), &crate::pipe::PIPE);
             if n <= 0 { break; }
             let written = write(out_fd, buf.as_ptr() as usize, n as usize);
             if written < 0 { return if total > 0 { total } else { written }; }

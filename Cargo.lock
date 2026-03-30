@@ -31,6 +31,9 @@ dependencies = [
 [[package]]
 name = "rux-ipc"
 version = "0.1.0"
+dependencies = [
+ "rux-vfs",
+]
 
 [[package]]
 name = "rux-kernel"
