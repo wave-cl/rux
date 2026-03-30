@@ -28,6 +28,7 @@ pub const MAX_MOUNTS: usize = 8;
 /// A mounted filesystem — enum to avoid trait objects in no_std.
 pub enum MountedFs {
     Ram(*mut crate::ramfs::RamFs),
+    Proc(*mut crate::procfs::ProcFs),
     None,
 }
 
@@ -119,6 +120,7 @@ impl Vfs {
         if !entry.active { return Err(VfsError::NoDevice); }
         match &entry.fs {
             MountedFs::Ram(ptr) => Ok(unsafe { &**ptr }),
+            MountedFs::Proc(ptr) => Ok(unsafe { &**ptr }),
             MountedFs::None => Err(VfsError::NoDevice),
         }
     }
@@ -128,6 +130,7 @@ impl Vfs {
         if !entry.active { return Err(VfsError::NoDevice); }
         match &mut entry.fs {
             MountedFs::Ram(ptr) => Ok(unsafe { &mut **ptr }),
+            MountedFs::Proc(ptr) => Ok(unsafe { &mut **ptr }),
             MountedFs::None => Err(VfsError::NoDevice),
         }
     }

@@ -162,6 +162,25 @@ unsafe fn init_ramfs_and_exec(multiboot_info: usize) -> ! {
     core::ptr::write_bytes(vfs_ptr as *mut u8, 0, core::mem::size_of::<rux_fs::vfs::Vfs>());
     rux_fs::vfs::Vfs::init_at(vfs_ptr, ramfs_ptr);
 
+    // Mount procfs at /proc
+    {
+        use rux_fs::FileSystem;
+        let vfs = &mut *vfs_ptr;
+        // Mount at root directory (inode 0), name "proc"
+        let root = vfs.root_inode();
+        static mut PROCFS: rux_fs::procfs::ProcFs = rux_fs::procfs::ProcFs::new(
+            || super::pit::ticks(),
+            || 16384, // total frames (hardcoded, matches init)
+            || unsafe {
+                let alloc = &*(0x300000 as *const rux_mm::frame::BuddyAllocator);
+                use rux_mm::FrameAllocator;
+                alloc.available_frames(rux_mm::PageSize::FourK)
+            },
+        );
+        let _ = vfs.mount(root, b"proc", rux_fs::vfs::MountedFs::Proc(&raw mut PROCFS));
+        console::write_str("rux: procfs mounted at /proc\n");
+    }
+
     crate::kstate::init(vfs_ptr, alloc_ptr);
     console::write_str("rux: kernel state initialized\n");
 
