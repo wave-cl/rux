@@ -42,28 +42,28 @@ pub trait StatLayout {
 }
 
 /// Fill a Linux struct stat buffer from VFS InodeStat using arch layout constants.
-pub unsafe fn fill_linux_stat<A: StatLayout>(buf: u64, s: &rux_vfs::InodeStat) {
+pub unsafe fn fill_linux_stat<A: StatLayout>(buf: usize, s: &rux_vfs::InodeStat) {
     let p = buf as *mut u8;
     for i in 0..A::STAT_SIZE { *p.add(i) = 0; }
-    *((buf + A::INO_OFF as u64) as *mut u64) = s.ino;
+    *((buf + A::INO_OFF) as *mut u64) = s.ino;
     if A::NLINK_IS_U64 {
-        *((buf + A::NLINK_OFF as u64) as *mut u64) = s.nlink as u64;
+        *((buf + A::NLINK_OFF) as *mut u64) = s.nlink as u64;
     } else {
-        *((buf + A::NLINK_OFF as u64) as *mut u32) = s.nlink;
+        *((buf + A::NLINK_OFF) as *mut u32) = s.nlink;
     }
-    *((buf + A::MODE_OFF as u64) as *mut u32) = s.mode;
-    *((buf + A::UID_OFF as u64) as *mut u32) = s.uid;
-    *((buf + A::GID_OFF as u64) as *mut u32) = s.gid;
+    *((buf + A::MODE_OFF) as *mut u32) = s.mode;
+    *((buf + A::UID_OFF) as *mut u32) = s.uid;
+    *((buf + A::GID_OFF) as *mut u32) = s.gid;
     if A::RDEV_OFF > 0 {
-        *((buf + A::RDEV_OFF as u64) as *mut u64) = 0;
+        *((buf + A::RDEV_OFF) as *mut u64) = 0;
     }
-    *((buf + A::SIZE_OFF as u64) as *mut i64) = s.size as i64;
+    *((buf + A::SIZE_OFF) as *mut i64) = s.size as i64;
     if A::BLKSIZE_IS_I64 {
-        *((buf + A::BLKSIZE_OFF as u64) as *mut i64) = 4096;
+        *((buf + A::BLKSIZE_OFF) as *mut i64) = 4096;
     } else {
-        *((buf + A::BLKSIZE_OFF as u64) as *mut i32) = 4096;
+        *((buf + A::BLKSIZE_OFF) as *mut i32) = 4096;
     }
-    *((buf + A::BLOCKS_OFF as u64) as *mut i64) = s.blocks as i64;
+    *((buf + A::BLOCKS_OFF) as *mut i64) = s.blocks as i64;
 }
 
 /// Map kernel identity pages into a user page table.

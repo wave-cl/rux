@@ -293,10 +293,9 @@ pub fn reset() {
 }
 
 /// Check if an fd is a serial fd (stdin/stdout/stderr).
-pub fn is_serial_fd(fd: u64) -> bool {
+pub fn is_serial_fd(fd: usize) -> bool {
     unsafe {
-        let f = fd as usize;
-        if f >= MAX_FDS { return false; }
-        !FD_TABLE[f].active || FD_TABLE[f].is_serial
+        if fd >= MAX_FDS { return false; }
+        !FD_TABLE[fd].active || FD_TABLE[fd].is_serial
     }
 }

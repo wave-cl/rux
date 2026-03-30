@@ -17,7 +17,7 @@ core::arch::global_asm!(include_str!("exception.S"));
 pub struct Aarch64;
 
 impl rux_arch::ArchSpecificOps for Aarch64 {
-    fn arch_syscall(_nr: u64, _a0: u64, _a1: u64) -> Option<i64> { None }
+    fn arch_syscall(_nr: usize, _a0: usize, _a1: usize) -> Option<isize> { None }
 }
 
 impl rux_arch::BootOps for Aarch64 {

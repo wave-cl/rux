@@ -17,9 +17,9 @@ core::arch::global_asm!(include_str!("boot.S"));
 pub struct X86_64;
 
 impl rux_arch::ArchSpecificOps for X86_64 {
-    fn arch_syscall(nr: u64, a0: u64, a1: u64) -> Option<i64> {
+    fn arch_syscall(nr: usize, a0: usize, a1: usize) -> Option<isize> {
         match nr {
-            158 => Some(syscall::syscall_arch_prctl(a0, a1)),
+            158 => Some(syscall::syscall_arch_prctl(a0 as u64, a1 as u64) as isize),
             _ => None,
         }
     }

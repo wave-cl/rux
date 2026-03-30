@@ -15,13 +15,13 @@ static mut ARGC: usize = 0;
 
 /// Read argv from user memory (pointer to NULL-terminated array of char*).
 /// If argv_ptr is NULL or 0, uses path as argv[0].
-pub unsafe fn set_from_user(path: &[u8], argv_ptr: u64, _envp_ptr: u64) {
+pub unsafe fn set_from_user(path: &[u8], argv_ptr: usize, _envp_ptr: usize) {
     ARGC = 0;
     let mut buf_pos = 0usize;
 
     if argv_ptr != 0 {
-        // Read argv[] array from user memory
-        let argv = argv_ptr as *const u64;
+        // Read argv[] array from user memory (array of pointer-width entries)
+        let argv = argv_ptr as *const usize;
         for i in 0..MAX_ARGS {
             let str_ptr = *argv.add(i);
             if str_ptr == 0 { break; } // NULL terminator

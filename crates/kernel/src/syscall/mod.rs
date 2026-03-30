@@ -9,10 +9,10 @@ pub mod linux;
 // ── Shared process state ────────────────────────────────────────────
 
 /// Program break for brk().
-pub static mut PROGRAM_BRK: u64 = 0;
+pub static mut PROGRAM_BRK: usize = 0;
 
 /// Next anonymous mmap virtual address.
-pub static mut MMAP_BASE: u64 = 0x10000000;
+pub static mut MMAP_BASE: usize = 0x10000000;
 
 /// Current working directory inode (0 = root).
 pub static mut CWD_INODE: u64 = 0;
@@ -39,8 +39,8 @@ pub static mut IN_VFORK_CHILD: bool = false;
 /// Map zeroed pages into the current user page table.
 /// Used by brk() and mmap() to add pages to the user address space.
 pub unsafe fn map_user_pages(
-    start_va: u64,
-    end_va: u64,
+    start_va: usize,
+    end_va: usize,
     flags: rux_mm::MappingFlags,
 ) {
     use rux_arch::PageTableRootOps;
@@ -51,7 +51,7 @@ pub unsafe fn map_user_pages(
 
     let upt_ptr = &mut upt as *mut crate::arch::PageTable;
     rux_mm::map_zeroed_pages(
-        alloc, start_va, end_va, flags,
+        alloc, start_va as u64, end_va as u64, flags,
         &mut |va, phys, f, a| { let _ = (*upt_ptr).map_4k(va, phys, f, a); },
         &mut |va| { let _ = (*upt_ptr).unmap_4k(va); },
     );
@@ -82,7 +82,7 @@ pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_vfs::Inode
 
 /// Fill a Linux struct stat from VFS InodeStat.
 /// Uses the architecture's StatLayout constants for field offsets/widths.
-pub unsafe fn fill_linux_stat(buf: u64, vfs_stat: &rux_vfs::InodeStat) {
+pub unsafe fn fill_linux_stat(buf: usize, vfs_stat: &rux_vfs::InodeStat) {
     crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, vfs_stat);
 }
 
@@ -214,8 +214,8 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         // ── Architecture-specific ──────────────────────────────────
         Syscall::ArchSpecific(nr) => {
             use rux_arch::ArchSpecificOps;
-            crate::arch::Arch::arch_syscall(nr as u64, a0 as u64, a1 as u64)
-                .unwrap_or(-38) as isize
+            crate::arch::Arch::arch_syscall(nr as usize, a0, a1)
+                .unwrap_or(-38)
         }
 
         // ── Unknown ────────────────────────────────────────────────
@@ -239,12 +239,12 @@ pub trait SyscallTranslate {
 // ── Generic vfork/exec ─────────────────────────────────────────────────
 
 /// Saved parent process state for vfork (architecture-independent).
-static mut VFORK_PARENT_MMAP_BASE: u64 = 0;
-static mut VFORK_PARENT_PROGRAM_BRK: u64 = 0;
-static mut VFORK_PARENT_CWD_INODE: u64 = 0;
-static mut VFORK_PARENT_USER_SP: u64 = 0;
-static mut VFORK_PARENT_TLS: u64 = 0;
-static mut VFORK_PARENT_PT_ROOT: u64 = 0;
+static mut VFORK_PARENT_MMAP_BASE: usize = 0;
+static mut VFORK_PARENT_PROGRAM_BRK: usize = 0;
+static mut VFORK_PARENT_CWD_INODE: u64 = 0; // inode IDs are genuinely u64
+static mut VFORK_PARENT_USER_SP: u64 = 0;   // register-width, set by arch VforkContext
+static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
+static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
 static mut VFORK_PARENT_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::OpenFile {
     ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
@@ -352,7 +352,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
     let path = core::slice::from_raw_parts(path_cstr, path_len);
 
-    crate::execargs::set_from_user(path, argv_ptr as u64, 0);
+    crate::execargs::set_from_user(path, argv_ptr, 0);
 
     crate::arch::Arch::write_str("rux: exec(\"");
     crate::arch::Arch::write_bytes(path);

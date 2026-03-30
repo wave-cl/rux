@@ -12,7 +12,7 @@ type Arch = crate::arch::Arch;
 
 /// Check if fd 0-2 should use serial (not redirected to file/pipe).
 fn is_serial_fd(fd: usize) -> bool {
-    crate::fdtable::is_serial_fd(fd as u64)
+    crate::fdtable::is_serial_fd(fd)
 }
 
 /// read(fd, buf, count) — POSIX.1
@@ -213,7 +213,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
             *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
             return 0;
         }
-        super::fill_linux_stat(buf as u64, &vfs_stat);
+        super::fill_linux_stat(buf, &vfs_stat);
     }
     0
 }
@@ -231,7 +231,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize) -> isize {
         };
         let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
         if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
-        super::fill_linux_stat(buf as u64, &vfs_stat);
+        super::fill_linux_stat(buf, &vfs_stat);
         0
     }
 }
@@ -505,17 +505,17 @@ pub fn mmap(addr: usize, len: usize, _prot: usize, mmap_flags: usize, _fd: usize
 
         let aligned_len = (len + 0xFFF) & !0xFFF;
         let result = if mmap_flags & 0x10 != 0 && addr != 0 {
-            (addr & !0xFFF) as u64 // MAP_FIXED
+            addr & !0xFFF // MAP_FIXED
         } else {
             let r = super::MMAP_BASE;
-            super::MMAP_BASE += aligned_len as u64;
+            super::MMAP_BASE += aligned_len;
             r
         };
 
         let pg_flags = rux_mm::MappingFlags::READ
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::USER);
-        super::map_user_pages(result, result + aligned_len as u64, pg_flags);
+        super::map_user_pages(result, result + aligned_len, pg_flags);
 
         result as isize
     }

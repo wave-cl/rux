@@ -83,7 +83,7 @@ pub unsafe fn load_elf_from_inode(
     );
 
     // Set program break and mmap base for brk/mmap syscalls
-    crate::syscall::PROGRAM_BRK = max_end;
+    crate::syscall::PROGRAM_BRK = max_end as usize;
     crate::syscall::MMAP_BASE = 0x10000000;
     crate::fdtable::reset();
 

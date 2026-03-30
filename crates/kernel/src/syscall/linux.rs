@@ -27,7 +27,6 @@ pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
 pub fn brk(addr: usize) -> isize {
     unsafe {
         if super::PROGRAM_BRK == 0 { super::PROGRAM_BRK = 0x800000; }
-        let addr = addr as u64;
         if addr == 0 { return super::PROGRAM_BRK as isize; }
         if addr >= super::PROGRAM_BRK {
             let old_page = (super::PROGRAM_BRK + 0xFFF) & !0xFFF;
