@@ -420,11 +420,11 @@ pub fn uname(buf: u64) -> i64 {
         let ptr = buf as *mut u8;
         for i in 0..325 { *ptr.add(i) = 0; }
         // sysname
-        for (i, &b) in b"Linux".iter().enumerate() { *ptr.add(i) = b; }
+        for (i, &b) in b"rux".iter().enumerate() { *ptr.add(i) = b; }
         // nodename (offset 65)
         for (i, &b) in b"rux".iter().enumerate() { *ptr.add(65 + i) = b; }
         // release (offset 130)
-        for (i, &b) in b"6.1.0-rux".iter().enumerate() { *ptr.add(130 + i) = b; }
+        for (i, &b) in b"0.1.0".iter().enumerate() { *ptr.add(130 + i) = b; }
         // version (offset 195)
         for (i, &b) in b"#1 SMP".iter().enumerate() { *ptr.add(195 + i) = b; }
         // machine (offset 260)
