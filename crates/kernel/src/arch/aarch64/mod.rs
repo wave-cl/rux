@@ -27,6 +27,15 @@ impl rux_arch::TimerOps for Aarch64 {
     fn ticks() -> u64 { timer::ticks() }
 }
 
+unsafe impl rux_arch::HaltOps for Aarch64 {
+    unsafe fn halt_until_interrupt() {
+        core::arch::asm!(
+            "msr daifclr, #2", "wfi", "msr daifset, #2",
+            options(nostack, nomem)
+        );
+    }
+}
+
 unsafe impl rux_arch::TimerControl for Aarch64 {
     unsafe fn stop_timer() { timer::stop_timer(); }
     unsafe fn start_timer() { timer::start_timer(); }

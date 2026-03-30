@@ -58,14 +58,8 @@ pub fn read_byte() -> u8 {
             if mmio_read(UARTFR) & UARTFR_RXFE == 0 {
                 return mmio_read(UARTDR) as u8;
             }
-            // Unmask IRQs, wait for interrupt, re-mask.
-            // (SVC entry masks IRQs, so we must unmask for WFI to wake.)
-            core::arch::asm!(
-                "msr daifclr, #2",  // unmask IRQ
-                "wfi",              // sleep until interrupt
-                "msr daifset, #2",  // re-mask IRQ
-                options(nostack, nomem)
-            );
+            use rux_arch::HaltOps;
+            super::Aarch64::halt_until_interrupt();
         }
     }
 }

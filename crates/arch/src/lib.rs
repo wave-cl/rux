@@ -126,6 +126,15 @@ pub trait TimerOps {
     fn ticks() -> u64;
 }
 
+/// Halt the CPU until the next interrupt.
+/// Enables interrupts, halts, then re-disables.
+///
+/// # Safety
+/// Must be called with interrupts masked (they will be temporarily unmasked).
+pub unsafe trait HaltOps {
+    unsafe fn halt_until_interrupt();
+}
+
 /// Timer control for tickless idle.
 ///
 /// # Safety

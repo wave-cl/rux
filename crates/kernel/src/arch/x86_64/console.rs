@@ -59,10 +59,8 @@ pub fn read_byte() -> u8 {
             if inb(COM1 + 5) & 0x01 != 0 {
                 return inb(COM1);
             }
-            // Enable interrupts and halt atomically — STI + HLT
-            // guarantees the CPU sleeps until the next interrupt.
-            // (SYSCALL disables IF via SFMASK, so we must re-enable.)
-            core::arch::asm!("sti; hlt; cli", options(nostack, nomem));
+            use rux_arch::HaltOps;
+            super::X86_64::halt_until_interrupt();
         }
     }
 }

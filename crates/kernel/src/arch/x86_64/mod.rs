@@ -32,6 +32,12 @@ impl rux_arch::TimerOps for X86_64 {
     fn ticks() -> u64 { pit::ticks() }
 }
 
+unsafe impl rux_arch::HaltOps for X86_64 {
+    unsafe fn halt_until_interrupt() {
+        core::arch::asm!("sti; hlt; cli", options(nostack, nomem));
+    }
+}
+
 unsafe impl rux_arch::TimerControl for X86_64 {
     unsafe fn stop_timer() { pit::stop_timer(); }
     unsafe fn start_timer() { pit::start_timer(); }

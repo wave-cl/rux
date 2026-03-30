@@ -595,19 +595,16 @@ pub fn readlink(path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
 pub fn nanosleep(req_ptr: usize) -> isize {
     if req_ptr == 0 { return -14; }
     unsafe {
+        use rux_arch::HaltOps;
         let tv_sec = *(req_ptr as *const u64);
         let tv_nsec = *((req_ptr + 8) as *const u64);
         let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
+        // Ensure timer is running for accurate sleep
+        use rux_arch::TimerControl;
+        Arch::start_timer();
         let target = Arch::ticks() + ms;
         while Arch::ticks() < target {
-            // Sleep until next interrupt
-            #[cfg(target_arch = "x86_64")]
-            core::arch::asm!("sti; hlt; cli", options(nostack, nomem));
-            #[cfg(target_arch = "aarch64")]
-            core::arch::asm!(
-                "msr daifclr, #2", "wfi", "msr daifset, #2",
-                options(nostack, nomem)
-            );
+            Arch::halt_until_interrupt();
         }
     }
     0
