@@ -7,4 +7,4 @@ edition = "2021"
 name = "rux_ipc"
 
 [dependencies]
-rux-vfs = { path = "../vfs" }
+rux-fs = { path = "../fs" }

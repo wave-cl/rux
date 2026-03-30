@@ -2,7 +2,7 @@
 /// so syscall handlers can access them without passing arguments through
 /// the interrupt frame.
 
-use rux_vfs::ramfs::RamFs;
+use rux_fs::ramfs::RamFs;
 use rux_mm::frame::BuddyAllocator;
 
 pub struct KernelState {

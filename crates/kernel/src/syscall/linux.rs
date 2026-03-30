@@ -46,14 +46,14 @@ pub fn brk(addr: usize) -> isize {
 /// getdents64(fd, dirp, count) — Linux-specific.
 pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
     unsafe {
-        use rux_vfs::{FileSystem, DirEntry, InodeType};
+        use rux_fs::{FileSystem, DirEntry, InodeType};
         let fs = crate::kstate::fs();
         let out = buf_ptr as *mut u8;
         let limit = bufsize;
         let mut pos = 0usize;
 
         let dir_ino = if fd >= 3 {
-            match rux_vfs::fdtable::get_fd_inode(fd) {
+            match rux_fs::fdtable::get_fd_inode(fd) {
                 Some(ino) => ino,
                 None => return -9,
             }
@@ -62,7 +62,7 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
         };
 
         let mut offset = if fd < 64 {
-            rux_vfs::fdtable::FD_TABLE[fd].offset
+            rux_fs::fdtable::FD_TABLE[fd].offset
         } else {
             0
         };
@@ -94,7 +94,7 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
             }
         }
         if fd < 64 {
-            rux_vfs::fdtable::FD_TABLE[fd].offset = offset;
+            rux_fs::fdtable::FD_TABLE[fd].offset = offset;
         }
         if pos == start_pos { return 0; }
         pos as isize

@@ -68,21 +68,21 @@ pub unsafe fn read_user_path(path_ptr: usize) -> &'static [u8] {
 }
 
 /// Resolve a path using CWD for relative paths.
-pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_vfs::InodeId, isize> {
+pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     let fs = crate::kstate::fs();
-    rux_vfs::path::resolve_with_cwd(fs, CWD_INODE, path)
+    rux_fs::path::resolve_with_cwd(fs, CWD_INODE, path)
 }
 
 /// Resolve a path to (parent_inode, basename).
-pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_vfs::InodeId, &'static [u8]), isize> {
+pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
     let path = read_user_path(path_ptr);
     let fs = crate::kstate::fs();
-    rux_vfs::path::resolve_parent_and_name(fs, CWD_INODE, path)
+    rux_fs::path::resolve_parent_and_name(fs, CWD_INODE, path)
 }
 
 /// Fill a Linux struct stat from VFS InodeStat.
 /// Uses the architecture's StatLayout constants for field offsets/widths.
-pub unsafe fn fill_linux_stat(buf: usize, vfs_stat: &rux_vfs::InodeStat) {
+pub unsafe fn fill_linux_stat(buf: usize, vfs_stat: &rux_fs::InodeStat) {
     crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, vfs_stat);
 }
 
@@ -245,7 +245,7 @@ static mut VFORK_PARENT_CWD_INODE: u64 = 0; // inode IDs are genuinely u64
 static mut VFORK_PARENT_USER_SP: usize = 0;
 static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
 static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
-static mut VFORK_PARENT_FDS: [rux_vfs::fdtable::OpenFile; 64] = [rux_vfs::fdtable::OpenFile {
+static mut VFORK_PARENT_FDS: [rux_fs::fdtable::OpenFile; 64] = [rux_fs::fdtable::OpenFile {
     ino: 0, offset: 0, flags: 0, active: false, is_console: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 }; 64];
@@ -269,7 +269,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
     VFORK_PARENT_MMAP_BASE = MMAP_BASE;
     VFORK_PARENT_PROGRAM_BRK = PROGRAM_BRK;
     VFORK_PARENT_CWD_INODE = CWD_INODE;
-    for i in 0..64 { VFORK_PARENT_FDS[i] = rux_vfs::fdtable::FD_TABLE[i]; }
+    for i in 0..64 { VFORK_PARENT_FDS[i] = rux_fs::fdtable::FD_TABLE[i]; }
     CHILD_AVAILABLE = true;
 
     // 3. setjmp — returns 0 on first call, child PID on longjmp
@@ -326,7 +326,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         MMAP_BASE = VFORK_PARENT_MMAP_BASE;
         PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
         CWD_INODE = VFORK_PARENT_CWD_INODE;
-        for i in 0..64 { rux_vfs::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
+        for i in 0..64 { rux_fs::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
 
         // Restore TLS
         V::restore_tls(VFORK_PARENT_TLS);
@@ -342,7 +342,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 /// Replaces the current process image.
 pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize) -> ! {
     use rux_arch::ConsoleOps;
-    use rux_vfs::FileSystem;
+    use rux_fs::FileSystem;
 
     let fs = crate::kstate::fs();
     let alloc = crate::kstate::alloc();
@@ -358,7 +358,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     crate::arch::Arch::write_bytes(path);
     crate::arch::Arch::write_str("\")\n");
 
-    let ino = match rux_vfs::path::resolve_path(fs, path) {
+    let ino = match rux_fs::path::resolve_path(fs, path) {
         Ok(ino) => ino,
         Err(_) => { crate::arch::Arch::write_str("rux: exec: not found\n"); loop {} }
     };

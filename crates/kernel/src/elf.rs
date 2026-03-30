@@ -18,7 +18,7 @@ struct VfsReader {
 impl rux_elf::ElfReader for VfsReader {
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> usize {
         unsafe {
-            use rux_vfs::FileSystem;
+            use rux_fs::FileSystem;
             let fs = crate::kstate::fs();
             fs.read(self.ino, offset, buf).unwrap_or(0)
         }
@@ -55,7 +55,7 @@ pub unsafe fn load_elf_from_inode(
     alloc: &mut dyn rux_mm::FrameAllocator,
 ) -> ! {
     use rux_klib::VirtAddr;
-    use rux_vfs::FileSystem;
+    use rux_fs::FileSystem;
 
     let mut talloc = crate::pgtrack::TrackingAllocator::new(alloc);
     let alloc: &mut dyn rux_mm::FrameAllocator = &mut talloc;
@@ -85,7 +85,7 @@ pub unsafe fn load_elf_from_inode(
     // Set program break and mmap base for brk/mmap syscalls
     crate::syscall::PROGRAM_BRK = max_end as usize;
     crate::syscall::MMAP_BASE = 0x10000000;
-    rux_vfs::fdtable::reset();
+    rux_fs::fdtable::reset();
 
     // Activate page table
     {

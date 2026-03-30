@@ -42,7 +42,7 @@ pub trait StatLayout {
 }
 
 /// Fill a Linux struct stat buffer from VFS InodeStat using arch layout constants.
-pub unsafe fn fill_linux_stat<A: StatLayout>(buf: usize, s: &rux_vfs::InodeStat) {
+pub unsafe fn fill_linux_stat<A: StatLayout>(buf: usize, s: &rux_fs::InodeStat) {
     let p = buf as *mut u8;
     for i in 0..A::STAT_SIZE { *p.add(i) = 0; }
     *((buf + A::INO_OFF) as *mut u64) = s.ino;

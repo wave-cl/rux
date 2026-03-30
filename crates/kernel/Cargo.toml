@@ -10,6 +10,6 @@ rux-boot = { path = "../boot" }
 rux-mm = { path = "../mm" }
 rux-sched = { path = "../sched" }
 rux-proc = { path = "../proc" }
-rux-vfs = { path = "../vfs" }
+rux-fs = { path = "../fs" }
 rux-elf = { path = "../elf" }
 rux-ipc = { path = "../ipc" }

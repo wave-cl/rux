@@ -29,10 +29,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rux-fs"
+version = "0.1.0"
+dependencies = [
+ "rux-klib",
+ "rux-mm",
+]
+
+[[package]]
 name = "rux-ipc"
 version = "0.1.0"
 dependencies = [
- "rux-vfs",
+ "rux-fs",
 ]
 
 [[package]]
@@ -42,12 +50,12 @@ dependencies = [
  "rux-arch",
  "rux-boot",
  "rux-elf",
+ "rux-fs",
  "rux-ipc",
  "rux-klib",
  "rux-mm",
  "rux-proc",
  "rux-sched",
- "rux-vfs",
 ]
 
 [[package]]
@@ -90,11 +98,3 @@ dependencies = [
 [[package]]
 name = "rux-syscall"
 version = "0.1.0"
-
-[[package]]
-name = "rux-vfs"
-version = "0.1.0"
-dependencies = [
- "rux-klib",
- "rux-mm",
-]

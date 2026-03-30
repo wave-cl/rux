@@ -6,7 +6,7 @@
 
 use rux_arch::ConsoleOps;
 use rux_arch::TimerOps;
-use rux_vfs::fdtable as fdt;
+use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 
 // ── File I/O (POSIX.1 Section 2) ────────────────────────────────────
@@ -62,7 +62,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
         match super::resolve_with_cwd(path) {
             Ok(ino) => fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs()),
             Err(_) if o_creat => {
-                use rux_vfs::{FileSystem, FileName};
+                use rux_fs::{FileSystem, FileName};
                 let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
                     Ok(v) => v,
                     Err(e) => return e,
@@ -202,11 +202,11 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
         }
     }
     unsafe {
-        use rux_vfs::FileSystem;
+        use rux_fs::FileSystem;
         let f = &fdt::FD_TABLE[fd];
         if !f.active { return -9; }
         let fs = crate::kstate::fs();
-        let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
+        let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(f.ino, &mut vfs_stat).is_err() {
             let p = buf as *mut u8;
             for i in 0..144 { *p.add(i) = 0; }
@@ -223,14 +223,14 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
 pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize) -> isize {
     if buf == 0 { return -14; }
     unsafe {
-        use rux_vfs::FileSystem;
+        use rux_fs::FileSystem;
         let path = super::read_user_path(pathname);
         let fs = crate::kstate::fs();
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
             Err(e) => return e,
         };
-        let mut vfs_stat = core::mem::zeroed::<rux_vfs::InodeStat>();
+        let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
         super::fill_linux_stat(buf, &vfs_stat);
         0
@@ -242,7 +242,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize) -> isize {
 /// chdir(path) — POSIX.1
 pub fn chdir(path_ptr: usize) -> isize {
     unsafe {
-        use rux_vfs::FileSystem;
+        use rux_fs::FileSystem;
         let path = super::read_user_path(path_ptr);
         if path.is_empty() { return -2; }
 
@@ -252,9 +252,9 @@ pub fn chdir(path_ptr: usize) -> isize {
             Err(e) => return e,
         };
 
-        let mut stat = core::mem::zeroed::<rux_vfs::InodeStat>();
+        let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(ino, &mut stat).is_err() { return -2; }
-        if stat.mode & rux_vfs::S_IFMT != rux_vfs::S_IFDIR {
+        if stat.mode & rux_fs::S_IFMT != rux_fs::S_IFDIR {
             return -20; // -ENOTDIR
         }
 
@@ -285,7 +285,7 @@ pub fn chdir(path_ptr: usize) -> isize {
 /// mkdir(pathname, mode) — POSIX.1
 pub fn mkdir(path_ptr: usize) -> isize {
     unsafe {
-        use rux_vfs::{FileSystem, FileName};
+        use rux_fs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
             Err(e) => return e,
@@ -305,7 +305,7 @@ pub fn mkdir(path_ptr: usize) -> isize {
 /// unlink(pathname) — POSIX.1
 pub fn unlink(path_ptr: usize) -> isize {
     unsafe {
-        use rux_vfs::{FileSystem, FileName};
+        use rux_fs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
             Err(e) => return e,
@@ -325,7 +325,7 @@ pub fn unlink(path_ptr: usize) -> isize {
 /// creat(pathname, mode) — POSIX.1 (equivalent to open with O_CREAT|O_WRONLY|O_TRUNC)
 pub fn creat(path_ptr: usize) -> isize {
     unsafe {
-        use rux_vfs::{FileSystem, FileName};
+        use rux_fs::{FileSystem, FileName};
         let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
             Ok(v) => v,
             Err(e) => return e,
@@ -405,12 +405,12 @@ pub fn uname(buf: usize) -> isize {
         for (i, &b) in b"rux".iter().enumerate() { *ptr.add(i) = b; }
         // nodename (offset 65) — read from /etc/hostname
         {
-            use rux_vfs::FileSystem;
+            use rux_fs::FileSystem;
             let mut name = [0u8; 64];
             let mut len = 3usize;
             name[0] = b'r'; name[1] = b'u'; name[2] = b'x';
             let fs = crate::kstate::fs();
-            if let Ok(ino) = rux_vfs::path::resolve_path(fs, b"/etc/hostname") {
+            if let Ok(ino) = rux_fs::path::resolve_path(fs, b"/etc/hostname") {
                 if let Ok(n) = fs.read(ino, 0, &mut name) {
                     len = n;
                     while len > 0 && (name[len - 1] == b'\n' || name[len - 1] == b'\r') {
