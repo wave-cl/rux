@@ -53,39 +53,14 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     Arch::exit(Arch::EXIT_FAILURE);
 }
 
-// ── Utility functions (used by both archs) ──────────────────────────
+// ── Utility functions — thin wrappers around rux_klib::fmt ──────────
 
 pub fn write_hex_serial(n: usize) {
     Arch::write_str("0x");
     let mut buf = [0u8; 16];
-    write_hex_buf(&mut buf, n);
+    Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut buf, n));
 }
 
-fn write_hex_buf(buf: &mut [u8; 16], mut n: usize) {
-    if n == 0 {
-        Arch::write_str("0");
-        return;
-    }
-    let mut i = 16;
-    while n > 0 && i > 0 {
-        i -= 1;
-        let digit = (n & 0xF) as u8;
-        buf[i] = if digit < 10 { b'0' + digit } else { b'a' + digit - 10 };
-        n >>= 4;
-    }
-    Arch::write_bytes(&buf[i..]);
-}
-
-pub fn write_u32(buf: &mut [u8; 10], mut n: u32) -> &str {
-    if n == 0 {
-        buf[0] = b'0';
-        return unsafe { core::str::from_utf8_unchecked(&buf[..1]) };
-    }
-    let mut i = 10;
-    while n > 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
+pub fn write_u32(buf: &mut [u8; 10], n: u32) -> &str {
+    rux_klib::fmt::u32_to_str(buf, n)
 }

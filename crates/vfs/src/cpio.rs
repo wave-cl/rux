@@ -166,7 +166,7 @@ pub fn unpack_cpio(
             if let Some(log_fn) = log {
                 log_fn("rux: cpio: unknown type ");
                 let mut buf = [0u8; 10];
-                log_fn(format_u32(&mut buf, file_type));
+                log_fn(rux_klib::fmt::u32_to_str(&mut buf, file_type));
                 log_fn("\n");
             }
             continue;
@@ -213,28 +213,13 @@ pub fn unpack_cpio(
     if let Some(log_fn) = log {
         log_fn("rux: cpio: unpacked ");
         let mut buf = [0u8; 10];
-        log_fn(format_u32(&mut buf, count as u32));
+        log_fn(rux_klib::fmt::u32_to_str(&mut buf, count as u32));
         log_fn(" entries (");
-        log_fn(format_u32(&mut buf, dirs as u32));
+        log_fn(rux_klib::fmt::u32_to_str(&mut buf, dirs as u32));
         log_fn(" dirs, ");
-        log_fn(format_u32(&mut buf, files as u32));
+        log_fn(rux_klib::fmt::u32_to_str(&mut buf, files as u32));
         log_fn(" files, ");
-        log_fn(format_u32(&mut buf, syms as u32));
+        log_fn(rux_klib::fmt::u32_to_str(&mut buf, syms as u32));
         log_fn(" symlinks)\n");
     }
-}
-
-/// Format a u32 as decimal into a buffer.
-fn format_u32(buf: &mut [u8; 10], mut n: u32) -> &str {
-    if n == 0 {
-        buf[0] = b'0';
-        return unsafe { core::str::from_utf8_unchecked(&buf[..1]) };
-    }
-    let mut i = 10;
-    while n > 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
 }
