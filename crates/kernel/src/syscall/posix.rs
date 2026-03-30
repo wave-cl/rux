@@ -376,9 +376,9 @@ pub fn exit(status: i32) -> ! {
     unsafe { super::LAST_CHILD_EXIT = status; }
 
     unsafe {
-        use rux_arch::VforkOps;
-        if crate::arch::Arch::vfork_jmp_active() {
-            crate::arch::Arch::vfork_longjmp_to_parent(42);
+        use rux_arch::VforkContext;
+        if crate::arch::Arch::jmp_active() {
+            crate::arch::Arch::longjmp(42);
         }
     }
     use rux_arch::ExitOps;

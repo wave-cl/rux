@@ -126,6 +126,11 @@ fn translate_aarch64(nr: u64) -> crate::syscall::Syscall {
 /// Set by handle_syscall before calling generic_vfork.
 static mut CURRENT_REGS_PTR: *mut u64 = core::ptr::null_mut();
 
+/// Saved parent exception frame for VforkContext (34 u64s).
+static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
+/// Saved regs pointer for restore_and_return_to_user.
+static mut SAVED_REGS_PTR: *mut u64 = core::ptr::null_mut();
+
 unsafe impl rux_arch::VforkContext for super::Aarch64 {
     const CHILD_STACK_VA: u64 = 0x7FFD_0000;
 
@@ -181,6 +186,12 @@ unsafe impl rux_arch::VforkContext for super::Aarch64 {
 
     unsafe fn setjmp() -> i64 { vfork_setjmp(&raw mut VFORK_JMP) }
 
+    fn jmp_active() -> bool { unsafe { VFORK_JMP.sp != 0 } }
+
+    unsafe fn longjmp(child_pid: i64) -> ! {
+        vfork_longjmp(&raw mut VFORK_JMP, child_pid);
+    }
+
     unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> ! {
         // Restore parent's user stack pointer
         core::arch::asm!("msr sp_el0, {}", in(reg) user_sp, options(nostack));
@@ -221,141 +232,6 @@ unsafe impl rux_arch::VforkContext for super::Aarch64 {
     }
 }
 
-/// vfork — saves parent context, returns 0 to child.
-/// When child calls exit(), longjmp restores parent context
-/// and vfork returns the child PID to the parent.
-fn syscall_vfork(regs: *mut u64) -> i64 {
-    unsafe {
-        serial::write_str("rux: vfork()\n");
-
-        for i in 0..FRAME_REGS {
-            SAVED_PARENT_FRAME[i] = *regs.add(i);
-        }
-        SAVED_REGS_PTR = regs;  // save regs pointer (x0 is caller-saved, lost after longjmp)
-        core::arch::asm!("mrs {}, sp_el0", out(reg) SAVED_SP_EL0, options(nostack));
-        // Save TPIDR_EL0 (TLS base) — musl uses it; child's exec overwrites it
-        core::arch::asm!("mrs {}, tpidr_el0", out(reg) SAVED_TPIDR, options(nostack));
-
-        // Save process state that exec resets
-        SAVED_MMAP_BASE = crate::syscall::MMAP_BASE;
-        SAVED_PROGRAM_BRK = crate::syscall::PROGRAM_BRK;
-        static mut SAVED_CWD_INODE: u64 = 0;
-        SAVED_CWD_INODE = crate::syscall::CWD_INODE;
-        for i in 0..64 { SAVED_FDS[i] = crate::fdtable::FD_TABLE[i]; }
-
-        crate::syscall::CHILD_AVAILABLE = true;
-
-        let val = vfork_setjmp(&raw mut VFORK_JMP);
-        if val == 0 {
-            crate::syscall::IN_VFORK_CHILD = true;
-            // Copy 4 pages of the parent's stack for the child.
-            use rux_mm::FrameAllocator;
-            let alloc = crate::kstate::alloc();
-            let parent_rsp = SAVED_SP_EL0;
-            let parent_page_base = parent_rsp & !0xFFF;
-            let child_stack_pages = 4u64;
-            let child_va_base = 0x7FFD_0000u64;
-
-            let mut ttbr0: u64;
-            core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
-            let mut upt = crate::arch::aarch64::paging::PageTable4Level::from_cr3(
-                rux_klib::PhysAddr::new(ttbr0 as usize));
-            let flags = rux_mm::MappingFlags::READ
-                .or(rux_mm::MappingFlags::WRITE)
-                .or(rux_mm::MappingFlags::USER);
-
-            for p in 0..child_stack_pages {
-                let src_va = parent_page_base - (child_stack_pages - 1 - p) * 4096;
-                let dst_va = child_va_base + p * 4096;
-                let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
-                let src = src_va as *const u8;
-                let dst = frame.as_usize() as *mut u8;
-                for j in 0..4096 { *dst.add(j) = *src.add(j); }
-                let _ = upt.unmap_4k(rux_klib::VirtAddr::new(dst_va as usize));
-                let _ = upt.map_4k(rux_klib::VirtAddr::new(dst_va as usize), frame, flags, alloc);
-            }
-
-            let offset_in_page = parent_rsp - parent_page_base;
-            let child_top_va = child_va_base + (child_stack_pages - 1) * 4096;
-            let child_sp = child_top_va + offset_in_page;
-            core::arch::asm!("msr sp_el0, {}", in(reg) child_sp, options(nostack));
-
-            *regs.add(0) = 0;
-            return 0;
-        } else {
-            // Second return (from longjmp in exit): parent path.
-            // Restore the parent's page table (exec replaced it)
-            if SAVED_TTBR0 != 0 {
-                // Switch back to parent's page table with full cache maintenance.
-                // The child used the same VAs mapped to different PAs.
-                // - TLB must be flushed (VA→PA translation changed)
-                // - I-cache must be invalidated (VIPT on Cortex-A72, stale entries)
-                core::arch::asm!(
-                    "msr ttbr0_el1, {}",
-                    "isb",
-                    "tlbi vmalle1is",
-                    "dsb ish",
-                    "ic iallu",       // invalidate entire instruction cache
-                    "dsb ish",
-                    "isb",
-                    in(reg) SAVED_TTBR0,
-                    options(nostack)
-                );
-            }
-                serial::write_str("rux: vfork parent resumed\n");
-
-            // Clear vfork state so exit() doesn't longjmp again
-            VFORK_JMP.sp = 0;
-
-            // Restore SP_EL0 and TPIDR_EL0 (TLS base)
-            core::arch::asm!("msr sp_el0, {}", in(reg) SAVED_SP_EL0, options(nostack));
-            core::arch::asm!("msr tpidr_el0, {}", in(reg) SAVED_TPIDR, options(nostack));
-
-            // Restore process state that exec reset
-            crate::syscall::IN_VFORK_CHILD = false;
-            crate::syscall::MMAP_BASE = SAVED_MMAP_BASE;
-            crate::syscall::PROGRAM_BRK = SAVED_PROGRAM_BRK;
-            crate::syscall::CWD_INODE = SAVED_CWD_INODE;
-            for i in 0..64 { crate::fdtable::FD_TABLE[i] = SAVED_FDS[i]; }
-
-            // Restore frame and eret directly (kernel stack is corrupted).
-            let frame = SAVED_REGS_PTR;
-            for i in 0..FRAME_REGS {
-                *frame.add(i) = SAVED_PARENT_FRAME[i];
-            }
-            *frame.add(0) = val as u64; // x0 = child PID
-
-            // Match exception.S restore_context exactly
-            core::arch::asm!(
-                "mov sp, {frame}",
-                "ldp x30, x10, [sp, #240]",
-                "ldr x11, [sp, #256]",
-                "msr elr_el1, x10",
-                "msr spsr_el1, x11",
-                "ldp x0,  x1,  [sp, #0]",
-                "ldp x2,  x3,  [sp, #16]",
-                "ldp x4,  x5,  [sp, #32]",
-                "ldp x6,  x7,  [sp, #48]",
-                "ldp x8,  x9,  [sp, #64]",
-                "ldp x10, x11, [sp, #80]",
-                "ldp x12, x13, [sp, #96]",
-                "ldp x14, x15, [sp, #112]",
-                "ldp x16, x17, [sp, #128]",
-                "ldp x18, x19, [sp, #144]",
-                "ldp x20, x21, [sp, #160]",
-                "ldp x22, x23, [sp, #176]",
-                "ldp x24, x25, [sp, #192]",
-                "ldp x26, x27, [sp, #208]",
-                "ldp x28, x29, [sp, #224]",
-                "add sp, sp, #272",
-                "eret",
-                frame = in(reg) frame,
-                options(noreturn)
-            );
-        }
-    }
-}
-
 // setjmp/longjmp buffer: callee-saved regs + SP + LR
 #[repr(C)]
 struct JmpBuf {
@@ -378,33 +254,6 @@ static mut VFORK_JMP: JmpBuf = JmpBuf {
     x19: 0, x20: 0, x21: 0, x22: 0, x23: 0, x24: 0,
     x25: 0, x26: 0, x27: 0, x28: 0, x29: 0, lr: 0, sp: 0,
 };
-
-/// Check if a vfork parent is waiting.
-pub fn vfork_jmp_active() -> bool {
-    unsafe { VFORK_JMP.sp != 0 }
-}
-
-/// Resume the vfork parent with the given child PID. Does not return.
-pub unsafe fn vfork_longjmp_to_parent(child_pid: i64) -> ! {
-    vfork_longjmp(&raw mut VFORK_JMP, child_pid);
-}
-
-// Saved parent exception frame (34 u64s)
-static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
-
-// Saved parent SP_EL0 (user stack pointer) — not part of exception frame
-static mut SAVED_SP_EL0: u64 = 0;
-
-// Saved TTBR0_EL1 from before exec, so the parent can restore its page table
-static mut SAVED_TTBR0: u64 = 0;
-static mut SAVED_REGS_PTR: *mut u64 = core::ptr::null_mut();
-static mut SAVED_TPIDR: u64 = 0;
-static mut SAVED_MMAP_BASE: u64 = 0;
-static mut SAVED_PROGRAM_BRK: u64 = 0;
-static mut SAVED_FDS: [crate::fdtable::OpenFile; 64] = [crate::fdtable::OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false, is_serial: false,
-    is_pipe: false, pipe_id: 0, pipe_write: false,
-}; 64];
 
 // setjmp/longjmp implemented in pure assembly for correctness
 core::arch::global_asm!(r#"
@@ -443,41 +292,6 @@ vfork_longjmp:
 extern "C" {
     fn vfork_setjmp(buf: *mut JmpBuf) -> i64;
     fn vfork_longjmp(buf: *mut JmpBuf, val: i64) -> !;
-}
-
-fn syscall_exec(path_ptr: u64, argv_ptr: u64) -> ! {
-    unsafe {
-        use rux_vfs::FileSystem;
-
-        // Save TTBR0 FIRST, before any allocations or page table changes.
-        // We need the parent's page table root so the parent can restore it.
-        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) SAVED_TTBR0, options(nostack));
-
-        let alloc = crate::kstate::alloc();
-        let fs = crate::kstate::fs();
-
-        let path_cstr = path_ptr as *const u8;
-        let mut path_len = 0usize;
-        while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
-        let path = core::slice::from_raw_parts(path_cstr, path_len);
-
-        crate::execargs::set_from_user(path, argv_ptr, 0);
-
-        serial::write_str("rux: exec(\"");
-        serial::write_bytes(path);
-        serial::write_str("\")\n");
-
-        let ino = match rux_vfs::path::resolve_path(fs, path) {
-            Ok(ino) => ino,
-            Err(_) => { serial::write_str("rux: exec: not found\n"); loop {} }
-        };
-
-        // Switch to kernel PT and mark subsequent allocations as child pages.
-        crate::pgtrack::begin_child(alloc);
-
-        serial::write_str("rux: entering user mode...\n");
-        crate::elf::load_elf_from_inode(ino as u64, alloc);
-    }
 }
 
 /// Enter user mode (EL0) via eret.

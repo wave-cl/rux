@@ -28,13 +28,6 @@ impl rux_arch::TimerOps for Aarch64 {
     fn ticks() -> u64 { timer::ticks() }
 }
 
-unsafe impl rux_arch::VforkOps for Aarch64 {
-    fn vfork_jmp_active() -> bool { syscall::vfork_jmp_active() }
-    unsafe fn vfork_longjmp_to_parent(child_pid: i64) -> ! {
-        syscall::vfork_longjmp_to_parent(child_pid)
-    }
-}
-
 impl rux_arch::ArchInfo for Aarch64 {
     const MACHINE_NAME: &'static [u8] = b"aarch64";
 }

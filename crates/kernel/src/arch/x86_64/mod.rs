@@ -33,12 +33,6 @@ impl rux_arch::TimerOps for X86_64 {
     fn ticks() -> u64 { pit::ticks() }
 }
 
-unsafe impl rux_arch::VforkOps for X86_64 {
-    fn vfork_jmp_active() -> bool { syscall::vfork_jmp_active() }
-    unsafe fn vfork_longjmp_to_parent(child_pid: i64) -> ! {
-        syscall::vfork_longjmp_to_parent(child_pid)
-    }
-}
 
 impl rux_arch::ArchInfo for X86_64 {
     const MACHINE_NAME: &'static [u8] = b"x86_64";

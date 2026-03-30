@@ -126,15 +126,6 @@ pub trait TimerOps {
     fn ticks() -> u64;
 }
 
-/// Vfork setjmp/longjmp control flow.
-///
-/// # Safety
-/// `vfork_longjmp_to_parent` performs non-local control flow (longjmp).
-pub unsafe trait VforkOps {
-    fn vfork_jmp_active() -> bool;
-    unsafe fn vfork_longjmp_to_parent(child_pid: i64) -> !;
-}
-
 /// Architecture metadata (machine name for uname, etc.).
 pub trait ArchInfo {
     const MACHINE_NAME: &'static [u8];
@@ -182,6 +173,10 @@ pub unsafe trait VforkContext {
     unsafe fn clear_jmp();
     /// Perform setjmp. Returns 0 on first call, child PID on longjmp return.
     unsafe fn setjmp() -> i64;
+    /// Check if a vfork parent is waiting (setjmp state is active).
+    fn jmp_active() -> bool;
+    /// Resume the vfork parent with the given child PID. Does not return.
+    unsafe fn longjmp(child_pid: i64) -> !;
     /// Restore parent registers and return to user mode with the given value.
     /// Does not return.
     unsafe fn restore_and_return_to_user(return_val: i64, user_sp: u64) -> !;
