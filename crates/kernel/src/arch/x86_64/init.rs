@@ -1,7 +1,7 @@
 /// x86_64 boot initialization: hardware setup, tests, and shell launch.
 
 use super::{serial, exit};
-use crate::{scheduler, elf, pgtrack, write_hex_serial, write_u32, COUNTER_A, COUNTER_B};
+use crate::{scheduler, elf, pgtrack, COUNTER_A, COUNTER_B};
 
 pub fn x86_64_init(multiboot_info: usize) {
     // Initialize GDT with TSS — use the actual boot_stack_top from boot.S
@@ -36,24 +36,24 @@ pub fn x86_64_init(multiboot_info: usize) {
 
     // ── Parse multiboot memory map ──────────────────────────────────────
     serial::write_str("rux: multiboot info at ");
-    write_hex_serial(multiboot_info);
+    { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, multiboot_info)); }
     serial::write_str("\n");
     let memmap = unsafe { super::multiboot::parse_memory_map(multiboot_info) };
     serial::write_str("rux: memory map (");
     let mut buf = [0u8; 10];
-    serial::write_str(write_u32(&mut buf, memmap.count as u32));
+    serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, memmap.count as u32));
     serial::write_str(" regions, ");
-    serial::write_str(write_u32(&mut buf, (memmap.total_usable / (1024 * 1024)) as u32));
+    serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, (memmap.total_usable / (1024 * 1024)) as u32));
     serial::write_str(" MiB usable)\n");
 
     for i in 0..memmap.count {
         let r = &memmap.regions[i];
         serial::write_str("  ");
-        write_hex_serial(r.base.as_usize());
+        { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, r.base.as_usize())); }
         serial::write_str(" - ");
-        write_hex_serial(r.base.as_usize() + r.size);
+        { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, r.base.as_usize() + r.size)); }
         serial::write_str(" (");
-        serial::write_str(write_u32(&mut buf, (r.size / 1024) as u32));
+        serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, (r.size / 1024) as u32));
         serial::write_str(" KiB)\n");
     }
 
@@ -76,9 +76,9 @@ pub fn x86_64_init(multiboot_info: usize) {
         let frames = frames.min(16384);
 
         serial::write_str("rux: init allocator at ");
-        write_hex_serial(alloc_base);
+        { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, alloc_base)); }
         serial::write_str(" (");
-        serial::write_str(write_u32(&mut buf, frames));
+        serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, frames));
         serial::write_str(" frames)\n");
 
         unsafe {
@@ -98,7 +98,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             use rux_mm::FrameAllocator;
             let page = alloc.alloc(rux_mm::PageSize::FourK).expect("alloc failed");
             serial::write_str("rux: alloc at ");
-            write_hex_serial(page.as_usize());
+            { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, page.as_usize())); }
             serial::write_str("\n");
             alloc.dealloc(page, rux_mm::PageSize::FourK);
             serial::write_str("rux: dealloc OK\n");
@@ -131,7 +131,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             let mut pt = super::paging::PageTable4Level::new(alloc)
                 .expect("failed to create page table");
             serial::write_str("rux: page table created (root=");
-            write_hex_serial(pt.root_phys().as_usize());
+            { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, pt.root_phys().as_usize())); }
             serial::write_str(")\n");
 
             let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("alloc frame");
@@ -139,9 +139,9 @@ pub fn x86_64_init(multiboot_info: usize) {
             let flags = rux_mm::MappingFlags::READ.or(rux_mm::MappingFlags::WRITE);
             pt.map_4k(test_virt, frame, flags, alloc).expect("map failed");
             serial::write_str("rux: mapped ");
-            write_hex_serial(test_virt.as_usize());
+            { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, test_virt.as_usize())); }
             serial::write_str(" -> ");
-            write_hex_serial(frame.as_usize());
+            { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, frame.as_usize())); }
             serial::write_str("\n");
 
             let translated = pt.translate(test_virt).expect("translate failed");
@@ -215,9 +215,9 @@ pub fn x86_64_init(multiboot_info: usize) {
     let b_count = COUNTER_B.load(core::sync::atomic::Ordering::Relaxed);
     let mut buf = [0u8; 10];
     serial::write_str("rux: task A count: ");
-    serial::write_str(write_u32(&mut buf, a_count));
+    serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, a_count));
     serial::write_str(", task B count: ");
-    serial::write_str(write_u32(&mut buf, b_count));
+    serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, b_count));
     serial::write_str("\n");
     if a_count > 0 && b_count > 0 {
         serial::write_str("rux: preemptive scheduling OK!\n");
@@ -256,7 +256,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             child.sched.state = rux_sched::TaskState::Zombie;
             let exit_code = (child.exit_code >> 8) & 0xFF;
             serial::write_str("rux: wait OK (child exited with code ");
-            serial::write_str(write_u32(&mut buf, exit_code as u32));
+            serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, exit_code as u32));
             serial::write_str(")\n");
             if exit_code != 42 {
                 serial::write_str("FAIL: wrong exit code\n");
@@ -296,10 +296,10 @@ unsafe fn init_ramfs_and_exec(multiboot_info: usize) -> ! {
     // Unpack initramfs from multiboot module (passed via -initrd)
     if let Some((initrd_start, initrd_size)) = super::multiboot::get_initrd(multiboot_info) {
         serial::write_str("rux: initrd at ");
-        write_hex_serial(initrd_start);
+        { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, initrd_start)); }
         serial::write_str(" (");
         let mut buf = [0u8; 10];
-        serial::write_str(write_u32(&mut buf, initrd_size as u32));
+        serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, initrd_size as u32));
         serial::write_str(" bytes)\n");
         let data = core::slice::from_raw_parts(initrd_start as *const u8, initrd_size);
         rux_vfs::cpio::unpack_cpio(fs, data, Some(serial::write_str));

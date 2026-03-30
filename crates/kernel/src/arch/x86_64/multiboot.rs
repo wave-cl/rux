@@ -60,7 +60,7 @@ pub unsafe fn parse_memory_map(info_addr: usize) -> MemoryMap {
 
     // Debug: print flags
     crate::arch::x86_64::serial::write_str("  multiboot flags: ");
-    crate::write_hex_serial(info.flags as usize);
+    { let mut __hb = [0u8; 16]; super::serial::write_str("0x"); super::serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, info.flags as usize)); }
     crate::arch::x86_64::serial::write_str("\n");
 
     // Check if memory map is present (flag bit 6)

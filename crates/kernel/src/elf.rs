@@ -98,15 +98,16 @@ pub unsafe fn load_elf_from_inode(
     {
         use rux_arch::SerialOps;
         type A = crate::arch::Arch;
+        let mut hb = [0u8; 16];
         A::write_str("rux: entry=0x");
-        crate::write_hex_serial(elf_info.entry as usize);
+        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, elf_info.entry as usize));
         A::write_str(" sp=0x");
-        crate::write_hex_serial(user_sp);
+        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, user_sp));
         let sp_ptr = user_sp as *const usize;
-        A::write_str(" argc=");
-        crate::write_hex_serial(*sp_ptr as usize);
+        A::write_str(" argc=0x");
+        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, *sp_ptr as usize));
         A::write_str(" argv0=0x");
-        crate::write_hex_serial(*sp_ptr.add(1) as usize);
+        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, *sp_ptr.add(1) as usize));
         A::write_str("\n");
     }
 

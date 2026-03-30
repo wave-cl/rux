@@ -353,7 +353,7 @@ pub fn creat(path_ptr: usize) -> isize {
 pub fn exit(status: i32) -> ! {
     Arch::write_str("rux: user exit(");
     let mut buf = [0u8; 10];
-    Arch::write_str(crate::write_u32(&mut buf, status as u32));
+    Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, status as u32));
     Arch::write_str(")\n");
 
     unsafe { super::LAST_CHILD_EXIT = status; }

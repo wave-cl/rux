@@ -96,7 +96,11 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
 
 fn dump_user_fault(label: &str, far: u64, esr: u64, frame: *const u8) {
     let s = super::serial::write_str;
-    let h = |v: usize| crate::write_hex_serial(v);
+    let h = |v: usize| {
+        let mut b = [0u8; 16];
+        super::serial::write_str("0x");
+        super::serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut b, v));
+    };
     unsafe {
         let r = frame as *const u64;
         // frame: x0..x29(30 regs), x30(lr), elr_el1, spsr_el1

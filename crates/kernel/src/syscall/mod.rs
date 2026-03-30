@@ -223,7 +223,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
             use rux_arch::SerialOps;
             crate::arch::Arch::write_str("rux: unknown syscall ");
             let mut buf = [0u8; 10];
-            crate::arch::Arch::write_str(crate::write_u32(&mut buf, nr as u32));
+            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, nr as u32));
             crate::arch::Arch::write_str("\n");
             -38
         }

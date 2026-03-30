@@ -2,7 +2,7 @@
 
 use super::serial;
 use super::exit;
-use crate::{scheduler, elf, pgtrack, write_hex_serial, write_u32, COUNTER_A, COUNTER_B};
+use crate::{scheduler, elf, pgtrack, COUNTER_A, COUNTER_B};
 
 pub fn aarch64_init(dtb_addr: usize) {
     serial::write_str("rux: aarch64 running in EL1\n");
@@ -151,9 +151,9 @@ pub fn aarch64_init(dtb_addr: usize) {
     let b_count = COUNTER_B.load(core::sync::atomic::Ordering::Relaxed);
     let mut buf = [0u8; 10];
     serial::write_str("rux: task A count: ");
-    serial::write_str(write_u32(&mut buf, a_count));
+    serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, a_count));
     serial::write_str(", task B count: ");
-    serial::write_str(write_u32(&mut buf, b_count));
+    serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, b_count));
     serial::write_str("\n");
     if a_count > 0 && b_count > 0 {
         serial::write_str("rux: preemptive scheduling OK!\n");
@@ -197,10 +197,10 @@ unsafe fn init_ramfs_and_exec(dtb_addr: usize) -> ! {
     }.or_else(|| find_cpio_in_ram(0x44100000, 0x47F00000));
     if let Some((initrd_start, initrd_size)) = initrd {
         serial::write_str("rux: initrd at ");
-        write_hex_serial(initrd_start);
+        { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, initrd_start)); }
         serial::write_str(" (");
         let mut buf = [0u8; 10];
-        serial::write_str(write_u32(&mut buf, initrd_size as u32));
+        serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, initrd_size as u32));
         serial::write_str(" bytes)\n");
         let data = core::slice::from_raw_parts(initrd_start as *const u8, initrd_size);
         rux_vfs::cpio::unpack_cpio(fs, data, Some(serial::write_str));
@@ -230,10 +230,10 @@ unsafe fn find_cpio_in_ram(start: usize, end: usize) -> Option<(usize, usize)> {
         if *p == magic {
             let size = end - addr;
             serial::write_str("rux: initrd found at ");
-            write_hex_serial(addr);
+            { let mut __hb = [0u8; 16]; serial::write_str("0x"); serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, addr)); }
             serial::write_str(" (");
             let mut buf = [0u8; 10];
-            serial::write_str(write_u32(&mut buf, size as u32));
+            serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, size as u32));
             serial::write_str(" bytes)\n");
             return Some((addr, size));
         }

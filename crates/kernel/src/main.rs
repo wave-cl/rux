@@ -42,8 +42,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         Arch::write_str(location.file());
         Arch::write_str(":");
         let mut buf = [0u8; 10];
-        let s = write_u32(&mut buf, location.line());
-        Arch::write_str(s);
+        Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, location.line()));
     }
     Arch::write_str("\n");
     if let Some(msg) = info.message().as_str() {
@@ -51,16 +50,4 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         Arch::write_str("\n");
     }
     Arch::exit(Arch::EXIT_FAILURE);
-}
-
-// ── Utility functions — thin wrappers around rux_klib::fmt ──────────
-
-pub fn write_hex_serial(n: usize) {
-    Arch::write_str("0x");
-    let mut buf = [0u8; 16];
-    Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut buf, n));
-}
-
-pub fn write_u32(buf: &mut [u8; 10], n: u32) -> &str {
-    rux_klib::fmt::u32_to_str(buf, n)
 }

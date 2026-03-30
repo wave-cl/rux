@@ -314,42 +314,41 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 let r = frame as *const u64;
                 // frame layout: r15..r8, rbp, rdi, rsi, rdx, rcx, rbx, rax, vec, err, rip, cs, rfl, rsp, ss
                 let user = error_code & 4 != 0;
-                super::serial::write_str(if user { "\n=== USER PAGE FAULT ===\n" } else { "\n=== KERNEL PAGE FAULT ===\n" });
-                super::serial::write_str("  fault addr: "); crate::write_hex_serial(cr2 as usize);
-                super::serial::write_str("  err: "); crate::write_hex_serial(error_code as usize); super::serial::write_byte(b'\n');
-                super::serial::write_str("  rip: "); crate::write_hex_serial(*r.add(17) as usize);
-                super::serial::write_str("  rsp: "); crate::write_hex_serial(*r.add(20) as usize); super::serial::write_byte(b'\n');
-                super::serial::write_str("  rax: "); crate::write_hex_serial(*r.add(14) as usize);
-                super::serial::write_str("  rbx: "); crate::write_hex_serial(*r.add(13) as usize); super::serial::write_byte(b'\n');
-                super::serial::write_str("  rcx: "); crate::write_hex_serial(*r.add(12) as usize);
-                super::serial::write_str("  rdx: "); crate::write_hex_serial(*r.add(11) as usize); super::serial::write_byte(b'\n');
-                super::serial::write_str("  rdi: "); crate::write_hex_serial(*r.add(9) as usize);
-                super::serial::write_str("  rsi: "); crate::write_hex_serial(*r.add(10) as usize); super::serial::write_byte(b'\n');
-                super::serial::write_str("  rbp: "); crate::write_hex_serial(*r.add(8) as usize);
-                super::serial::write_str("  r8:  "); crate::write_hex_serial(*r.add(7) as usize); super::serial::write_byte(b'\n');
-                super::serial::write_str("  cr3: "); crate::write_hex_serial(cr3 as usize);
-                super::serial::write_str("  fs:  "); crate::write_hex_serial(fs_base as usize); super::serial::write_byte(b'\n');
+                let w = |s: &str| super::serial::write_str(s);
+                let h = |v: usize| {
+                    let mut b = [0u8; 16];
+                    super::serial::write_str("0x");
+                    super::serial::write_bytes(rux_klib::fmt::usize_to_hex(&mut b, v));
+                };
+                w(if user { "\n=== USER PAGE FAULT ===\n" } else { "\n=== KERNEL PAGE FAULT ===\n" });
+                w("  fault addr: "); h(cr2 as usize);
+                w("  err: "); h(error_code as usize); super::serial::write_byte(b'\n');
+                w("  rip: "); h(*r.add(17) as usize);
+                w("  rsp: "); h(*r.add(20) as usize); super::serial::write_byte(b'\n');
+                w("  rax: "); h(*r.add(14) as usize);
+                w("  rbx: "); h(*r.add(13) as usize); super::serial::write_byte(b'\n');
+                w("  rcx: "); h(*r.add(12) as usize);
+                w("  rdx: "); h(*r.add(11) as usize); super::serial::write_byte(b'\n');
+                w("  rdi: "); h(*r.add(9) as usize);
+                w("  rsi: "); h(*r.add(10) as usize); super::serial::write_byte(b'\n');
+                w("  rbp: "); h(*r.add(8) as usize);
+                w("  r8:  "); h(*r.add(7) as usize); super::serial::write_byte(b'\n');
+                w("  cr3: "); h(cr3 as usize);
+                w("  fs:  "); h(fs_base as usize); super::serial::write_byte(b'\n');
 
-                // Translate a few interesting VAs through the current page table
                 let upt = crate::arch::x86_64::paging::PageTable4Level::from_cr3(
                     rux_klib::PhysAddr::new(cr3 as usize));
                 for &va in &[cr2 as usize, 0x10001000usize] {
                     match upt.translate(rux_klib::VirtAddr::new(va)) {
                         Ok(pa) => {
-                            super::serial::write_str("  translate 0x");
-                            crate::write_hex_serial(va);
-                            super::serial::write_str(" -> 0x");
-                            crate::write_hex_serial(pa.as_usize());
-                            // Read first 8 bytes at that PA
+                            w("  translate "); h(va);
+                            w(" -> "); h(pa.as_usize());
                             let v = *(pa.as_usize() as *const u64);
-                            super::serial::write_str(" [0x");
-                            crate::write_hex_serial(v as usize);
-                            super::serial::write_str("]\n");
+                            w(" ["); h(v as usize); w("]\n");
                         }
                         Err(_) => {
-                            super::serial::write_str("  translate 0x");
-                            crate::write_hex_serial(va);
-                            super::serial::write_str(" -> NOT MAPPED\n");
+                            w("  translate "); h(va);
+                            w(" -> NOT MAPPED\n");
                         }
                     }
                 }
@@ -374,7 +373,7 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
         _ => {
             crate::arch::x86_64::serial::write_str("INT: vector=");
             let mut buf = [0u8; 10];
-            crate::arch::x86_64::serial::write_str(crate::write_u32(&mut buf, vector as u32));
+            crate::arch::x86_64::serial::write_str(rux_klib::fmt::u32_to_str(&mut buf, vector as u32));
             crate::arch::x86_64::serial::write_byte(b'\n');
         }
     }
