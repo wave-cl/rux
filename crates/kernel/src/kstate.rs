@@ -2,11 +2,11 @@
 /// so syscall handlers can access them without passing arguments through
 /// the interrupt frame.
 
-use rux_fs::ramfs::RamFs;
+use rux_fs::vfs::Vfs;
 use rux_mm::frame::BuddyAllocator;
 
 pub struct KernelState {
-    pub fs: *mut RamFs,
+    pub fs: *mut Vfs,
     pub alloc: *mut BuddyAllocator,
 }
 
@@ -19,16 +19,16 @@ static mut KSTATE: KernelState = KernelState {
 ///
 /// # Safety
 /// Must be called exactly once, after both `fs` and `alloc` are initialized.
-pub unsafe fn init(fs: *mut RamFs, alloc: *mut BuddyAllocator) {
+pub unsafe fn init(fs: *mut Vfs, alloc: *mut BuddyAllocator) {
     KSTATE.fs = fs;
     KSTATE.alloc = alloc;
 }
 
-/// Get a mutable reference to the RamFs.
+/// Get a mutable reference to the VFS.
 ///
 /// # Safety
 /// Must only be called after `init`. Not thread-safe.
-pub unsafe fn fs() -> &'static mut RamFs {
+pub unsafe fn fs() -> &'static mut Vfs {
     &mut *KSTATE.fs
 }
 

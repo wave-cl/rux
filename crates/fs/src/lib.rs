@@ -4,6 +4,7 @@ pub mod ramfs;
 pub mod path;
 pub mod fdtable;
 pub mod cpio;
+pub mod vfs;
 
 // ── POSIX constants ─────────────────────────────────────────────────────
 
