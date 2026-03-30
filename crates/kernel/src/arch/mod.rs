@@ -22,8 +22,3 @@ pub type PageTable = x86_64::paging::PageTable4Level;
 #[cfg(target_arch = "aarch64")]
 pub type PageTable = aarch64::paging::PageTable4Level;
 
-// Legacy re-exports (will be replaced by trait calls in Phase 3)
-#[cfg(target_arch = "x86_64")]
-pub use x86_64::{serial, exit};
-#[cfg(target_arch = "aarch64")]
-pub use aarch64::{serial, exit};

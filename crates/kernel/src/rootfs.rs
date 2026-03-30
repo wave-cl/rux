@@ -284,12 +284,14 @@ pub fn populate(
         fs.write(ino, 0, cf.contents).unwrap();
     }
 
-    super::serial::write_str("rux: filesystem ready (");
+    use rux_arch::SerialOps;
+    type A = crate::arch::Arch;
+    A::write_str("rux: filesystem ready (");
     let count = DIRS.len() + 1 + BIN_CMDS.len() + SBIN_CMDS.len()
         + USR_BIN_CMDS.len() + USR_SBIN_CMDS.len() + CONFIG_FILES.len();
     let mut buf = [0u8; 10];
-    super::serial::write_str(super::write_u32(&mut buf, count as u32));
-    super::serial::write_str(" entries)\n");
+    A::write_str(crate::write_u32(&mut buf, count as u32));
+    A::write_str(" entries)\n");
 }
 
 /// Resolve a directory path like "usr/bin" from a root inode.

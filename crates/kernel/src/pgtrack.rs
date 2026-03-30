@@ -52,13 +52,8 @@ pub fn begin_child(alloc: &mut dyn FrameAllocator) {
         // Switch to kernel page table before freeing child pages,
         // because the child's page table pages are about to be freed.
         if KERNEL_PT_ROOT != 0 {
-            #[cfg(target_arch = "x86_64")]
-            core::arch::asm!("mov cr3, {}", in(reg) KERNEL_PT_ROOT, options(nostack));
-            #[cfg(target_arch = "aarch64")]
-            core::arch::asm!(
-                "msr ttbr0_el1, {}", "isb", "tlbi vmalle1is", "dsb ish", "isb",
-                in(reg) KERNEL_PT_ROOT, options(nostack)
-            );
+            use rux_arch::PageTableRootOps;
+            crate::arch::Arch::write(KERNEL_PT_ROOT);
         }
 
         // Free previous child's pages

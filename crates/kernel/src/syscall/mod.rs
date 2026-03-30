@@ -6,44 +6,21 @@
 pub mod posix;
 pub mod linux;
 
-// ── Arch-specific helpers (zero-cost, cfg-dispatched) ───────────────
+// ── Arch-dispatched helpers (trait-based, zero-cost) ────────────────
+//
+// These wrap the trait methods so existing call sites (`arch::serial_write_str`)
+// keep working during migration. Eventually call sites will use `Arch::*` directly.
 
 pub mod arch {
-    /// Write a byte to the serial console.
-    #[inline(always)]
-    pub fn serial_write_byte(b: u8) {
-        #[cfg(target_arch = "x86_64")]
-        crate::arch::x86_64::serial::write_byte(b);
-        #[cfg(target_arch = "aarch64")]
-        crate::arch::aarch64::serial::write_byte(b);
-    }
+    use rux_arch::{SerialOps, PageTableRootOps};
+    type A = crate::arch::Arch;
 
-    /// Read a byte from the serial console (blocking).
-    #[inline(always)]
-    pub fn serial_read_byte() -> u8 {
-        #[cfg(target_arch = "x86_64")]
-        { crate::arch::x86_64::serial::read_byte() }
-        #[cfg(target_arch = "aarch64")]
-        { crate::arch::aarch64::serial::read_byte() }
-    }
+    #[inline(always)] pub fn serial_write_byte(b: u8) { A::write_byte(b) }
+    #[inline(always)] pub fn serial_read_byte() -> u8 { A::read_byte() }
+    pub fn serial_write_str(s: &str) { A::write_str(s) }
+    pub fn serial_write_bytes(b: &[u8]) { A::write_bytes(b) }
 
-    /// Write a string to serial.
-    pub fn serial_write_str(s: &str) {
-        #[cfg(target_arch = "x86_64")]
-        crate::arch::x86_64::serial::write_str(s);
-        #[cfg(target_arch = "aarch64")]
-        crate::arch::aarch64::serial::write_str(s);
-    }
-
-    /// Write bytes to serial.
-    pub fn serial_write_bytes(b: &[u8]) {
-        #[cfg(target_arch = "x86_64")]
-        crate::arch::x86_64::serial::write_bytes(b);
-        #[cfg(target_arch = "aarch64")]
-        crate::arch::aarch64::serial::write_bytes(b);
-    }
-
-    /// Get timer ticks.
+    /// Timer ticks — stays cfg-dispatched (different APIs per arch).
     #[inline(always)]
     pub fn ticks() -> u64 {
         #[cfg(target_arch = "x86_64")]
@@ -52,16 +29,7 @@ pub mod arch {
         { crate::arch::aarch64::timer::ticks() }
     }
 
-    /// Read the current page table root address (CR3 / TTBR0_EL1).
-    #[inline(always)]
-    pub fn page_table_root() -> u64 {
-        let val: u64;
-        #[cfg(target_arch = "x86_64")]
-        unsafe { core::arch::asm!("mov {}, cr3", out(reg) val, options(nostack)); }
-        #[cfg(target_arch = "aarch64")]
-        unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) val, options(nostack)); }
-        val
-    }
+    #[inline(always)] pub fn page_table_root() -> u64 { A::read() }
 }
 
 // ── Shared process state ────────────────────────────────────────────
@@ -102,14 +70,10 @@ pub unsafe fn map_user_pages(
     flags: rux_mm::MappingFlags,
 ) {
     use rux_mm::FrameAllocator;
+    use rux_arch::PageTableRootOps;
     let alloc = crate::kstate::alloc();
-    let cr3 = arch::page_table_root();
-
-    #[cfg(target_arch = "x86_64")]
-    let mut upt = crate::arch::x86_64::paging::PageTable4Level::from_cr3(
-        rux_klib::PhysAddr::new(cr3 as usize));
-    #[cfg(target_arch = "aarch64")]
-    let mut upt = crate::arch::aarch64::paging::PageTable4Level::from_cr3(
+    let cr3 = crate::arch::Arch::read();
+    let mut upt = crate::arch::PageTable::from_cr3(
         rux_klib::PhysAddr::new(cr3 as usize));
 
     for pa in (start_va..end_va).step_by(4096) {

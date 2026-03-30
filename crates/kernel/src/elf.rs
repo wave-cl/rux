@@ -147,37 +147,31 @@ pub unsafe fn load_elf_from_inode(
 
     // ── Step 4: Activate page table, write stack, enter user mode ────
 
-    #[cfg(target_arch = "x86_64")]
-    crate::arch::x86_64::paging::activate(&upt);
-
-    #[cfg(target_arch = "aarch64")]
-    core::arch::asm!(
-        "msr ttbr0_el1, {}",
-        "isb",
-        "tlbi vmalle1is",
-        "dsb ish",
-        "isb",
-        in(reg) upt.root_phys().as_usize(),
-        options(nostack)
-    );
+    {
+        use rux_arch::PageTableRootOps;
+        crate::arch::Arch::write(upt.root_phys().as_usize() as u64);
+    }
 
     let user_sp = crate::execargs::write_to_stack(stack_top);
-    crate::syscall::arch::serial_write_str("rux: entry=0x");
-    crate::write_hex_serial(elf_info.entry as usize);
-    crate::syscall::arch::serial_write_str(" sp=0x");
-    crate::write_hex_serial(user_sp as usize);
-    let sp_ptr = user_sp as *const u64;
-    crate::syscall::arch::serial_write_str(" argc=");
-    crate::write_hex_serial(*sp_ptr as usize);
-    crate::syscall::arch::serial_write_str(" argv0=0x");
-    crate::write_hex_serial(*sp_ptr.add(1) as usize);
-    crate::syscall::arch::serial_write_str("\n");
+    {
+        use rux_arch::SerialOps;
+        type A = crate::arch::Arch;
+        A::write_str("rux: entry=0x");
+        crate::write_hex_serial(elf_info.entry as usize);
+        A::write_str(" sp=0x");
+        crate::write_hex_serial(user_sp as usize);
+        let sp_ptr = user_sp as *const u64;
+        A::write_str(" argc=");
+        crate::write_hex_serial(*sp_ptr as usize);
+        A::write_str(" argv0=0x");
+        crate::write_hex_serial(*sp_ptr.add(1) as usize);
+        A::write_str("\n");
+    }
 
-    #[cfg(target_arch = "x86_64")]
-    crate::arch::x86_64::syscall::enter_user_mode(elf_info.entry, user_sp);
-
-    #[cfg(target_arch = "aarch64")]
-    crate::arch::aarch64::syscall::enter_user_mode(elf_info.entry, user_sp);
+    {
+        use rux_arch::UserModeOps;
+        crate::arch::Arch::enter_user_mode(elf_info.entry, user_sp);
+    }
 }
 
 // Buffer-based ELF loaders moved to:

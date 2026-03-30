@@ -1,7 +1,8 @@
 /// aarch64 boot initialization: hardware setup, tests, and shell launch.
 
 use super::serial;
-use crate::{exit, scheduler, elf, pgtrack, write_hex_serial, write_u32, COUNTER_A, COUNTER_B};
+use super::exit;
+use crate::{scheduler, elf, pgtrack, write_hex_serial, write_u32, COUNTER_A, COUNTER_B};
 
 pub fn aarch64_init(_dtb_addr: usize) {
     serial::write_str("rux: aarch64 running in EL1\n");

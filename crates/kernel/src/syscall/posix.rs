@@ -385,20 +385,21 @@ pub fn exit(status: i32) -> ! {
 
     unsafe { super::LAST_CHILD_EXIT = status; }
 
+    // Vfork longjmp is deeply arch-specific (stays cfg-dispatched)
     #[cfg(target_arch = "x86_64")]
     unsafe {
         if crate::arch::x86_64::syscall::vfork_jmp_active() {
             crate::arch::x86_64::syscall::vfork_longjmp_to_parent(42);
         }
-        crate::arch::x86_64::exit::exit_qemu(crate::arch::x86_64::exit::EXIT_SUCCESS);
     }
     #[cfg(target_arch = "aarch64")]
     unsafe {
         if crate::arch::aarch64::syscall::vfork_jmp_active() {
             crate::arch::aarch64::syscall::vfork_longjmp_to_parent(42);
         }
-        crate::arch::aarch64::exit::exit_qemu(crate::arch::aarch64::exit::EXIT_SUCCESS);
     }
+    use rux_arch::ExitOps;
+    crate::arch::Arch::exit(crate::arch::Arch::EXIT_SUCCESS);
 }
 
 /// waitpid(pid, wstatus, options) — POSIX.1
