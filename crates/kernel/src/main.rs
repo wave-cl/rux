@@ -5,6 +5,7 @@ mod arch;
 
 mod scheduler;
 mod elf;
+pub mod boot;
 mod kstate;
 pub mod pipe;
 pub mod pgtrack;

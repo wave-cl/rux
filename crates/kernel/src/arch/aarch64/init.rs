@@ -2,7 +2,7 @@
 
 use super::console;
 use super::exit;
-use crate::{scheduler, elf, pgtrack};
+use crate::{scheduler, pgtrack};
 
 pub fn aarch64_init(dtb_addr: usize) {
     console::write_str("rux: aarch64 running in EL1\n");
@@ -58,83 +58,36 @@ pub fn aarch64_init(dtb_addr: usize) {
     // ── Init scheduler (needed for vfork/exec) ──────────────────────
     unsafe { scheduler::init_context_fns(); }
 
-    // ── RamFs + initramfs + exec /sbin/init ──────────────────────
-    unsafe { init_ramfs_and_exec(dtb_addr); }
-}
+    // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
+    unsafe {
+        let alloc_ptr = 0x43000000 as *mut rux_mm::frame::BuddyAllocator;
+        let alloc_size = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
+        let ramfs_addr = (0x43000000 + alloc_size + 0xFFF) & !0xFFF;
 
-#[inline(never)]
-unsafe fn init_ramfs_and_exec(dtb_addr: usize) -> ! {
-    use rux_fs::FileSystem;
+        // Find initrd: try DTB, then scan RAM
+        let initrd = if dtb_addr != 0 {
+            super::devicetree::get_initrd(dtb_addr)
+        } else {
+            None
+        }.or_else(|| find_cpio_in_ram(0x44100000, 0x47F00000));
 
-    console::write_str("rux: init ramfs...\n");
-    let alloc_ptr = 0x43000000 as *mut rux_mm::frame::BuddyAllocator;
-    let alloc_size = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
-    let ramfs_addr = (0x43000000 + alloc_size + 0xFFF) & !0xFFF;
-    let ramfs_ptr = ramfs_addr as *mut rux_fs::ramfs::RamFs;
-
-    let fs_bytes = core::mem::size_of::<rux_fs::ramfs::RamFs>();
-    let fs_qwords = (fs_bytes + 7) / 8;
-    for i in 0..fs_qwords {
-        core::ptr::write_volatile((ramfs_ptr as *mut u64).add(i), 0u64);
-    }
-    console::write_str("rux: zeroing done\n");
-
-    let alloc_dyn: *mut dyn rux_mm::FrameAllocator =
-        &mut *alloc_ptr as &mut dyn rux_mm::FrameAllocator;
-    rux_fs::ramfs::RamFs::init_at(ramfs_ptr, alloc_dyn);
-
-    // Find and unpack initramfs into ramfs (before VFS wrapping)
-    let initrd = if dtb_addr != 0 {
-        super::devicetree::get_initrd(dtb_addr)
-    } else {
-        None
-    }.or_else(|| find_cpio_in_ram(0x44100000, 0x47F00000));
-    if let Some((initrd_start, initrd_size)) = initrd {
-        console::write_str("rux: initrd at ");
-        { let mut hb = [0u8; 16]; console::write_str("0x"); console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, initrd_start)); }
-        console::write_str(" (");
-        let mut buf = [0u8; 10];
-        console::write_str(rux_klib::fmt::u32_to_str(&mut buf, initrd_size as u32));
-        console::write_str(" bytes)\n");
-        let data = core::slice::from_raw_parts(initrd_start as *const u8, initrd_size);
-        rux_fs::cpio::unpack_cpio(&mut *ramfs_ptr, data, Some(console::write_str));
-    } else {
-        console::write_str("rux: no initrd found!\n");
-    }
-
-    // Wrap ramfs in VFS dispatch layer
-    let vfs_addr = (ramfs_addr + fs_bytes + 0xFFF) & !0xFFF;
-    let vfs_ptr = vfs_addr as *mut rux_fs::vfs::Vfs;
-    core::ptr::write_bytes(vfs_ptr as *mut u8, 0, core::mem::size_of::<rux_fs::vfs::Vfs>());
-    rux_fs::vfs::Vfs::init_at(vfs_ptr, ramfs_ptr);
-
-    // Mount procfs at /proc
-    {
-        use rux_fs::FileSystem;
-        let vfs = &mut *vfs_ptr;
-        let root = vfs.root_inode();
         static mut PROCFS: rux_fs::procfs::ProcFs = rux_fs::procfs::ProcFs::new(
             || super::timer::ticks(),
-            || 16384, // total frames (hardcoded, matches init)
+            || 16384,
             || unsafe {
-                let alloc = &*(0x43000000 as *const rux_mm::frame::BuddyAllocator);
                 use rux_mm::FrameAllocator;
-                alloc.available_frames(rux_mm::PageSize::FourK)
+                (*(0x43000000 as *const rux_mm::frame::BuddyAllocator))
+                    .available_frames(rux_mm::PageSize::FourK)
             },
         );
-        let _ = vfs.mount(root, b"proc", rux_fs::vfs::MountedFs::Proc(&raw mut PROCFS));
-        console::write_str("rux: procfs mounted at /proc\n");
+        crate::boot::boot(crate::boot::BootParams {
+            alloc_ptr,
+            ramfs_ptr: ramfs_addr as *mut rux_fs::ramfs::RamFs,
+            initrd,
+            procfs: &mut *(&raw mut PROCFS),
+            log: console::write_str,
+        });
     }
-
-    crate::kstate::init(vfs_ptr, alloc_ptr);
-    console::write_str("rux: kernel state initialized\n");
-
-    let vfs = &mut *vfs_ptr;
-    console::write_str("rux: exec /sbin/init\n");
-    rux_proc::execargs::set(b"/bin/sh", b"");
-    let init_ino = rux_fs::path::resolve_path(vfs, b"/sbin/init").expect("/sbin/init not found");
-    let alloc = &mut *alloc_ptr;
-    elf::load_elf_from_inode(init_ino as u64, alloc);
 }
 
 /// Scan RAM for a cpio newc archive (magic "070701").
