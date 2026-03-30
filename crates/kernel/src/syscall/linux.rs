@@ -117,3 +117,51 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> 
 pub fn set_tid_address(_tidptr: usize) -> isize {
     1 // TID = 1
 }
+
+/// sysinfo(info) — Linux-specific system information.
+/// Used by `free`, `uptime`, and other utilities.
+pub fn sysinfo(info_ptr: usize) -> isize {
+    if info_ptr == 0 { return -14; }
+    unsafe {
+        use rux_arch::TimerOps;
+        let ticks = crate::arch::Arch::ticks();
+        let uptime = ticks / 1000; // seconds since boot
+
+        let total_frames = {
+            use rux_mm::FrameAllocator;
+            16384usize // hardcoded, matches init
+        };
+        let free_frames = {
+            use rux_mm::FrameAllocator;
+            crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK)
+        };
+
+        let p = info_ptr as *mut u8;
+        // Zero the struct first (varies 64-112 bytes depending on arch)
+        for i in 0..112 { *p.add(i) = 0; }
+
+        let w = core::mem::size_of::<usize>();
+
+        // uptime (long)
+        *(info_ptr as *mut usize) = uptime as usize;
+        // loads[3] (unsigned long × 3) — fixed-point with 16-bit fraction
+        // 0 load = 0
+        let loads_ptr = info_ptr + w;
+        *(loads_ptr as *mut usize) = 0;
+        *((loads_ptr + w) as *mut usize) = 0;
+        *((loads_ptr + 2 * w) as *mut usize) = 0;
+        // totalram (unsigned long)
+        *((info_ptr + 4 * w) as *mut usize) = total_frames * 4096;
+        // freeram (unsigned long)
+        *((info_ptr + 5 * w) as *mut usize) = free_frames * 4096;
+        // sharedram = 0, bufferram = 0
+        // totalswap = 0, freeswap = 0
+        // procs (unsigned short) — at offset 8*w on 64-bit
+        *((info_ptr + 8 * w) as *mut u16) = 1; // 1 process
+        // mem_unit (unsigned int) — at offset after totalhigh/freehigh
+        // On 64-bit: offset = 10*w + 4 (after procs pad + totalhigh + freehigh)
+        // Simpler: mem_unit = 1 (bytes already in byte units)
+        *((info_ptr + 10 * w + 4) as *mut u32) = 1;
+    }
+    0
+}

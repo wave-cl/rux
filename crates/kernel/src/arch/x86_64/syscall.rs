@@ -185,9 +185,11 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         92 | 93 => Syscall::Chown,          // chown / fchown
         96 => Syscall::Gettimeofday,
         97 => Syscall::Getrlimit,
+        99 => Syscall::Sysinfo,
         102 | 107 => Syscall::Getuid,
         104 | 108 => Syscall::Getgid,
         109 => Syscall::Setpgid,
+        115 | 116 => Syscall::Getgroups, // getgroups / setgroups
         110 => Syscall::Getppid,
         111 => Syscall::Getpgid,
         112 => Syscall::Setsid,

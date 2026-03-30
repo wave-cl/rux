@@ -91,6 +91,7 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         160 => Syscall::Uname,
         260 => Syscall::Wait4,
         // User/group IDs
+        158 | 159 => Syscall::Getgroups, // getgroups / setgroups
         174 => Syscall::Getuid,
         175 => Syscall::Geteuid,
         176 => Syscall::Getgid,
@@ -109,6 +110,7 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         124 => Syscall::SchedYield,
         // Linux extensions
         61 => Syscall::Getdents64,
+        179 => Syscall::Sysinfo,
         96 => Syscall::SetTidAddress,
         178 => Syscall::Gettid,
         167 => Syscall::Prctl,
