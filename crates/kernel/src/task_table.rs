@@ -28,6 +28,8 @@ pub enum TaskState {
     WaitingForChild = 4,
     /// Exited, waiting to be reaped by parent.
     Zombie = 5,
+    /// Blocked on pipe read/write.
+    WaitingForPipe = 6,
 }
 
 /// Per-process state container.
@@ -67,6 +69,7 @@ pub struct TaskSlot {
     pub wake_at: u64,           // tick count for sleep wakeup
     pub last_child_exit: i32,
     pub child_available: bool,
+    pub waiting_pipe_id: u8,    // pipe id when WaitingForPipe
 }
 
 impl TaskSlot {
@@ -87,6 +90,7 @@ impl TaskSlot {
             saved_user_sp: 0, tls: 0,
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
+            waiting_pipe_id: 0,
         }
     }
 }
@@ -99,7 +103,7 @@ pub static mut TASK_TABLE: [TaskSlot; MAX_PROCS] = {
 };
 
 /// Kernel stack size per task.
-pub const KSTACK_SIZE: usize = 32768; // 32KB per task
+pub const KSTACK_SIZE: usize = 16384; // 16KB per task
 
 /// Per-task kernel stacks.
 pub static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_PROCS] = [[0; KSTACK_SIZE]; MAX_PROCS];

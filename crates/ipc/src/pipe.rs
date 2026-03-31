@@ -40,13 +40,16 @@ pub fn alloc() -> Result<u8, isize> {
     }
 }
 
-/// Read from a pipe. Returns bytes read, 0 on EOF (no writers left).
-pub fn read(pipe_id: u8, buf: *mut u8, len: usize) -> isize {
+/// Read from a pipe.
+/// Returns bytes read, 0 on EOF (no writers or empty), -11 (EAGAIN) if empty+writers+can_block.
+pub fn read_ex(pipe_id: u8, buf: *mut u8, len: usize, can_block: bool) -> isize {
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
         if !p.active { return -9; }
         if p.count == 0 {
-            return 0; // EOF or would-block
+            if p.writers == 0 { return 0; } // true EOF
+            if can_block { return -11; } // EAGAIN — caller will block
+            return 0; // non-blocking fallback
         }
         let to_read = len.min(p.count);
         for i in 0..to_read {
@@ -58,13 +61,18 @@ pub fn read(pipe_id: u8, buf: *mut u8, len: usize) -> isize {
     }
 }
 
-/// Write to a pipe. Returns bytes written, -EPIPE if no readers.
-pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> isize {
+/// Write to a pipe.
+/// Returns bytes written, -32 (EPIPE) if no readers, -11 (EAGAIN) if full+readers+can_block.
+pub fn write_ex(pipe_id: u8, buf: *const u8, len: usize, can_block: bool) -> isize {
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
         if !p.active { return -9; }
         if p.readers == 0 { return -32; }
         let space = PIPE_BUF_SIZE - p.count;
+        if space == 0 {
+            if can_block { return -11; } // EAGAIN — caller will block
+            return 0; // non-blocking fallback
+        }
         let to_write = len.min(space);
         for i in 0..to_write {
             p.buf[p.write_pos] = *buf.add(i);
@@ -73,6 +81,16 @@ pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> isize {
         p.count += to_write;
         to_write as isize
     }
+}
+
+/// Non-blocking read (used by PipeFns interface). Returns 0 on empty.
+pub fn read(pipe_id: u8, buf: *mut u8, len: usize) -> isize {
+    read_ex(pipe_id, buf, len, false)
+}
+
+/// Non-blocking write (used by PipeFns interface). Returns partial on full.
+pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> isize {
+    write_ex(pipe_id, buf, len, false)
 }
 
 /// Increment reader/writer count (called when dup/dup2 copies a pipe fd).

@@ -40,14 +40,11 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         // SIGPIPE: writing to a pipe with no readers
         if result == -32 {
             use rux_proc::signal::*;
-            let hot = &mut super::PROCESS.signal_hot;
             let cold = &super::PROCESS.signal_cold;
             let action = *cold.get_action(Signal::Pipe);
             if action.handler_type == SignalHandler::Default {
-                // Default SIGPIPE action: terminate
                 super::posix::exit(128 + 13);
             }
-            // If handler is Ignore or User, just return -EPIPE
             return -32;
         }
         // Update mtime on successful file write (skip pipes/console)
@@ -214,4 +211,30 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
         }
         total
     }
+}
+
+/// Check if the current process can safely block on a pipe.
+/// Returns false for vfork children or if no other tasks could wake us.
+unsafe fn can_pipe_block() -> bool {
+    use crate::task_table::*;
+    // Don't block in vfork child — parent is suspended, would deadlock.
+    if super::PROCESS.in_vfork_child { return false; }
+    // Only block if other tasks exist that could write/read the pipe.
+    (0..MAX_PROCS).any(|i| {
+        i != CURRENT_TASK_IDX && TASK_TABLE[i].active
+            && TASK_TABLE[i].state != TaskState::Zombie
+    })
+}
+
+/// Block the current task until a pipe has activity.
+unsafe fn pipe_block(pipe_id: u8) {
+    use crate::task_table::*;
+    use rux_sched::SchedClassOps;
+    let idx = CURRENT_TASK_IDX;
+    TASK_TABLE[idx].state = TaskState::WaitingForPipe;
+    TASK_TABLE[idx].waiting_pipe_id = pipe_id;
+    let sched = crate::scheduler::get();
+    sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
+    sched.dequeue_current();
+    sched.schedule();
 }
