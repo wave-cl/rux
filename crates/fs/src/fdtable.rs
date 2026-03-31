@@ -206,6 +206,9 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
             return (pipes.read)(FD_TABLE[fd].pipe_id, buf, len);
         }
         let f = &mut FD_TABLE[fd];
+        if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
+            return if len == 0 { 0 } else { -14 }; // -EFAULT
+        }
 
         // Get file size
         let mut stat = core::mem::zeroed::<InodeStat>();
@@ -242,6 +245,10 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
             return (pipes.write)(FD_TABLE[fd].pipe_id, buf, len);
         }
         let f = &mut FD_TABLE[fd];
+        // Validate user buffer pointer
+        if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
+            return if len == 0 { 0 } else { -14 }; // -EFAULT
+        }
 
         let user_buf = core::slice::from_raw_parts(buf, len);
         match fs.write(f.ino, f.offset as u64, user_buf) {
