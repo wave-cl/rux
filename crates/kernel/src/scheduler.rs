@@ -28,5 +28,6 @@ pub unsafe fn init_context_fns() {
         init_task_stack: crate::arch::Arch::init_task_stack,
         stop_timer: crate::arch::Arch::stop_timer,
         start_timer: crate::arch::Arch::start_timer,
+        pre_switch: Some(crate::task_table::swap_process_state),
     });
 }

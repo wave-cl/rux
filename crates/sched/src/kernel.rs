@@ -36,6 +36,8 @@ pub struct ContextFns {
     pub stop_timer: unsafe fn(),
     /// Restart the periodic timer (exit tickless idle).
     pub start_timer: unsafe fn(),
+    /// Called before context_switch to swap process state (page tables, globals, etc.).
+    pub pre_switch: Option<unsafe fn(old_idx: usize, new_idx: usize)>,
 }
 
 /// Global scheduler state.
@@ -167,6 +169,11 @@ impl Scheduler {
         }
 
         if new_idx != old_idx {
+            // Swap per-process state (page tables, FD tables, globals) before switching
+            if let Some(pre) = ctx.pre_switch {
+                (pre)(old_idx, new_idx);
+            }
+
             let old_rsp_ptr = &mut self.tasks[old_idx].saved_sp as *mut usize;
             let new_rsp = self.tasks[new_idx].saved_sp;
 

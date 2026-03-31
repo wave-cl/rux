@@ -11,7 +11,7 @@ use super::console;
 pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
 /// Saved user RSP during syscall (single-process, no swapgs needed).
-static mut SAVED_USER_RSP: u64 = 0;
+pub static mut SAVED_USER_RSP: u64 = 0;
 
 /// Debug: last RCX value before sysretq
 pub static mut DEBUG_RCX: u64 = 0;
@@ -146,6 +146,11 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     unsafe {
         if !crate::syscall::PROCESS.in_vfork_child && crate::syscall::PROCESS.signal_hot.has_deliverable() {
             return crate::syscall::generic_deliver_signal::<super::X86_64>(result);
+        }
+        // Check for pending reschedule (set by timer tick)
+        let sched = crate::scheduler::get();
+        if sched.need_resched {
+            sched.schedule();
         }
     }
     result

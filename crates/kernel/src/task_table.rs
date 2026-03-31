@@ -169,3 +169,94 @@ pub unsafe fn init_pid1() {
             slot.kstack_top as u64;
     }
 }
+
+// ── Context switch process state swap ─────────────────────────────────
+
+/// Swap process state between two task slots.
+/// Called by the scheduler's `pre_switch` callback before the actual
+/// context switch. Saves globals → old slot, loads new slot → globals.
+///
+/// # Safety
+/// Must be called with interrupts disabled (during schedule()).
+pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
+    use crate::syscall::PROCESS;
+    use rux_fs::fdtable::FD_TABLE;
+
+    // ── Save current globals → old slot ──────────────────────────────
+    let old = &mut TASK_TABLE[old_idx];
+    old.program_brk = PROCESS.program_brk;
+    old.mmap_base = PROCESS.mmap_base;
+    old.fs_ctx = PROCESS.fs_ctx;
+    old.in_vfork_child = PROCESS.in_vfork_child;
+    // Signal state: copy hot (16 bytes), leave cold in place (3KB, too large to copy every switch)
+    old.signal_hot = PROCESS.signal_hot;
+    // TODO: signal_cold swap when we have per-process signal handlers
+    old.signal_restorer = PROCESS.signal_restorer;
+    old.last_child_exit = PROCESS.last_child_exit;
+    old.child_available = PROCESS.child_available;
+    for i in 0..64 { old.fds[i] = FD_TABLE[i]; }
+
+    // Save hardware state
+    #[cfg(target_arch = "x86_64")]
+    {
+        old.saved_user_sp = crate::arch::x86_64::syscall::SAVED_USER_RSP as usize;
+        let lo: u32; let hi: u32;
+        core::arch::asm!("rdmsr", in("ecx") 0xC0000100u32, out("eax") lo, out("edx") hi, options(nostack));
+        old.tls = (hi as u64) << 32 | lo as u64;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let sp: u64;
+        core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
+        old.saved_user_sp = sp as usize;
+        let tls: u64;
+        core::arch::asm!("mrs {}, tpidr_el0", out(reg) tls, options(nostack));
+        old.tls = tls;
+    }
+
+    // ── Load new slot → globals ──────────────────────────────────────
+    let new = &TASK_TABLE[new_idx];
+    PROCESS.program_brk = new.program_brk;
+    PROCESS.mmap_base = new.mmap_base;
+    PROCESS.fs_ctx = new.fs_ctx;
+    PROCESS.in_vfork_child = new.in_vfork_child;
+    PROCESS.signal_hot = new.signal_hot;
+    PROCESS.signal_restorer = new.signal_restorer;
+    PROCESS.last_child_exit = new.last_child_exit;
+    PROCESS.child_available = new.child_available;
+    for i in 0..64 { FD_TABLE[i] = new.fds[i]; }
+
+    // Restore hardware state
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::arch::x86_64::syscall::SAVED_USER_RSP = new.saved_user_sp as u64;
+        crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP = new.kstack_top as u64;
+        let lo = new.tls as u32;
+        let hi = (new.tls >> 32) as u32;
+        core::arch::asm!("wrmsr", in("ecx") 0xC0000100u32, in("eax") lo, in("edx") hi, options(nostack));
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        core::arch::asm!("msr sp_el0, {}", in(reg) new.saved_user_sp as u64, options(nostack));
+        core::arch::asm!("msr tpidr_el0, {}", in(reg) new.tls, options(nostack));
+    }
+
+    // Switch page table
+    if new.pt_root != 0 && new.pt_root != old.pt_root {
+        #[cfg(target_arch = "x86_64")]
+        core::arch::asm!("mov cr3, {}", in(reg) new.pt_root, options(nostack));
+        #[cfg(target_arch = "aarch64")]
+        {
+            core::arch::asm!(
+                "msr ttbr0_el1, {}",
+                "isb",
+                "tlbi vmalle1is",
+                "dsb ish",
+                in(reg) new.pt_root,
+                options(nostack)
+            );
+        }
+    }
+
+    CURRENT_TASK_IDX = new_idx;
+}

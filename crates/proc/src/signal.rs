@@ -369,6 +369,7 @@ pub const SS_DISABLE: u32 = 2;
 
 /// Hot signal fields — checked on every syscall return.
 /// Placed inline in the Task hot region (near SchedEntity).
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SignalHot {
     /// Standard signals pending delivery (bitmask, signals 1-64).
