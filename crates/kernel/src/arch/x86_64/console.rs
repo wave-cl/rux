@@ -71,6 +71,5 @@ unsafe impl rux_arch::ConsoleOps for super::X86_64 {
     unsafe fn init() { init() }
     fn write_byte(b: u8) { write_byte(b) }
     fn read_byte() -> u8 { read_byte() }
-    fn write_bytes(buf: &[u8]) { write_bytes(buf) }
-    fn write_str(s: &str) { write_str(s) }
+    // write_bytes and write_str use trait defaults (identical to standalone fns)
 }

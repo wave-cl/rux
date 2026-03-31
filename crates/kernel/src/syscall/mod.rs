@@ -65,6 +65,13 @@ pub static mut PROCESS: ProcessState = ProcessState::new();
 
 // ── Page table helper (arch-dispatched) ─────────────────────────────
 
+/// Get a handle to the current user-space page table.
+pub unsafe fn current_user_page_table() -> crate::arch::PageTable {
+    use rux_arch::PageTableRootOps;
+    crate::arch::PageTable::from_root(
+        rux_klib::PhysAddr::new(crate::arch::Arch::read() as usize))
+}
+
 /// Map zeroed pages into the current user page table.
 /// Used by brk() and mmap() to add pages to the user address space.
 pub unsafe fn map_user_pages(
@@ -72,11 +79,8 @@ pub unsafe fn map_user_pages(
     end_va: usize,
     flags: rux_mm::MappingFlags,
 ) {
-    use rux_arch::PageTableRootOps;
     let alloc = crate::kstate::alloc();
-    let root = crate::arch::Arch::read();
-    let mut upt = crate::arch::PageTable::from_root(
-        rux_klib::PhysAddr::new(root as usize));
+    let mut upt = current_user_page_table();
 
     let upt_ptr = &mut upt as *mut crate::arch::PageTable;
     rux_mm::map_zeroed_pages(
@@ -87,11 +91,6 @@ pub unsafe fn map_user_pages(
 }
 
 // ── Path resolution helper (used by both POSIX and Linux) ───────────
-
-/// Read a C string from user memory into a path slice.
-pub unsafe fn read_user_path(path_ptr: usize) -> &'static [u8] {
-    crate::uaccess::read_user_cstr(path_ptr)
-}
 
 /// Get current time in seconds (for timestamp updates on file operations).
 pub fn current_time_secs() -> u64 {
@@ -105,9 +104,9 @@ pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     rux_fs::path::resolve_with_cwd(fs, PROCESS.cwd_inode, path)
 }
 
-/// Resolve a path to (parent_inode, basename).
+/// Resolve a user path pointer to (parent_inode, basename).
 pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
-    let path = read_user_path(path_ptr);
+    let path = crate::uaccess::read_user_cstr(path_ptr);
     let fs = crate::kstate::fs();
     rux_fs::path::resolve_parent_and_name(fs, PROCESS.cwd_inode, path)
 }
@@ -410,9 +409,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         let child_stack_pages = 4usize;
         let child_va_base = V::CHILD_STACK_VA;
 
-        let pt_root = V::read_pt_root();
-        let mut upt = crate::arch::PageTable::from_root(
-            rux_klib::PhysAddr::new(pt_root as usize));
+        let mut upt = current_user_page_table();
         let flags = rux_mm::MappingFlags::READ
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::USER);

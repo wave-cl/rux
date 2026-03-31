@@ -26,7 +26,7 @@ unsafe fn synthetic_stat(buf: usize, mode: u32) {
 /// fstat(fd, statbuf) — POSIX.1
 pub fn fstat(fd: usize, buf: usize) -> isize {
     if buf == 0 { return -14; }
-    if fd <= 2 && super::file::is_console_fd(fd) {
+    if fd <= 2 && fdt::is_console_fd(fd) {
         unsafe { synthetic_stat(buf, 0o20666); } // S_IFCHR | 0666
         return 0;
     }
@@ -60,7 +60,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isiz
     const AT_SYMLINK_NOFOLLOW: usize = 0x100;
     unsafe {
         use rux_fs::FileSystem;
-        let path = super::read_user_path(pathname);
+        let path = crate::uaccess::read_user_cstr(pathname);
         let fs = crate::kstate::fs();
         let ino = if flags & AT_SYMLINK_NOFOLLOW != 0 {
             match rux_fs::path::resolve_nofollow(fs, super::PROCESS.cwd_inode, path) {
@@ -85,7 +85,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isiz
 pub fn chdir(path_ptr: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        let path = super::read_user_path(path_ptr);
+        let path = crate::uaccess::read_user_cstr(path_ptr);
         if path.is_empty() { return -2; }
 
         let fs = crate::kstate::fs();
@@ -221,7 +221,7 @@ pub fn rename(old_ptr: usize, new_ptr: usize) -> isize {
 pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
     unsafe {
         use rux_fs::{FileSystem, FileName};
-        let target = super::read_user_path(target_ptr);
+        let target = crate::uaccess::read_user_cstr(target_ptr);
         let (dir_ino, name) = match super::resolve_parent_and_name(link_ptr) {
             Ok(v) => v,
             Err(e) => return e,
@@ -239,7 +239,7 @@ pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
 pub fn link(old_ptr: usize, new_ptr: usize) -> isize {
     unsafe {
         use rux_fs::{FileSystem, FileName};
-        let old_path = super::read_user_path(old_ptr);
+        let old_path = crate::uaccess::read_user_cstr(old_ptr);
         let old_ino = match super::resolve_with_cwd(old_path) {
             Ok(ino) => ino,
             Err(e) => return e,
@@ -261,7 +261,7 @@ pub fn link(old_ptr: usize, new_ptr: usize) -> isize {
 pub fn chmod(path_ptr: usize, mode: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        let path = super::read_user_path(path_ptr);
+        let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
             Err(e) => return e,
@@ -293,7 +293,7 @@ pub fn fchmod(fd: usize, mode: usize) -> isize {
 pub fn chown(path_ptr: usize, uid: usize, gid: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        let path = super::read_user_path(path_ptr);
+        let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
             Err(e) => return e,
@@ -341,7 +341,7 @@ pub fn utimensat(_dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize
         };
         // Resolve path (if 0/null, would need fd-based, but busybox always passes path)
         if path_ptr == 0 { return 0; }
-        let path = super::read_user_path(path_ptr);
+        let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
             Err(e) => return e,

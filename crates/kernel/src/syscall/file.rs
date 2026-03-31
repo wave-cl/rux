@@ -3,14 +3,9 @@
 use rux_arch::ConsoleOps;
 use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
-/// Check if fd 0-2 should use console (not redirected to file/pipe).
-pub(crate) fn is_console_fd(fd: usize) -> bool {
-    fdt::is_console_fd(fd)
-}
-
 /// read(fd, buf, count) — POSIX.1
 pub fn read(fd: usize, buf: usize, len: usize) -> isize {
-    if fd == 0 && is_console_fd(0) {
+    if fd == 0 && fdt::is_console_fd(0) {
         // stdin from console
         unsafe {
             let ptr = buf as *mut u8;
@@ -33,7 +28,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
 
 /// write(fd, buf, count) — POSIX.1
 pub fn write(fd: usize, buf: usize, len: usize) -> isize {
-    if fd <= 2 && is_console_fd(fd) {
+    if fd <= 2 && fdt::is_console_fd(fd) {
         unsafe {
             let ptr = buf as *const u8;
             for i in 0..len { Arch::write_byte(*ptr.add(i)); }
@@ -58,7 +53,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
 /// open(pathname, flags, mode) — POSIX.1
 pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
     unsafe {
-        let path = super::read_user_path(path_ptr);
+        let path = crate::uaccess::read_user_cstr(path_ptr);
         if path.is_empty() { return -2; }
 
         let o_creat = flags & 0x40 != 0;

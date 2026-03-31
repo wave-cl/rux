@@ -26,11 +26,8 @@ pub fn mmap(addr: usize, len: usize, _prot: usize, mmap_flags: usize, _fd: usize
 pub fn munmap(addr: usize, len: usize) -> isize {
     if addr & 0xFFF != 0 { return -22; } // must be page-aligned
     unsafe {
-        use rux_arch::PageTableRootOps;
         let alloc = crate::kstate::alloc();
-        let root = crate::arch::Arch::read();
-        let mut upt = crate::arch::PageTable::from_root(
-            rux_klib::PhysAddr::new(root as usize));
+        let mut upt = super::current_user_page_table();
 
         let aligned_len = (len + 0xFFF) & !0xFFF;
         let mut va = addr;
