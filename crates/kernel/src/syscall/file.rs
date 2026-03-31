@@ -154,6 +154,40 @@ pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
     }
 }
 
+/// ioctl(fd, request, arg) — POSIX.1 (terminal operations)
+pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
+    const TCGETS: usize = 0x5401;
+    const TIOCGWINSZ: usize = 0x5413;
+    const TIOCSPGRP: usize = 0x5410;
+    const TIOCGPGRP: usize = 0x540F;
+
+    match request {
+        TIOCGWINSZ => {
+            if arg != 0 { unsafe { *(arg as *mut [u16; 4]) = [24, 80, 0, 0]; } }
+            0
+        }
+        TCGETS => {
+            if arg != 0 {
+                unsafe {
+                    let ptr = arg as *mut u8;
+                    for i in 0..60 { *ptr.add(i) = 0; }
+                    *(arg as *mut u32) = 0x500;
+                    *((arg + 4) as *mut u32) = 0x5;
+                    *((arg + 8) as *mut u32) = 0xBF;
+                    *((arg + 12) as *mut u32) = 0x8A3B;
+                }
+            }
+            0
+        }
+        TIOCGPGRP => {
+            if arg != 0 { unsafe { *(arg as *mut i32) = 1; } }
+            0
+        }
+        TIOCSPGRP | 0x5402 | 0x5403 | 0x5404 => 0,
+        _ => -25 // -ENOTTY
+    }
+}
+
 /// sendfile(out_fd, in_fd, offset, count) — Linux (widely used by busybox cat)
 pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -> isize {
     unsafe {

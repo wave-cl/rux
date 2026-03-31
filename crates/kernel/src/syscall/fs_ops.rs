@@ -15,30 +15,25 @@ pub fn lstat(pathname: usize, buf: usize) -> isize {
     fstatat(0xffffff9c, pathname, buf, 0x100) // AT_SYMLINK_NOFOLLOW
 }
 
-/// fstat(fd, statbuf) — POSIX.1
-use crate::arch::StatLayout;
-const STAT_MODE_OFF: usize = <crate::arch::Arch as StatLayout>::MODE_OFF;
-const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::BLKSIZE_OFF;
+/// Write a minimal stat buffer with just mode and blksize.
+unsafe fn synthetic_stat(buf: usize, mode: u32) {
+    let p = buf as *mut u8;
+    for i in 0..144 { *p.add(i) = 0; }
+    *((buf + STAT_MODE_OFF) as *mut u32) = mode;
+    *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
+}
 
+/// fstat(fd, statbuf) — POSIX.1
 pub fn fstat(fd: usize, buf: usize) -> isize {
     if buf == 0 { return -14; }
     if fd <= 2 && super::file::is_console_fd(fd) {
-        unsafe {
-            let p = buf as *mut u8;
-            for i in 0..144 { *p.add(i) = 0; }
-            *((buf + STAT_MODE_OFF) as *mut u32) = 0o20666;
-            *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
-        }
+        unsafe { synthetic_stat(buf, 0o20666); } // S_IFCHR | 0666
         return 0;
     }
     if fd <= 2 {
         unsafe {
-            let f = &fdt::FD_TABLE[fd];
-            if f.is_pipe {
-                let p = buf as *mut u8;
-                for i in 0..144 { *p.add(i) = 0; }
-                *((buf + STAT_MODE_OFF) as *mut u32) = 0o10666;
-                *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
+            if fdt::FD_TABLE[fd].is_pipe {
+                synthetic_stat(buf, 0o10666); // S_IFIFO | 0666
                 return 0;
             }
         }
@@ -50,10 +45,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
         let fs = crate::kstate::fs();
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(f.ino, &mut vfs_stat).is_err() {
-            let p = buf as *mut u8;
-            for i in 0..144 { *p.add(i) = 0; }
-            *((buf + STAT_MODE_OFF) as *mut u32) = 0o100644;
-            *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
+            synthetic_stat(buf, 0o100644); // S_IFREG | 0644
             return 0;
         }
         super::fill_linux_stat(buf, &vfs_stat);
@@ -360,11 +352,6 @@ pub fn utimensat(_dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize
             Err(_) => -2,
         }
     }
-}
-
-/// Get current time in seconds (for timestamp updates on file operations).
-pub fn super::current_time_secs() -> u64 {
-    Arch::ticks() / 1000
 }
 
 /// readlinkat(dirfd, pathname, buf, bufsiz) — POSIX.1-2008

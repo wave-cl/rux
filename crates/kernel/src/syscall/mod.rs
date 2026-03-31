@@ -221,59 +221,52 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         // ── Memory ─────────────────────────────────────────────────
         Syscall::Mmap => posix::mmap(a0, a1, a2, a3, a4),
         Syscall::Munmap => posix::munmap(a0, a1),
-        Syscall::Mprotect => 0,
         Syscall::Brk => linux::brk(a0),
 
         // ── Process ────────────────────────────────────────────────
-        Syscall::Getpid => 1,
-        Syscall::Getppid => 1,
+        Syscall::Getpid | Syscall::Getppid => 1, // single-process: always PID 1
         Syscall::Exit => posix::exit(a0 as i32),
         Syscall::ExitGroup => linux::exit_group(a0 as i32),
         Syscall::Kill => posix::kill(a0 as isize, a1),
-        Syscall::Vfork => 0,   // dispatched by arch entry, never reaches here
-        Syscall::Execve => 0,
         Syscall::Wait4 => linux::wait4(a0, a1, a2, a3),
         Syscall::Uname => posix::uname(a0),
         Syscall::ClockGettime => posix::clock_gettime(a0, a1),
+        Syscall::Nanosleep => posix::nanosleep(a0),
 
         // ── Signals ────────────────────────────────────────────────
         Syscall::Sigaction => posix::sigaction(a0, a1, a2),
         Syscall::Sigprocmask => posix::sigprocmask(a0, a1, a2, a3),
-        Syscall::Sigaltstack => 0, // accept and ignore
-        Syscall::Sigreturn => 0,   // handled by arch entry, never reaches here
 
-        // ── Terminal / scheduling ──────────────────────────────────
-        Syscall::SchedYield | Syscall::Alarm => 0,
-        Syscall::Nanosleep => posix::nanosleep(a0),
-
-        // ── User/group IDs ─────────────────────────────────────────
+        // ── User/group IDs (single user: always root) ─────────────
         Syscall::Getuid | Syscall::Geteuid |
-        Syscall::Getgid | Syscall::Getegid => 0,
-        Syscall::Getgroups => 0, // no supplementary groups
-
-        // ── Process groups ─────────────────────────────────────────
-        Syscall::Setpgid => 0,
-        Syscall::Getpgid => 1,
-        Syscall::Setsid => 1,
+        Syscall::Getgid | Syscall::Getegid => 0, // uid=0, gid=0
+        Syscall::Getpgid | Syscall::Setsid |
+        Syscall::Gettid => 1, // single-process: always 1
 
         // ── Linux extensions ───────────────────────────────────────
         Syscall::Getdents64 => linux::getdents64(a0, a1, a2),
         Syscall::SetTidAddress => linux::set_tid_address(a0),
-        Syscall::Gettid => 1,
-        Syscall::SetRobustList | Syscall::Futex |
-        Syscall::Tgkill | Syscall::Tkill |
-        Syscall::SchedGetaffinity | Syscall::Prctl => 0,
-        Syscall::Getrlimit => 0,
         Syscall::Poll => posix::poll(a0, a1, a2),
         Syscall::Gettimeofday => {
             use rux_arch::TimerOps;
             crate::arch::Arch::ticks() as isize
         }
-        Syscall::Access => 0,
         Syscall::Sysinfo => linux::sysinfo(a0),
         Syscall::Statfs => linux::statfs(a0, a1),
         Syscall::Prlimit64 => posix::prlimit64(a0, a1, a2, a3),
-        Syscall::Rseq => -38,
+
+        // ── Stubs: accepted but no-op ─────────────────────────────
+        Syscall::Mprotect | Syscall::Faccessat | Syscall::Access |
+        Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
+        Syscall::Getgroups | Syscall::Setpgid | Syscall::Getrlimit |
+        Syscall::SetRobustList | Syscall::Futex |
+        Syscall::Tgkill | Syscall::Tkill |
+        Syscall::SchedGetaffinity | Syscall::Prctl => 0,
+
+        // Dispatched by arch entry point, never reaches generic dispatch
+        Syscall::Vfork | Syscall::Execve | Syscall::Sigreturn => 0,
+
+        Syscall::Rseq => -38, // -ENOSYS
 
         // ── Architecture-specific ──────────────────────────────────
         Syscall::ArchSpecific(nr) => {
@@ -323,6 +316,65 @@ static mut VFORK_SNAP_ORIG_PHYS: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
 static mut VFORK_SNAP_COPY_PHYS: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
 /// Number of valid entries in the snapshot arrays.
 static mut VFORK_SNAP_COUNT: usize = 0;
+
+/// Snapshot one writable user page: copy the physical frame and record the mapping.
+unsafe fn vfork_snap_page(
+    va: usize,
+    upt: &mut crate::arch::PageTable,
+    alloc: &mut dyn rux_mm::FrameAllocator,
+    alloc_base: usize,
+) {
+    use rux_mm::FrameAllocator;
+    if let Ok(orig_pa) = upt.translate_writable(rux_klib::VirtAddr::new(va)) {
+        let orig_page = orig_pa.as_usize() & !0xFFF;
+        if orig_page >= alloc_base && VFORK_SNAP_COUNT < VFORK_SNAP_MAX {
+            if let Ok(snap_pa) = alloc.alloc(rux_mm::PageSize::FourK) {
+                core::ptr::copy_nonoverlapping(
+                    orig_page as *const u8, snap_pa.as_usize() as *mut u8, 4096);
+                VFORK_SNAP_VA[VFORK_SNAP_COUNT] = va;
+                VFORK_SNAP_ORIG_PHYS[VFORK_SNAP_COUNT] = orig_page;
+                VFORK_SNAP_COPY_PHYS[VFORK_SNAP_COUNT] = snap_pa.as_usize();
+                VFORK_SNAP_COUNT += 1;
+            }
+        }
+    }
+}
+
+/// Snapshot all writable user pages across three ranges:
+/// 1. ELF data/BSS (0x1000..program_brk)
+/// 2. mmap'd heap/TLS (0x10000000..mmap_base)
+/// 3. User stack area (stack canary protection)
+unsafe fn vfork_snapshot_pages(
+    upt: &mut crate::arch::PageTable,
+    alloc: &mut dyn rux_mm::FrameAllocator,
+    program_brk: usize, mmap_base: usize,
+    stack_page: usize, stack_pages: usize,
+) {
+    VFORK_SNAP_COUNT = 0;
+    let alloc_base = alloc.base.as_usize();
+
+    let mut va = 0x1000usize;
+    while va < program_brk { vfork_snap_page(va, upt, alloc, alloc_base); va += 4096; }
+
+    va = 0x10000000usize;
+    while va < mmap_base { vfork_snap_page(va, upt, alloc, alloc_base); va += 4096; }
+
+    va = stack_page.saturating_sub(stack_pages * 4096);
+    while va <= stack_page { vfork_snap_page(va, upt, alloc, alloc_base); va += 4096; }
+}
+
+/// Restore snapshotted pages and free the snapshot copies.
+unsafe fn vfork_restore_pages() {
+    use rux_mm::FrameAllocator;
+    let alloc = crate::kstate::alloc();
+    for i in 0..VFORK_SNAP_COUNT {
+        core::ptr::copy_nonoverlapping(
+            VFORK_SNAP_COPY_PHYS[i] as *const u8,
+            VFORK_SNAP_ORIG_PHYS[i] as *mut u8, 4096);
+        alloc.dealloc(rux_klib::PhysAddr::new(VFORK_SNAP_COPY_PHYS[i]), rux_mm::PageSize::FourK);
+    }
+    VFORK_SNAP_COUNT = 0;
+}
 
 /// Generic vfork implementation. The arch provides hardware primitives
 /// via the `VforkContext` trait; this function handles the algorithm.
@@ -381,61 +433,14 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         let child_top_va = child_va_base + (child_stack_pages - 1) * 4096;
         V::set_user_sp(child_top_va + offset_in_page);
 
-        // Snapshot parent's user data/BSS pages and mmap'd heap/TLS pages
-        // so that forkchild() modifications can be undone when the parent
-        // resumes.  We scan two ranges:
-        //   1. 0x1000..PROCESS.program_brk  — ELF data/BSS
-        //   2. 0x10000000..PROCESS.mmap_base — musl heap and TLS (mmap'd anonymous pages)
-        // Only writable pages with PA >= allocator base are snapshotted (skips
-        // read-only .text and kernel identity-mapped pages).
-        VFORK_SNAP_COUNT = 0;
-        let alloc_base = crate::kstate::alloc().base.as_usize();
-
-        // Helper closure: snapshot one page.
-        macro_rules! snap_page {
-            ($snap_va:expr) => {{
-                if let Ok(orig_pa) = upt.translate_writable(
-                    rux_klib::VirtAddr::new($snap_va)) {
-                    let orig_page = orig_pa.as_usize() & !0xFFF;
-                    if orig_page >= alloc_base && VFORK_SNAP_COUNT < VFORK_SNAP_MAX {
-                        if let Ok(snap_pa) = alloc.alloc(rux_mm::PageSize::FourK) {
-                            let op = orig_page as *const u8;
-                            let sp = snap_pa.as_usize() as *mut u8;
-                            core::ptr::copy_nonoverlapping(op, sp, 4096);
-                            VFORK_SNAP_VA[VFORK_SNAP_COUNT] = $snap_va;
-                            VFORK_SNAP_ORIG_PHYS[VFORK_SNAP_COUNT] = orig_page;
-                            VFORK_SNAP_COPY_PHYS[VFORK_SNAP_COUNT] = snap_pa.as_usize();
-                            VFORK_SNAP_COUNT += 1;
-                        }
-                    }
-                }
-            }};
-        }
-
-        // Range 1: ELF data / BSS
-        let mut va = 0x1000usize;
-        while va < VFORK_SAVED.program_brk {
-            snap_page!(va);
-            va += 4096;
-        }
-
-        // Range 2: mmap'd heap / TLS (musl allocates these with mmap)
-        va = 0x10000000usize;
-        while va < VFORK_SAVED.mmap_base {
-            snap_page!(va);
-            va += 4096;
-        }
-
-        // Range 3: user stack area (contains stack canary, local vars)
-        // The parent's stack frame holds the GCC stack-protector canary
-        // at sp+offset; without snapshotting these pages the canary can
-        // appear corrupted after child exec replaces the address space.
+        // Snapshot parent's writable user pages so forkchild() modifications
+        // can be undone when the parent resumes.
         let stack_page = parent_sp & !0xFFF;
-        va = stack_page.saturating_sub(child_stack_pages * 4096);
-        while va <= stack_page {
-            snap_page!(va);
-            va += 4096;
-        }
+        vfork_snapshot_pages(
+            &mut upt, alloc,
+            VFORK_SAVED.program_brk, VFORK_SAVED.mmap_base,
+            stack_page, child_stack_pages,
+        );
 
         return 0; // child gets fork return 0
     } else {
@@ -450,22 +455,8 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         V::clear_jmp();
         PROCESS.in_vfork_child = false;
 
-        // Restore parent's data pages: undo any writes forkchild() made
-        // (e.g. g_parsefile state zeroed by closescript()).
-        use rux_mm::FrameAllocator;
-        let restore_alloc = crate::kstate::alloc();
-        for i in 0..VFORK_SNAP_COUNT {
-            let orig_phys = VFORK_SNAP_ORIG_PHYS[i];
-            let snap_phys = VFORK_SNAP_COPY_PHYS[i];
-            let orig = orig_phys as *mut u8;
-            let snap = snap_phys as *const u8;
-            core::ptr::copy_nonoverlapping(snap, orig, 4096);
-            restore_alloc.dealloc(
-                rux_klib::PhysAddr::new(snap_phys),
-                rux_mm::PageSize::FourK,
-            );
-        }
-        VFORK_SNAP_COUNT = 0;
+        // Restore parent's snapshotted pages and free snapshot copies.
+        vfork_restore_pages();
 
         // Restore process state
         core::ptr::copy_nonoverlapping(&VFORK_SAVED, &mut PROCESS, 1);
