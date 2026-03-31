@@ -48,7 +48,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
             synthetic_stat(buf, 0o100644); // S_IFREG | 0644
             return 0;
         }
-        super::fill_linux_stat(buf, &vfs_stat);
+        crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, &vfs_stat);
     }
     0
 }
@@ -75,7 +75,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isiz
         };
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
-        super::fill_linux_stat(buf, &vfs_stat);
+        crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, &vfs_stat);
         0
     }
 }

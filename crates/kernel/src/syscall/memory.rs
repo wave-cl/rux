@@ -35,8 +35,8 @@ pub fn munmap(addr: usize, len: usize) -> isize {
             if let Ok(pa) = upt.translate(rux_klib::VirtAddr::new(va)) {
                 let _ = upt.unmap_4k(rux_klib::VirtAddr::new(va));
                 let page_pa = pa.as_usize() & !0xFFF;
-                if page_pa >= alloc.base.as_usize() {
-                    use rux_mm::FrameAllocator;
+                use rux_mm::FrameAllocator;
+                if page_pa >= alloc.alloc_base().as_usize() {
                     alloc.dealloc(rux_klib::PhysAddr::new(page_pa), rux_mm::PageSize::FourK);
                 }
             }

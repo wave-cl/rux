@@ -262,4 +262,36 @@ pub trait StatLayout {
     const BLKSIZE_OFF: usize;
     const BLKSIZE_IS_I64: bool;
     const BLOCKS_OFF: usize;
+
+    /// Fill a Linux struct stat buffer with the given field values.
+    /// Zeroes the buffer first, then writes each field at the arch-specific offset.
+    ///
+    /// # Safety
+    /// `buf` must point to a writable buffer of at least `STAT_SIZE` bytes.
+    unsafe fn fill_stat(
+        buf: usize, ino: u64, nlink: u32, mode: u32,
+        uid: u32, gid: u32, size: u64, blocks: u64,
+    ) {
+        let p = buf as *mut u8;
+        for i in 0..Self::STAT_SIZE { *p.add(i) = 0; }
+        *((buf + Self::INO_OFF) as *mut u64) = ino;
+        if Self::NLINK_IS_U64 {
+            *((buf + Self::NLINK_OFF) as *mut u64) = nlink as u64;
+        } else {
+            *((buf + Self::NLINK_OFF) as *mut u32) = nlink;
+        }
+        *((buf + Self::MODE_OFF) as *mut u32) = mode;
+        *((buf + Self::UID_OFF) as *mut u32) = uid;
+        *((buf + Self::GID_OFF) as *mut u32) = gid;
+        if Self::RDEV_OFF > 0 {
+            *((buf + Self::RDEV_OFF) as *mut u64) = 0;
+        }
+        *((buf + Self::SIZE_OFF) as *mut i64) = size as i64;
+        if Self::BLKSIZE_IS_I64 {
+            *((buf + Self::BLKSIZE_OFF) as *mut i64) = 4096;
+        } else {
+            *((buf + Self::BLKSIZE_OFF) as *mut i32) = 4096;
+        }
+        *((buf + Self::BLOCKS_OFF) as *mut i64) = blocks as i64;
+    }
 }

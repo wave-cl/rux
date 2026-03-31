@@ -12,6 +12,7 @@ pub mod slab_simple;
 pub mod fault;
 pub mod cow;
 pub mod pgtrack;
+pub mod snapshot;
 
 // ── Page sizes ──────────────────────────────────────────────────────────
 
@@ -148,6 +149,8 @@ pub trait FrameAllocator {
     fn alloc(&mut self, size: PageSize) -> Result<PhysAddr, MemoryError>;
     fn dealloc(&mut self, addr: PhysAddr, size: PageSize);
     fn available_frames(&self, size: PageSize) -> usize;
+    /// Base physical address of the allocator's managed region.
+    fn alloc_base(&self) -> PhysAddr;
 }
 
 // ── Utility: map zeroed pages ────────────────────────────────────────────

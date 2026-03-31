@@ -94,4 +94,8 @@ impl<'a> FrameAllocator for TrackingAllocator<'a> {
     fn available_frames(&self, size: PageSize) -> usize {
         self.inner.available_frames(size)
     }
+
+    fn alloc_base(&self) -> PhysAddr {
+        self.inner.alloc_base()
+    }
 }

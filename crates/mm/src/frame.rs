@@ -414,6 +414,10 @@ impl FrameAllocator for BuddyAllocator {
     fn available_frames(&self, size: PageSize) -> usize {
         self.free_frames as usize / (size.bytes() / 4096)
     }
+
+    fn alloc_base(&self) -> PhysAddr {
+        self.base
+    }
 }
 
 #[cfg(test)]

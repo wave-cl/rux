@@ -102,12 +102,6 @@ pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeI
     rux_fs::path::resolve_parent_and_name(fs, PROCESS.fs_ctx.cwd, path)
 }
 
-/// Fill a Linux struct stat from VFS InodeStat.
-/// Uses the architecture's StatLayout constants for field offsets/widths.
-pub unsafe fn fill_linux_stat(buf: usize, vfs_stat: &rux_fs::InodeStat) {
-    crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, vfs_stat);
-}
-
 // ── Generic syscall dispatch ───────────────────────────────────────────
 
 /// Architecture-independent syscall identifiers.
@@ -295,76 +289,8 @@ static mut VFORK_PARENT_FDS: [rux_fs::fdtable::OpenFile; 64] = [rux_fs::fdtable:
     is_pipe: false, pipe_id: 0, pipe_write: false,
 }; 64];
 
-/// Maximum number of user data pages to snapshot around vfork.
-const VFORK_SNAP_MAX: usize = 1024;
-
-/// Virtual addresses of snapshotted pages (4KB aligned).
-static mut VFORK_SNAP_VA: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
-/// Physical addresses of the original frames.
-static mut VFORK_SNAP_ORIG_PHYS: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
-/// Physical addresses of snapshot copies (freed after parent restore).
-static mut VFORK_SNAP_COPY_PHYS: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
-/// Number of valid entries in the snapshot arrays.
-static mut VFORK_SNAP_COUNT: usize = 0;
-
-/// Snapshot one writable user page: copy the physical frame and record the mapping.
-unsafe fn vfork_snap_page(
-    va: usize,
-    upt: &mut crate::arch::PageTable,
-    alloc: &mut dyn rux_mm::FrameAllocator,
-    alloc_base: usize,
-) {
-    use rux_mm::FrameAllocator;
-    if let Ok(orig_pa) = upt.translate_writable(rux_klib::VirtAddr::new(va)) {
-        let orig_page = orig_pa.as_usize() & !0xFFF;
-        if orig_page >= alloc_base && VFORK_SNAP_COUNT < VFORK_SNAP_MAX {
-            if let Ok(snap_pa) = alloc.alloc(rux_mm::PageSize::FourK) {
-                core::ptr::copy_nonoverlapping(
-                    orig_page as *const u8, snap_pa.as_usize() as *mut u8, 4096);
-                VFORK_SNAP_VA[VFORK_SNAP_COUNT] = va;
-                VFORK_SNAP_ORIG_PHYS[VFORK_SNAP_COUNT] = orig_page;
-                VFORK_SNAP_COPY_PHYS[VFORK_SNAP_COUNT] = snap_pa.as_usize();
-                VFORK_SNAP_COUNT += 1;
-            }
-        }
-    }
-}
-
-/// Snapshot all writable user pages across three ranges:
-/// 1. ELF data/BSS (0x1000..program_brk)
-/// 2. mmap'd heap/TLS (0x10000000..mmap_base)
-/// 3. User stack area (stack canary protection)
-unsafe fn vfork_snapshot_pages(
-    upt: &mut crate::arch::PageTable,
-    alloc: &mut dyn rux_mm::FrameAllocator,
-    program_brk: usize, mmap_base: usize,
-    stack_page: usize, stack_pages: usize,
-) {
-    VFORK_SNAP_COUNT = 0;
-    let alloc_base = alloc.base.as_usize();
-
-    let mut va = 0x1000usize;
-    while va < program_brk { vfork_snap_page(va, upt, alloc, alloc_base); va += 4096; }
-
-    va = 0x10000000usize;
-    while va < mmap_base { vfork_snap_page(va, upt, alloc, alloc_base); va += 4096; }
-
-    va = stack_page.saturating_sub(stack_pages * 4096);
-    while va <= stack_page { vfork_snap_page(va, upt, alloc, alloc_base); va += 4096; }
-}
-
-/// Restore snapshotted pages and free the snapshot copies.
-unsafe fn vfork_restore_pages() {
-    use rux_mm::FrameAllocator;
-    let alloc = crate::kstate::alloc();
-    for i in 0..VFORK_SNAP_COUNT {
-        core::ptr::copy_nonoverlapping(
-            VFORK_SNAP_COPY_PHYS[i] as *const u8,
-            VFORK_SNAP_ORIG_PHYS[i] as *mut u8, 4096);
-        alloc.dealloc(rux_klib::PhysAddr::new(VFORK_SNAP_COPY_PHYS[i]), rux_mm::PageSize::FourK);
-    }
-    VFORK_SNAP_COUNT = 0;
-}
+/// Page snapshot state for vfork (save/restore writable user pages).
+static mut VFORK_SNAPSHOT: rux_mm::snapshot::PageSnapshot = rux_mm::snapshot::PageSnapshot::new();
 
 /// Generic vfork implementation. The arch provides hardware primitives
 /// via the `VforkContext` trait; this function handles the algorithm.
@@ -424,7 +350,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         // Snapshot parent's writable user pages so forkchild() modifications
         // can be undone when the parent resumes.
         let stack_page = parent_sp & !0xFFF;
-        vfork_snapshot_pages(
+        VFORK_SNAPSHOT.snapshot_ranges(
             &mut upt, alloc,
             VFORK_SAVED.program_brk, VFORK_SAVED.mmap_base,
             stack_page, child_stack_pages,
@@ -444,7 +370,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         PROCESS.in_vfork_child = false;
 
         // Restore parent's snapshotted pages and free snapshot copies.
-        vfork_restore_pages();
+        VFORK_SNAPSHOT.restore_and_free(crate::kstate::alloc());
 
         // Restore process state
         core::ptr::copy_nonoverlapping(&VFORK_SAVED, &mut PROCESS, 1);
