@@ -28,6 +28,12 @@ pub type PageTable = aarch64::paging::PageTable4Level;
 #[cfg(feature = "native")]
 pub type PageTable = native::FlatPageTable;
 
+/// The concrete PTE operations type for the current architecture.
+#[cfg(all(target_arch = "x86_64", not(feature = "native")))]
+pub type ArchPte = rux_arch::x86_64::pte::X86_64Pte;
+#[cfg(all(target_arch = "aarch64", not(feature = "native")))]
+pub type ArchPte = rux_arch::aarch64::pte::Aarch64Pte;
+
 pub use rux_arch::StatLayout;
 
 /// Fill a Linux struct stat buffer from VFS InodeStat.

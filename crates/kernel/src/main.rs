@@ -8,6 +8,7 @@ mod elf;
 pub mod boot;
 mod kstate;
 pub mod pipe;
+pub mod cow;
 pub mod pgtrack;
 pub mod syscall;
 pub mod uaccess;

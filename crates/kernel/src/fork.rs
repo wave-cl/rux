@@ -137,7 +137,12 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     }
 }
 
-/// Copy the parent's user address space into a fresh page table.
+/// Copy the parent's user address space into a fresh page table (eager copy).
+///
+/// COW infrastructure exists (cow.rs, page fault handlers) but is not yet
+/// used here — the eager copy is simpler and more reliable for now.
+/// TODO: Enable COW fork once page fault handling is fully tested.
+///
 /// Returns the new page table root physical address.
 unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameAllocator) -> u64 {
     use rux_mm::FrameAllocator;
@@ -158,8 +163,6 @@ unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameA
         .or(rux_mm::MappingFlags::EXECUTE);
 
     // Walk parent's user pages, copy each frame, map in child.
-    // unmap_4k first: kernel identity map may already cover these VAs (same VA=PA range),
-    // so we must remove the kernel-only entry before mapping with user_rwx.
     parent_pt.walk_user_pages(|va, pa, _flags| {
         let new_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("fork frame");
         core::ptr::copy_nonoverlapping(
@@ -167,7 +170,7 @@ unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameA
             new_frame.as_usize() as *mut u8,
             4096,
         );
-        child_pt.unmap_4k(va);
+        let _ = child_pt.unmap_4k(va);
         let _ = child_pt.map_4k(va, new_frame, user_rwx, alloc);
     });
 

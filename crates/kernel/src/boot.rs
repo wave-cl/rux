@@ -81,6 +81,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
     // Init kernel state
     crate::kstate::init(vfs_ptr, alloc_ptr);
     crate::task_table::init_pid1();
+    { use rux_mm::FrameAllocator; crate::cow::init((*alloc_ptr).alloc_base()); }
     log("rux: kernel state initialized\n");
 
     // Exec /sbin/init
@@ -150,6 +151,7 @@ pub unsafe fn init_native(cpio_data: &[u8]) {
 
     // ── Task table (PID 1) ────────────────────────────────────────────────
     crate::task_table::init_pid1();
+    { use rux_mm::FrameAllocator; crate::cow::init((*alloc_ptr).alloc_base()); }
 
     // ── FD table: stdin / stdout / stderr ─────────────────────────────────
     use rux_fs::fdtable::{FD_TABLE, OpenFile};

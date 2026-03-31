@@ -66,6 +66,16 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     super::syscall::handle_syscall(_frame as *mut u8);
                 }
                 0b100100 | 0b100101 => {
+                    // Data abort from EL0.
+                    // ISS bits: [6]=WnR (write), [5:0]=DFSC (fault status)
+                    let wnr = esr & (1 << 6) != 0;   // write fault
+                    let dfsc = esr & 0x3F;
+                    let is_perm = dfsc == 0x0F || dfsc == 0x0E || dfsc == 0x0D;  // permission fault level 1/2/3
+                    if wnr && is_perm {
+                        if unsafe { crate::cow::handle_cow_fault(far as usize).is_ok() } {
+                            return; // COW resolved — resume faulting instruction
+                        }
+                    }
                     dump_user_fault("USER DATA ABORT", far, esr, _frame);
                 }
                 0b100000 | 0b100001 => {

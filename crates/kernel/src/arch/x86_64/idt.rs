@@ -303,17 +303,21 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
         14 => {
             let cr2: u64;
             unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nostack)); }
-            let cr3: u64;
-            unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack)); }
-            let fs_lo: u32;
-            let fs_hi: u32;
-            unsafe { core::arch::asm!("rdmsr", in("ecx") 0xC0000100u32, out("eax") fs_lo, out("edx") fs_hi, options(nostack)); }
-            let fs_base = (fs_hi as u64) << 32 | fs_lo as u64;
+            let user = error_code & 4 != 0;
+            let write = error_code & 2 != 0;
 
+            // Try COW resolution for user-mode write faults
+            if user && write {
+                if unsafe { crate::cow::handle_cow_fault(cr2 as usize).is_ok() } {
+                    return; // COW resolved — resume faulting instruction
+                }
+            }
+
+            // Not a COW fault — dump and panic
             unsafe {
+                let cr3: u64;
+                core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
                 let r = frame as *const u64;
-                // frame layout: r15..r8, rbp, rdi, rsi, rdx, rcx, rbx, rax, vec, err, rip, cs, rfl, rsp, ss
-                let user = error_code & 4 != 0;
                 let w = |s: &str| super::console::write_str(s);
                 let h = |v: usize| {
                     let mut b = [0u8; 16];
@@ -325,33 +329,7 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 w("  err: "); h(error_code as usize); super::console::write_byte(b'\n');
                 w("  rip: "); h(*r.add(17) as usize);
                 w("  rsp: "); h(*r.add(20) as usize); super::console::write_byte(b'\n');
-                w("  rax: "); h(*r.add(14) as usize);
-                w("  rbx: "); h(*r.add(13) as usize); super::console::write_byte(b'\n');
-                w("  rcx: "); h(*r.add(12) as usize);
-                w("  rdx: "); h(*r.add(11) as usize); super::console::write_byte(b'\n');
-                w("  rdi: "); h(*r.add(9) as usize);
-                w("  rsi: "); h(*r.add(10) as usize); super::console::write_byte(b'\n');
-                w("  rbp: "); h(*r.add(8) as usize);
-                w("  r8:  "); h(*r.add(7) as usize); super::console::write_byte(b'\n');
-                w("  cr3: "); h(cr3 as usize);
-                w("  fs:  "); h(fs_base as usize); super::console::write_byte(b'\n');
-
-                let upt = crate::arch::x86_64::paging::PageTable4Level::from_cr3(
-                    rux_klib::PhysAddr::new(cr3 as usize));
-                for &va in &[cr2 as usize, 0x10001000usize] {
-                    match upt.translate(rux_klib::VirtAddr::new(va)) {
-                        Ok(pa) => {
-                            w("  translate "); h(va);
-                            w(" -> "); h(pa.as_usize());
-                            let v = *(pa.as_usize() as *const u64);
-                            w(" ["); h(v as usize); w("]\n");
-                        }
-                        Err(_) => {
-                            w("  translate "); h(va);
-                            w(" -> NOT MAPPED\n");
-                        }
-                    }
-                }
+                w("  cr3: "); h(cr3 as usize); super::console::write_byte(b'\n');
             }
             panic!("page fault");
         }
