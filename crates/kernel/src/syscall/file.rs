@@ -23,7 +23,25 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    unsafe { fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE) }
+    unsafe {
+        if fd < 64 && fdt::FD_TABLE[fd].active && fdt::FD_TABLE[fd].is_pipe {
+            let pipe_id = fdt::FD_TABLE[fd].pipe_id;
+            loop {
+                let r = rux_ipc::pipe::read_ex(pipe_id, buf as *mut u8, len, true);
+                if r != -11 {
+                    if r > 0 { crate::pipe::wake_pipe_waiters(pipe_id); }
+                    return r;
+                }
+                if !can_pipe_block() { return 0; }
+                pipe_block(pipe_id);
+                // After waking, re-check that the FD is still a valid pipe
+                if fd >= 64 || !fdt::FD_TABLE[fd].active || !fdt::FD_TABLE[fd].is_pipe {
+                    return 0;
+                }
+            }
+        }
+        fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
+    }
 }
 
 /// write(fd, buf, count) — POSIX.1
@@ -36,7 +54,23 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         return len as isize;
     }
     unsafe {
-        let result = fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE);
+        let result = if fd < 64 && fdt::FD_TABLE[fd].active && fdt::FD_TABLE[fd].is_pipe {
+            let pipe_id = fdt::FD_TABLE[fd].pipe_id;
+            loop {
+                let r = rux_ipc::pipe::write_ex(pipe_id, buf as *const u8, len, true);
+                if r != -11 {
+                    if r > 0 { crate::pipe::wake_pipe_waiters(pipe_id); }
+                    break r;
+                }
+                if !can_pipe_block() { break -32; }
+                pipe_block(pipe_id);
+                if fd >= 64 || !fdt::FD_TABLE[fd].active || !fdt::FD_TABLE[fd].is_pipe {
+                    break -32;
+                }
+            }
+        } else {
+            fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
+        };
         // SIGPIPE: writing to a pipe with no readers
         if result == -32 {
             use rux_proc::signal::*;
@@ -102,7 +136,20 @@ pub fn openat(_dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isiz
 
 /// close(fd) — POSIX.1
 pub fn close(fd: usize) -> isize {
-    unsafe { fdt::sys_close(fd, crate::syscall::PROCESS.in_vfork_child, Some(&crate::pipe::PIPE)) }
+    unsafe {
+        // If closing a pipe end, wake any tasks blocked on that pipe so they
+        // can see the new EOF / EPIPE condition.
+        let pipe_id = if fd < 64 && fdt::FD_TABLE[fd].active && fdt::FD_TABLE[fd].is_pipe {
+            Some(fdt::FD_TABLE[fd].pipe_id)
+        } else {
+            None
+        };
+        let r = fdt::sys_close(fd, crate::syscall::PROCESS.in_vfork_child, Some(&crate::pipe::PIPE));
+        if let Some(pid) = pipe_id {
+            crate::pipe::wake_pipe_waiters(pid);
+        }
+        r
+    }
 }
 
 /// dup(oldfd) — POSIX.1: duplicate fd to lowest available fd.
@@ -214,12 +261,9 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
 }
 
 /// Check if the current process can safely block on a pipe.
-/// Returns false for vfork children or if no other tasks could wake us.
+/// Returns false if no other runnable tasks exist that could wake us.
 unsafe fn can_pipe_block() -> bool {
     use crate::task_table::*;
-    // Don't block in vfork child — parent is suspended, would deadlock.
-    if super::PROCESS.in_vfork_child { return false; }
-    // Only block if other tasks exist that could write/read the pipe.
     (0..MAX_PROCS).any(|i| {
         i != CURRENT_TASK_IDX && TASK_TABLE[i].active
             && TASK_TABLE[i].state != TaskState::Zombie

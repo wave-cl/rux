@@ -13,10 +13,22 @@ pub fn exit(status: i32) -> ! {
             crate::arch::Arch::longjmp(42);
         }
 
-        // Forked child (not vfork): mark zombie, wake parent, dequeue, schedule.
+        // Forked child (not vfork): close pipe FDs, mark zombie, wake parent, schedule.
         use crate::task_table::*;
         let idx = CURRENT_TASK_IDX;
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
+            // Close all pipe FDs so reader/writer counts drop correctly.
+            // Without this, blocked pipe waiters never see EOF/EPIPE.
+            for i in 0..64usize {
+                if rux_fs::fdtable::FD_TABLE[i].active && rux_fs::fdtable::FD_TABLE[i].is_pipe {
+                    let pid = rux_fs::fdtable::FD_TABLE[i].pipe_id;
+                    let pw = rux_fs::fdtable::FD_TABLE[i].pipe_write;
+                    rux_fs::fdtable::FD_TABLE[i].active = false;
+                    (crate::pipe::PIPE.close)(pid, pw);
+                    crate::pipe::wake_pipe_waiters(pid);
+                }
+            }
+
             TASK_TABLE[idx].exit_code = status;
             TASK_TABLE[idx].state = TaskState::Zombie;
 
