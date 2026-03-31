@@ -10,7 +10,7 @@ use rux_proc::signal::SignalHot;
 use rux_fs::fdtable::{OpenFile, EMPTY_FD};
 
 /// Maximum number of concurrent processes.
-pub const MAX_PROCS: usize = 8;
+pub const MAX_PROCS: usize = 16;
 
 /// Process lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
