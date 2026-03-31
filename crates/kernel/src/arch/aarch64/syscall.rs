@@ -13,7 +13,8 @@ use super::console;
 const FRAME_REGS: usize = 34;
 
 /// Sigreturn trampoline virtual address (user-accessible page).
-const SIGRETURN_TRAMPOLINE_VA: usize = 0x7FFF_F000;
+/// Must not conflict with user stack (0x7FFE0000..0x80000000) or code (near 0x400000).
+const SIGRETURN_TRAMPOLINE_VA: usize = 0x7FFD_F000;
 
 /// Whether the trampoline page has been mapped in the current page table.
 static mut TRAMPOLINE_MAPPED: bool = false;
@@ -114,6 +115,15 @@ unsafe fn ensure_trampoline() {
         rux_klib::PhysAddr::new(pa),
         flags,
         alloc,
+    );
+    // Flush TLB for the trampoline page to ensure the new mapping is visible.
+    core::arch::asm!(
+        "dsb ishst",
+        "tlbi vale1is, {va}",
+        "dsb ish",
+        "isb",
+        va = in(reg) (SIGRETURN_TRAMPOLINE_VA >> 12) as u64,
+        options(nostack),
     );
     TRAMPOLINE_MAPPED = true;
 }

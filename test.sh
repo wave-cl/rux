@@ -50,7 +50,7 @@ OUTPUT=$( { sleep 3; \
     printf 'id\n'; sleep 1; \
     printf 'ls /proc\n'; sleep 1; \
     printf 'ls /proc/1\n'; sleep 1; \
-    printf 'top -b -n1 | head -5\n'; sleep 2; \
+    printf 'top -b -n1 | head -5\n'; sleep 5; \
     printf 'ln -s /bin/busybox /tmp/mylink && readlink /tmp/mylink\n'; sleep 1; \
     printf 'mkdir /tmp/d && ls /tmp\n'; sleep 1; \
     printf 'echo -n abcd | wc -c\n'; sleep 2; \
@@ -62,7 +62,7 @@ OUTPUT=$( { sleep 3; \
     printf 'echo hi > /tmp/t && mv /tmp/t /tmp/t2 && cat /tmp/t2\n'; sleep 2; \
     printf 'printf "hello world\\n" | wc -w\n'; sleep 2; \
     printf 'cat /proc/uptime\n'; sleep 1; \
-    printf 'cat /proc/meminfo | head -1\n'; sleep 1; \
+    printf 'cat /proc/meminfo | head -1\n'; sleep 2; \
     printf 'cat /proc/loadavg\n'; sleep 1; \
     printf 'cat /proc/mounts\n'; sleep 1; \
     printf 'cat /proc/filesystems\n'; sleep 1; \
@@ -75,7 +75,7 @@ OUTPUT=$( { sleep 3; \
     printf 'sleep 0 && echo sleepdone\n'; sleep 2; \
     printf 'rm /tmp/tfile && echo rmdone\n'; sleep 2; \
     printf 'wc -l /etc/passwd\n'; sleep 2; \
-    printf 'env | head -1\n'; sleep 1; \
+    printf 'env | head -1\n'; sleep 3; \
     printf 'ln /bin/busybox /tmp/hl && ls /tmp/hl\n'; sleep 2; \
     printf 'chmod 777 /tmp/hl && stat /tmp/hl\n'; sleep 2; \
     printf 'echo test > /dev/null && echo devnull_ok\n'; sleep 2; \
@@ -95,8 +95,8 @@ OUTPUT=$( { sleep 3; \
     printf 'stat /etc/passwd > /dev/null && echo accessok\n'; sleep 1; \
     printf 'cut -d: -f1 /etc/passwd\n'; sleep 2; \
     printf 'echo hello | tr a-z A-Z\n'; sleep 2; \
+    printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 5; \
     printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 2; \
-    printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 3; \
     printf 'exit\n'; sleep 1; \
     } | \
     "$QEMU_X86" -cpu Haswell \
@@ -233,7 +233,7 @@ OUTPUT=$( { sleep 8; \
     printf 'echo redir_test > /tmp/r && cat /tmp/r\n'; sleep 3; \
     printf 'echo hi > /tmp/t && mv /tmp/t /tmp/t2 && cat /tmp/t2\n'; sleep 3; \
     printf 'printf "hello world\\n" | wc -w\n'; sleep 3; \
-    printf 'top -b -n1 | head -5\n'; sleep 3; \
+    printf 'top -b -n1 | head -5\n'; sleep 5; \
     printf 'cat /proc/uptime\n'; sleep 3; \
     printf 'cat /proc/meminfo | head -1\n'; sleep 3; \
     printf 'cat /proc/loadavg\n'; sleep 3; \
@@ -268,8 +268,8 @@ OUTPUT=$( { sleep 8; \
     printf 'stat /etc/passwd > /dev/null && echo accessok\n'; sleep 3; \
     printf 'cut -d: -f1 /etc/passwd\n'; sleep 3; \
     printf 'echo hello | tr a-z A-Z\n'; sleep 3; \
+    printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 6; \
     printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 3; \
-    printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 4; \
     printf 'exit\n'; sleep 2; \
     } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \

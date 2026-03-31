@@ -130,7 +130,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         unsafe {
             let hot = &mut super::PROCESS.signal_hot;
             let cold = &mut super::PROCESS.signal_cold;
-            let action = cold.get_action(sig);
+            let action = *cold.get_action(sig);
 
             // SIGKILL always terminates
             if sig == Signal::Kill {

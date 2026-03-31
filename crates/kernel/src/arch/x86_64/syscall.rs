@@ -254,9 +254,9 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
-        let _ = signum; // x86_64: signum returned as RAX (function return value)
         let stack_top_mut = CURRENT_KSTACK_TOP as *mut u64;
-        *stack_top_mut.sub(1) = handler as u64; // RCX = handler address → RIP via sysretq
+        *stack_top_mut.sub(1) = handler as u64;   // RCX = handler address → RIP via sysretq
+        *stack_top_mut.sub(10) = signum as u64;    // RDI = signum (1st arg to handler)
     }
 
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
