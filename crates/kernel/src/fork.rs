@@ -103,7 +103,9 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.signal_restorer = crate::syscall::PROCESS.signal_restorer;
     slot.last_child_exit = crate::syscall::PROCESS.last_child_exit;
     slot.child_available = crate::syscall::PROCESS.child_available;
-    for i in 0..64 { slot.fds[i] = rux_fs::fdtable::FD_TABLE[i]; }
+    core::ptr::copy_nonoverlapping(
+        rux_fs::fdtable::FD_TABLE.as_ptr(), slot.fds.as_mut_ptr(), 64,
+    );
 
     #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
     {
@@ -150,10 +152,6 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
     use rux_mm::FrameAllocator;
 
     let parent_pt = crate::arch::PageTable::from_root(PhysAddr::new(parent_pt_root as usize));
-    // Raw pointer lets the closure call parent_pt.mark_cow() while
-    // walk_user_pages holds &self on the same object — both are &T so this
-    // is sound inside the unsafe fn.
-    let parent_ptr: *const crate::arch::PageTable = &parent_pt;
 
     // Create child page table with kernel identity map
     let mut child_pt = crate::arch::PageTable::new(alloc).expect("child PT alloc");
@@ -163,24 +161,33 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
     }
 
     // Initial mapping for shared pages: user-readable + executable, no write.
-    // The first write by either process fires a fault handled by handle_cow_fault.
     let user_rx = rux_mm::MappingFlags::USER
         .or(rux_mm::MappingFlags::READ)
         .or(rux_mm::MappingFlags::EXECUTE);
 
-    // Walk parent's user pages; for each frame, share it COW with the child.
-    parent_pt.walk_user_pages(|va, pa, _flags| {
-        // Mark parent's PTE read-only + COW; flush TLB so the CPU uses the
-        // new read-only PTE immediately (no stale writable TLB entry).
-        (*parent_ptr).mark_cow(va);
+    let cow = crate::arch::PageTable::cow_bit();
 
-        // Map child to the same physical frame, also read-only + COW.
+    // Walk parent's user pages with mutable PTE access. For each page:
+    // 1. Mark parent COW inline (no re-walk) — set read-only + COW bit
+    // 2. Map child to same physical frame with COW flags
+    // Previous: 5 walks/page (walk + mark_cow + unmap + map + mark_cow)
+    // Now: 1 walk (inline parent) + 1 walk (child map_4k) + 1 walk (child COW bit)
+    parent_pt.walk_user_pages_mut(|va, pa, parent_pte| {
+        // Mark parent COW inline — no re-walk needed
+        use rux_arch::pte::PageTableEntryOps;
+        crate::arch::ArchPte::set_writable(parent_pte, false);
+        parent_pte.0 |= cow;
+        crate::arch::PageTable::flush_tlb(va);
+
+        // Map child to same physical frame (read-only, no COW bit yet)
         let _ = child_pt.unmap_4k(va);
         let _ = child_pt.map_4k(va, pa, user_rx, alloc);
-        child_pt.mark_cow(va);
+        // Set COW bit on the child's freshly-mapped PTE
+        if let Some((child_pte, _)) = child_pt.leaf_pte_and_pa(va) {
+            (*child_pte).0 |= cow;
+        }
 
-        // Two processes now share this frame — refcount = 2.
-        // handle_cow_fault uses the refcount to decide copy-vs-remap.
+        // Two sharers — refcount = 2
         crate::cow::inc_ref(pa);
         crate::cow::inc_ref(pa);
     });

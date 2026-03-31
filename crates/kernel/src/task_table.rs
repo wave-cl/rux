@@ -204,7 +204,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     old.signal_restorer = PROCESS.signal_restorer;
     old.last_child_exit = PROCESS.last_child_exit;
     old.child_available = PROCESS.child_available;
-    for i in 0..64 { old.fds[i] = FD_TABLE[i]; }
+    core::ptr::copy_nonoverlapping(FD_TABLE.as_ptr(), old.fds.as_mut_ptr(), 64);
 
     // Save hardware state
     #[cfg(target_arch = "x86_64")]
@@ -234,7 +234,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     PROCESS.signal_restorer = new.signal_restorer;
     PROCESS.last_child_exit = new.last_child_exit;
     PROCESS.child_available = new.child_available;
-    for i in 0..64 { FD_TABLE[i] = new.fds[i]; }
+    core::ptr::copy_nonoverlapping(new.fds.as_ptr(), FD_TABLE.as_mut_ptr(), 64);
 
     // Restore hardware state
     #[cfg(target_arch = "x86_64")]

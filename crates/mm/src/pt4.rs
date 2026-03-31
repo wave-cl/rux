@@ -272,6 +272,55 @@ impl<A: ArchPaging> PageTable4Level<A> {
         }
     }
 
+    /// Walk all user-space 4K page mappings with mutable PTE access.
+    ///
+    /// Like `walk_user_pages` but yields `&mut PageTableEntry` so callers can
+    /// modify PTEs in-place (e.g., marking COW) without a separate re-walk.
+    /// Also provides the COW bit value for convenience.
+    ///
+    /// # Safety
+    /// Page table must be valid and accessible via physical addresses.
+    pub unsafe fn walk_user_pages_mut<F>(&self, mut f: F)
+    where F: FnMut(VirtAddr, PhysAddr, &mut PageTableEntry)
+    {
+        let l3 = self.root.as_usize() as *const PageTablePage;
+        for l3i in 0..256 {
+            let l3e = (*l3).entries[l3i];
+            if !A::Pte::is_present(l3e) { continue; }
+
+            let l2 = A::Pte::phys_addr(l3e).as_usize() as *const PageTablePage;
+            for l2i in 0..PT_ENTRIES {
+                let l2e = (*l2).entries[l2i];
+                if !A::Pte::is_present(l2e) { continue; }
+                if A::Pte::is_huge(l2e) { continue; }
+
+                let l1 = A::Pte::phys_addr(l2e).as_usize() as *const PageTablePage;
+                for l1i in 0..PT_ENTRIES {
+                    let l1e = (*l1).entries[l1i];
+                    if !A::Pte::is_present(l1e) { continue; }
+                    if A::Pte::is_huge(l1e) { continue; }
+
+                    let l0 = A::Pte::phys_addr(l1e).as_usize() as *mut PageTablePage;
+                    for l0i in 0..PT_ENTRIES {
+                        let pte = &mut (*l0).entries[l0i];
+                        if !A::Pte::is_present(*pte) { continue; }
+                        if !A::Pte::is_user(*pte) { continue; }
+
+                        let va = (l3i << 39) | (l2i << 30) | (l1i << 21) | (l0i << 12);
+                        let pa = A::Pte::phys_addr(*pte);
+                        f(VirtAddr::new(va), pa, pte);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Return the architecture's COW bit value (delegates to `A::cow_bit()`).
+    pub fn cow_bit() -> u64 { A::cow_bit() }
+
+    /// Flush the TLB for a single page (delegates to `A::flush_tlb()`).
+    pub unsafe fn flush_tlb(virt: VirtAddr) { A::flush_tlb(virt); }
+
     /// Free the user-space address mapping created during fork.
     ///
     /// Walks user-space L3 entries (0..256), frees all user leaf page frames
@@ -352,6 +401,12 @@ impl<A: ArchPaging> PageTable4Level<A> {
     /// Get a mutable pointer to the leaf (L0) PTE for a 4K virtual address.
     /// Returns None if the mapping doesn't exist at any level.
     unsafe fn leaf_pte_mut(&self, virt: VirtAddr) -> Option<*mut PageTableEntry> {
+        self.leaf_pte_and_pa(virt).map(|(pte, _)| pte)
+    }
+
+    /// Single walk: return mutable PTE pointer + physical address of the
+    /// mapped frame. Avoids redundant walks when callers need both.
+    pub unsafe fn leaf_pte_and_pa(&self, virt: VirtAddr) -> Option<(*mut PageTableEntry, PhysAddr)> {
         let l3 = self.root.as_usize() as *const PageTablePage;
         let l3e = (*l3).entries[pt_index(virt, PageLevel::L3)];
         if !A::Pte::is_present(l3e) { return None; }
@@ -365,7 +420,9 @@ impl<A: ArchPaging> PageTable4Level<A> {
         if !A::Pte::is_present(l1e) || A::Pte::is_huge(l1e) { return None; }
 
         let l0 = A::Pte::phys_addr(l1e).as_usize() as *mut PageTablePage;
-        Some(&mut (*l0).entries[pt_index(virt, PageLevel::L0)])
+        let pte = &mut (*l0).entries[pt_index(virt, PageLevel::L0)];
+        let pa = A::Pte::phys_addr(*pte);
+        Some((pte as *mut PageTableEntry, pa))
     }
 
     /// Mark a leaf PTE as COW: clear writable, set COW software bit, flush TLB.
@@ -421,6 +478,50 @@ impl<A: ArchPaging> PageTable4Level<A> {
             (*pte).0 &= !A::cow_bit();
             A::Pte::set_writable(&mut *pte, true);
             A::flush_tlb(virt);
+        }
+    }
+
+    /// Single-walk COW fault resolution.
+    ///
+    /// Walks L3→L0 once to get the PTE. If the COW bit is set, calls
+    /// `refcount_fn(pa)` to determine the sharing count, then resolves:
+    /// - `refcount <= 1` (sole owner): clears COW, sets writable. Returns `Ok(None)`.
+    /// - `refcount > 1` (shared): copies page to new frame, remaps writable,
+    ///   clears COW. Returns `Ok(Some(old_pa))` so the caller can `dec_ref`.
+    /// - Not COW: returns `Err(())`.
+    pub unsafe fn resolve_cow_fault(
+        &self,
+        virt: VirtAddr,
+        alloc: &mut dyn FrameAllocator,
+        refcount_fn: impl Fn(PhysAddr) -> u32,
+    ) -> Result<Option<PhysAddr>, ()> {
+        let (pte, old_pa) = self.leaf_pte_and_pa(virt).ok_or(())?;
+
+        if (*pte).0 & A::cow_bit() == 0 {
+            return Err(()); // Not a COW page
+        }
+
+        let refcount = refcount_fn(old_pa);
+        if refcount <= 1 {
+            // Sole owner: just make writable, no copy needed
+            (*pte).0 &= !A::cow_bit();
+            A::Pte::set_writable(&mut *pte, true);
+            A::flush_tlb(virt);
+            Ok(None)
+        } else {
+            // Shared: allocate new frame and copy
+            let new_frame = alloc.alloc(PageSize::FourK).map_err(|_| ())?;
+            core::ptr::copy_nonoverlapping(
+                old_pa.as_usize() as *const u8,
+                new_frame.as_usize() as *mut u8,
+                4096,
+            );
+            // Update PTE: new frame, writable, no COW
+            let old_flags = A::Pte::flags(*pte);
+            *pte = A::Pte::encode(new_frame, old_flags & !A::cow_bit());
+            A::Pte::set_writable(&mut *pte, true);
+            A::flush_tlb(virt);
+            Ok(Some(old_pa))
         }
     }
 

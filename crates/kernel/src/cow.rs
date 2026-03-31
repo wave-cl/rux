@@ -37,33 +37,23 @@ pub unsafe fn refs() -> &'static mut FrameRefTable {
 }
 
 /// Handle a COW page fault at `fault_addr`.
+///
+/// Single page table walk via `resolve_cow_fault`: checks COW bit, reads
+/// the refcount, and either makes writable (sole owner) or copies the page
+/// (shared). Previous implementation did 4 separate walks.
+///
 /// Returns Ok(()) if resolved, Err if the fault is not a COW fault.
 pub unsafe fn handle_cow_fault(fault_addr: usize) -> Result<(), ()> {
     let va = VirtAddr::new(fault_addr & !0xFFF);
 
-    // Get current page table
     use rux_arch::PageTableRootOps;
     let root = crate::arch::Arch::read();
     let pt = crate::arch::PageTable::from_root(PhysAddr::new(root as usize));
-
-    // Check if this is a COW page
-    if !pt.is_cow(va) {
-        return Err(()); // Not a COW fault — real segfault
-    }
-
     let alloc = crate::kstate::alloc();
 
-    // Check refcount
-    let old_pa = pt.translate(va).map_err(|_| ())?;
-    let rc = FRAME_REFS.count(old_pa);
-
-    if rc <= 1 {
-        // Sole owner: just make writable, no copy needed
-        pt.make_writable(va);
-    } else {
-        // Shared: copy page, remap, decrement old refcount
-        let old_pa = pt.resolve_cow(va, alloc).map_err(|_| ())?;
-        FRAME_REFS.dec(old_pa);
+    match pt.resolve_cow_fault(va, alloc, |pa| FRAME_REFS.count(pa))? {
+        Some(old_pa) => { FRAME_REFS.dec(old_pa); }
+        None => {}
     }
 
     Ok(())
