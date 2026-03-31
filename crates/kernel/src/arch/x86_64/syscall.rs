@@ -169,18 +169,11 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Process creation syscalls (handled before generic dispatch)
     match nr {
         // 56=clone, 57=fork, 58=vfork
-        // Route vfork (58) and clone with CLONE_VFORK flag to the setjmp path.
-        // All other fork/clone calls go to sys_fork (real multi-process).
-        58 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64,
-        56 => {
-            let flags = a0 as usize;
-            const CLONE_VFORK: usize = 0x4000;
-            if flags & CLONE_VFORK != 0 {
-                return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64;
-            }
-            return unsafe { crate::fork::sys_fork() } as i64;
-        }
-        57 => return unsafe { crate::fork::sys_fork() } as i64,
+        // COW fork makes vfork unnecessary — both parent and child run
+        // concurrently with copy-on-write isolation. This eliminates the
+        // vfork deadlock where a pipe-blocking child couldn't be woken
+        // because the parent was suspended in setjmp.
+        56 | 57 | 58 => return unsafe { crate::fork::sys_fork() } as i64,
         59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
         _ => {}
     }

@@ -38,16 +38,10 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {
-            // nr=220 is clone(flags, ...). Route based on flags:
-            // CLONE_VFORK (0x4000) → setjmp path; else → real fork.
+            // nr=220 is clone(flags, ...). COW fork replaces vfork — both
+            // parent and child run concurrently with COW isolation.
             220 => {
-                let flags = a0 as usize;
-                const CLONE_VFORK: usize = 0x4000;
-                if flags & CLONE_VFORK != 0 {
-                    crate::syscall::generic_vfork::<super::Aarch64>() as i64
-                } else {
-                    crate::fork::sys_fork() as i64
-                }
+                crate::fork::sys_fork() as i64
             }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             139 => {
