@@ -146,7 +146,8 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         1 => Syscall::Write,
         2 => Syscall::Open,
         3 => Syscall::Close,
-        4 | 6 => Syscall::Stat,             // stat / lstat
+        4 => Syscall::Stat,                 // stat (follows symlinks)
+        6 => Syscall::Lstat,                // lstat (no follow)
         5 => Syscall::Fstat,
         7 => Syscall::Poll,
         8 => Syscall::Lseek,

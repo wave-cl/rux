@@ -168,9 +168,14 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
 
 // ── File metadata (POSIX.1 Section 2) ───────────────────────────────
 
-/// stat(pathname, statbuf) — POSIX.1
+/// stat(pathname, statbuf) — POSIX.1 (follows symlinks)
 pub fn stat(pathname: usize, buf: usize) -> isize {
-    fstatat(0xffffff9c, pathname, buf)
+    fstatat(0xffffff9c, pathname, buf, 0)
+}
+
+/// lstat(pathname, statbuf) — POSIX.1 (does NOT follow final symlink)
+pub fn lstat(pathname: usize, buf: usize) -> isize {
+    fstatat(0xffffff9c, pathname, buf, 0x100) // AT_SYMLINK_NOFOLLOW
 }
 
 /// fstat(fd, statbuf) — POSIX.1
@@ -220,15 +225,24 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
 }
 
 /// fstatat(dirfd, pathname, statbuf, flags) — POSIX.1-2008
-pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize) -> isize {
+/// flags=0x100 (AT_SYMLINK_NOFOLLOW): stat the symlink itself, not its target.
+pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize {
     if buf == 0 { return -14; }
+    const AT_SYMLINK_NOFOLLOW: usize = 0x100;
     unsafe {
         use rux_fs::FileSystem;
         let path = super::read_user_path(pathname);
         let fs = crate::kstate::fs();
-        let ino = match super::resolve_with_cwd(path) {
-            Ok(ino) => ino,
-            Err(e) => return e,
+        let ino = if flags & AT_SYMLINK_NOFOLLOW != 0 {
+            match rux_fs::path::resolve_nofollow(fs, super::CWD_INODE, path) {
+                Ok(ino) => ino,
+                Err(e) => return e,
+            }
+        } else {
+            match super::resolve_with_cwd(path) {
+                Ok(ino) => ino,
+                Err(e) => return e,
+            }
         };
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
@@ -562,6 +576,12 @@ pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
             Err(_) => -17,
         }
     }
+}
+
+/// readlinkat(dirfd, pathname, buf, bufsiz) — POSIX.1-2008
+/// Ignores dirfd (assumes AT_FDCWD / absolute paths).
+pub fn readlinkat(_dirfd: usize, path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
+    readlink(path_ptr, buf, bufsiz)
 }
 
 /// readlink(pathname, buf, bufsiz) — POSIX.1

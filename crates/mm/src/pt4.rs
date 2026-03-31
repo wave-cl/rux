@@ -79,6 +79,42 @@ impl<A: ArchPaging> PageTable4Level<A> {
         Ok(())
     }
 
+    /// Translate a virtual address to its physical address, but only if
+    /// the leaf PTE is writable. Returns `NotMapped` if not present or read-only.
+    pub fn translate_writable(&self, virt: VirtAddr) -> Result<PhysAddr, MemoryError> {
+        unsafe {
+            let l3 = self.root.as_usize() as *const PageTablePage;
+            let l3e = (*l3).entries[pt_index(virt, PageLevel::L3)];
+            if !A::Pte::is_present(l3e) { return Err(MemoryError::NotMapped); }
+
+            let l2 = A::Pte::phys_addr(l3e).as_usize() as *const PageTablePage;
+            let l2e = (*l2).entries[pt_index(virt, PageLevel::L2)];
+            if !A::Pte::is_present(l2e) { return Err(MemoryError::NotMapped); }
+            if A::Pte::is_huge(l2e) {
+                if !A::Pte::is_writable(l2e) { return Err(MemoryError::NotMapped); }
+                let base = A::Pte::phys_addr(l2e).as_usize() & !0x3FFFFFFF;
+                return Ok(PhysAddr::new(base + (virt.as_usize() & 0x3FFFFFFF)));
+            }
+
+            let l1 = A::Pte::phys_addr(l2e).as_usize() as *const PageTablePage;
+            let l1e = (*l1).entries[pt_index(virt, PageLevel::L1)];
+            if !A::Pte::is_present(l1e) { return Err(MemoryError::NotMapped); }
+            if A::Pte::is_huge(l1e) {
+                if !A::Pte::is_writable(l1e) { return Err(MemoryError::NotMapped); }
+                let base = A::Pte::phys_addr(l1e).as_usize() & !0x1FFFFF;
+                return Ok(PhysAddr::new(base + (virt.as_usize() & 0x1FFFFF)));
+            }
+
+            let l0 = A::Pte::phys_addr(l1e).as_usize() as *const PageTablePage;
+            let l0e = (*l0).entries[pt_index(virt, PageLevel::L0)];
+            if !A::Pte::is_present(l0e) { return Err(MemoryError::NotMapped); }
+            if !A::Pte::is_writable(l0e) { return Err(MemoryError::NotMapped); }
+
+            let phys = A::Pte::phys_addr(l0e).as_usize();
+            Ok(PhysAddr::new(phys + (virt.as_usize() & 0xFFF)))
+        }
+    }
+
     /// Translate a virtual address to its physical address.
     pub fn translate(&self, virt: VirtAddr) -> Result<PhysAddr, MemoryError> {
         unsafe {

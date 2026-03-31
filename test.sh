@@ -51,6 +51,7 @@ OUTPUT=$( { sleep 3; \
     printf 'ls /proc\n'; sleep 1; \
     printf 'ls /proc/1\n'; sleep 1; \
     printf 'top -b -n1 | head -5\n'; sleep 2; \
+    printf 'exit\n'; sleep 1; \
     } | \
     "$QEMU_X86" -cpu Haswell \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
@@ -117,6 +118,7 @@ OUTPUT=$( { sleep 8; \
     printf 'echo hello | wc -w\n'; sleep 3; \
     printf 'id\n'; sleep 3; \
     printf 'ls /proc\n'; sleep 3; \
+    printf 'exit\n'; sleep 2; \
     } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \

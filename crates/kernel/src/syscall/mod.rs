@@ -96,7 +96,7 @@ pub enum Syscall {
     Read, Write, Open, OpenAt, Close, Lseek, Dup, Dup2, Fcntl,
     Writev, Sendfile, Ioctl, Pipe2,
     // File metadata
-    Stat, Fstat, FstatAt, Faccessat, Readlink,
+    Stat, Lstat, Fstat, FstatAt, Faccessat, Readlink, Readlinkat,
     // Directory / path ops
     Getcwd, Creat, Mkdir, Unlink, Chdir, Rename, Symlink,
     // Permissions (stubs)
@@ -151,10 +151,12 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
 
         // ── File metadata ──────────────────────────────────────────
         Syscall::Stat => posix::stat(a0, a1),
+        Syscall::Lstat => posix::lstat(a0, a1),
         Syscall::Fstat => posix::fstat(a0, a1),
-        Syscall::FstatAt => posix::fstatat(a0, a1, a2),
+        Syscall::FstatAt => posix::fstatat(a0, a1, a2, a3),
         Syscall::Faccessat => 0,
         Syscall::Readlink => posix::readlink(a0, a1, a2),
+        Syscall::Readlinkat => posix::readlinkat(a0, a1, a2, a3),
 
         // ── Directory / path ops ──────────────────────────────────
         Syscall::Getcwd => posix::getcwd(a0, a1),
@@ -255,6 +257,8 @@ pub trait SyscallTranslate {
 static mut VFORK_PARENT_MMAP_BASE: usize = 0;
 static mut VFORK_PARENT_PROGRAM_BRK: usize = 0;
 static mut VFORK_PARENT_CWD_INODE: u64 = 0; // inode IDs are genuinely u64
+static mut VFORK_PARENT_CWD_PATH: [u8; 256] = [0u8; 256];
+static mut VFORK_PARENT_CWD_PATH_LEN: usize = 1;
 static mut VFORK_PARENT_USER_SP: usize = 0;
 static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
 static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
@@ -262,6 +266,18 @@ static mut VFORK_PARENT_FDS: [rux_fs::fdtable::OpenFile; 64] = [rux_fs::fdtable:
     ino: 0, offset: 0, flags: 0, active: false, is_console: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
 }; 64];
+
+/// Maximum number of user data pages to snapshot around vfork.
+const VFORK_SNAP_MAX: usize = 1024;
+
+/// Virtual addresses of snapshotted pages (4KB aligned).
+static mut VFORK_SNAP_VA: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
+/// Physical addresses of the original frames.
+static mut VFORK_SNAP_ORIG_PHYS: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
+/// Physical addresses of snapshot copies (freed after parent restore).
+static mut VFORK_SNAP_COPY_PHYS: [usize; VFORK_SNAP_MAX] = [0; VFORK_SNAP_MAX];
+/// Number of valid entries in the snapshot arrays.
+static mut VFORK_SNAP_COUNT: usize = 0;
 
 /// Generic vfork implementation. The arch provides hardware primitives
 /// via the `VforkContext` trait; this function handles the algorithm.
@@ -282,6 +298,8 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
     VFORK_PARENT_MMAP_BASE = MMAP_BASE;
     VFORK_PARENT_PROGRAM_BRK = PROGRAM_BRK;
     VFORK_PARENT_CWD_INODE = CWD_INODE;
+    for i in 0..CWD_PATH_LEN { VFORK_PARENT_CWD_PATH[i] = CWD_PATH[i]; }
+    VFORK_PARENT_CWD_PATH_LEN = CWD_PATH_LEN;
     for i in 0..64 { VFORK_PARENT_FDS[i] = rux_fs::fdtable::FD_TABLE[i]; }
     CHILD_AVAILABLE = true;
 
@@ -322,6 +340,63 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         let child_top_va = child_va_base + (child_stack_pages - 1) * 4096;
         V::set_user_sp(child_top_va + offset_in_page);
 
+        // Snapshot parent's user data/BSS pages and mmap'd heap/TLS pages
+        // so that forkchild() modifications can be undone when the parent
+        // resumes.  We scan two ranges:
+        //   1. 0x1000..PROGRAM_BRK  — ELF data/BSS
+        //   2. 0x10000000..MMAP_BASE — musl heap and TLS (mmap'd anonymous pages)
+        // Only writable pages with PA >= allocator base are snapshotted (skips
+        // read-only .text and kernel identity-mapped pages).
+        VFORK_SNAP_COUNT = 0;
+        let alloc_base = crate::kstate::alloc().base.as_usize();
+
+        // Helper closure: snapshot one page.
+        macro_rules! snap_page {
+            ($snap_va:expr) => {{
+                if let Ok(orig_pa) = upt.translate_writable(
+                    rux_klib::VirtAddr::new($snap_va)) {
+                    let orig_page = orig_pa.as_usize() & !0xFFF;
+                    if orig_page >= alloc_base && VFORK_SNAP_COUNT < VFORK_SNAP_MAX {
+                        if let Ok(snap_pa) = alloc.alloc(rux_mm::PageSize::FourK) {
+                            let op = orig_page as *const u8;
+                            let sp = snap_pa.as_usize() as *mut u8;
+                            core::ptr::copy_nonoverlapping(op, sp, 4096);
+                            VFORK_SNAP_VA[VFORK_SNAP_COUNT] = $snap_va;
+                            VFORK_SNAP_ORIG_PHYS[VFORK_SNAP_COUNT] = orig_page;
+                            VFORK_SNAP_COPY_PHYS[VFORK_SNAP_COUNT] = snap_pa.as_usize();
+                            VFORK_SNAP_COUNT += 1;
+                        }
+                    }
+                }
+            }};
+        }
+
+        // Range 1: ELF data / BSS
+        let mut va = 0x1000usize;
+        while va < VFORK_PARENT_PROGRAM_BRK {
+            snap_page!(va);
+            va += 4096;
+        }
+
+        // Range 2: mmap'd heap / TLS (musl allocates these with mmap)
+        va = 0x10000000usize;
+        while va < VFORK_PARENT_MMAP_BASE {
+            snap_page!(va);
+            va += 4096;
+        }
+
+        {
+            use rux_arch::ConsoleOps;
+            let mut buf = [0u8; 10];
+            crate::arch::Arch::write_str("rux: snap count=");
+            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, VFORK_SNAP_COUNT as u32));
+            crate::arch::Arch::write_str(" brk=");
+            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, VFORK_PARENT_PROGRAM_BRK as u32));
+            crate::arch::Arch::write_str(" mmap=");
+            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, VFORK_PARENT_MMAP_BASE as u32));
+            crate::arch::Arch::write_str("\n");
+        }
+
         return 0; // child gets fork return 0
     } else {
         // ── Parent resume ──────────────────────────────────────────
@@ -335,10 +410,30 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         V::clear_jmp();
         IN_VFORK_CHILD = false;
 
+        // Restore parent's data pages: undo any writes forkchild() made
+        // (e.g. g_parsefile state zeroed by closescript()).
+        use rux_mm::FrameAllocator;
+        let restore_alloc = crate::kstate::alloc();
+        for i in 0..VFORK_SNAP_COUNT {
+            let orig_phys = VFORK_SNAP_ORIG_PHYS[i];
+            let snap_phys = VFORK_SNAP_COPY_PHYS[i];
+            let orig = orig_phys as *mut u8;
+            let snap = snap_phys as *const u8;
+            core::ptr::copy_nonoverlapping(snap, orig, 4096);
+            restore_alloc.dealloc(
+                rux_klib::PhysAddr::new(snap_phys),
+                rux_mm::PageSize::FourK,
+            );
+        }
+        VFORK_SNAP_COUNT = 0;
+
         // Restore process state
         MMAP_BASE = VFORK_PARENT_MMAP_BASE;
         PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
         CWD_INODE = VFORK_PARENT_CWD_INODE;
+        for i in 0..VFORK_PARENT_CWD_PATH_LEN { CWD_PATH[i] = VFORK_PARENT_CWD_PATH[i]; }
+        CWD_PATH[VFORK_PARENT_CWD_PATH_LEN] = 0;
+        CWD_PATH_LEN = VFORK_PARENT_CWD_PATH_LEN;
         for i in 0..64 { rux_fs::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
 
         // Restore TLS

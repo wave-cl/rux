@@ -139,6 +139,45 @@ pub fn resolve_with_cwd<F: FileSystem>(fs: &F, cwd: InodeId, path: &[u8]) -> Res
     resolve_path_at(fs, cwd, path).map_err(|_| -2isize)
 }
 
+/// Resolve a path without following the final symlink.
+/// All intermediate symlinks are still followed, but if the final
+/// component is a symlink its inode is returned directly (not followed).
+pub fn resolve_nofollow<F: FileSystem>(fs: &F, cwd: InodeId, path: &[u8]) -> Result<InodeId, isize> {
+    // Root and empty path: return as-is
+    if path.is_empty() { return Ok(cwd); }
+
+    // Strip trailing slashes (but keep at least one char)
+    let mut end = path.len();
+    while end > 1 && path[end - 1] == b'/' { end -= 1; }
+    let path = &path[..end];
+
+    // Find the last component separator
+    let last_slash = path.iter().rposition(|&b| b == b'/');
+
+    match last_slash {
+        None => {
+            // Relative single component: lookup in CWD
+            let fname = FileName::new(path).map_err(|_| -22isize)?;
+            fs.lookup(cwd, fname).map_err(|_| -2isize)
+        }
+        Some(0) => {
+            // "/name" → parent is root
+            let name = &path[1..];
+            if name.is_empty() { return Ok(fs.root_inode()); }
+            let fname = FileName::new(name).map_err(|_| -22isize)?;
+            fs.lookup(fs.root_inode(), fname).map_err(|_| -2isize)
+        }
+        Some(s) => {
+            // "/a/b/name" or "a/b/name" → resolve parent, lookup name
+            let parent_path = &path[..s];
+            let name = &path[s + 1..];
+            let parent = resolve_path_at(fs, cwd, parent_path).map_err(|_| -2isize)?;
+            let fname = FileName::new(name).map_err(|_| -22isize)?;
+            fs.lookup(parent, fname).map_err(|_| -2isize)
+        }
+    }
+}
+
 /// Resolve a path to (parent_inode, basename).
 /// Used by open/creat/unlink/mkdir to find the parent directory.
 pub fn resolve_parent_and_name<'a, F: FileSystem>(

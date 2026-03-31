@@ -63,7 +63,7 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         // File metadata
         79 => Syscall::FstatAt,
         80 => Syscall::Fstat,
-        78 => Syscall::Readlink,            // readlinkat
+        78 => Syscall::Readlinkat,          // readlinkat(dirfd, path, buf, bufsiz)
         48 => Syscall::Faccessat,
         // Directory / path ops
         17 => Syscall::Getcwd,
