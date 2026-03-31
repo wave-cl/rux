@@ -61,6 +61,21 @@ OUTPUT=$( { sleep 3; \
     printf 'echo redir_test > /tmp/r && cat /tmp/r\n'; sleep 2; \
     printf 'echo hi > /tmp/t && mv /tmp/t /tmp/t2 && cat /tmp/t2\n'; sleep 2; \
     printf 'printf "hello world\\n" | wc -w\n'; sleep 2; \
+    printf 'cat /proc/uptime\n'; sleep 1; \
+    printf 'cat /proc/meminfo | head -1\n'; sleep 1; \
+    printf 'cat /proc/loadavg\n'; sleep 1; \
+    printf 'cat /proc/mounts\n'; sleep 1; \
+    printf 'cat /proc/filesystems\n'; sleep 1; \
+    printf 'cat /proc/cmdline\n'; sleep 1; \
+    printf 'cat /proc/1/cmdline\n'; sleep 1; \
+    printf 'stat /bin/sh\n'; sleep 2; \
+    printf 'df /\n'; sleep 2; \
+    printf 'uptime\n'; sleep 1; \
+    printf 'touch /tmp/tfile && ls /tmp/tfile\n'; sleep 2; \
+    printf 'sleep 0 && echo sleepdone\n'; sleep 2; \
+    printf 'rm /tmp/tfile && echo rmdone\n'; sleep 2; \
+    printf 'wc -l /etc/passwd\n'; sleep 2; \
+    printf 'env | head -1\n'; sleep 1; \
     printf 'exit\n'; sleep 1; \
     } | \
     "$QEMU_X86" -cpu Haswell \
@@ -122,6 +137,25 @@ check "file redirect"           "redir_test"
 check "rename (file)"           "hi"
 check "printf pipe"             "2"
 
+# procfs files
+check "proc/uptime"             "0."
+check "proc/meminfo"            "MemTotal:"
+check "proc/loadavg"            "0.00"
+check "proc/mounts"             "rootfs"
+check "proc/filesystems"        "ramfs"
+check "proc/cmdline"            "rux"
+check "proc/1/cmdline"          "init"
+
+# Syscall coverage
+check "stat"                    "File:"
+check "df"                      "rootfs"
+check "uptime"                  "up"
+check "touch + ls"              "tfile"
+check "sleep + echo"            "sleepdone"
+check "rm + echo"               "rmdone"
+check "wc -l"                   "1"
+check "env"                     "PATH="
+
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
@@ -154,6 +188,21 @@ OUTPUT=$( { sleep 8; \
     printf 'echo hi > /tmp/t && mv /tmp/t /tmp/t2 && cat /tmp/t2\n'; sleep 3; \
     printf 'printf "hello world\\n" | wc -w\n'; sleep 3; \
     printf 'top -b -n1 | head -5\n'; sleep 3; \
+    printf 'cat /proc/uptime\n'; sleep 3; \
+    printf 'cat /proc/meminfo | head -1\n'; sleep 3; \
+    printf 'cat /proc/loadavg\n'; sleep 3; \
+    printf 'cat /proc/mounts\n'; sleep 3; \
+    printf 'cat /proc/filesystems\n'; sleep 3; \
+    printf 'cat /proc/cmdline\n'; sleep 3; \
+    printf 'cat /proc/1/cmdline\n'; sleep 3; \
+    printf 'stat /bin/sh\n'; sleep 3; \
+    printf 'df /\n'; sleep 3; \
+    printf 'uptime\n'; sleep 3; \
+    printf 'touch /tmp/tfile && ls /tmp/tfile\n'; sleep 3; \
+    printf 'sleep 0 && echo sleepdone\n'; sleep 3; \
+    printf 'rm /tmp/tfile && echo rmdone\n'; sleep 3; \
+    printf 'wc -l /etc/passwd\n'; sleep 3; \
+    printf 'env | head -1\n'; sleep 3; \
     printf 'exit\n'; sleep 2; \
     } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
@@ -183,6 +232,7 @@ check "echo"                    "test 123"
 check "ls shows bin"            "bin"
 check "ls shows etc"            "etc"
 check "ls shows proc"           "proc"
+check "ls shows tmp"            "tmp"
 
 # procfs
 check "proc/version"            "rux version"
@@ -211,6 +261,25 @@ check "printf pipe"             "2"
 
 # top
 check "top shows process"       "PID"
+
+# procfs files
+check "proc/uptime"             "0."
+check "proc/meminfo"            "MemTotal:"
+check "proc/loadavg"            "0.00"
+check "proc/mounts"             "rootfs"
+check "proc/filesystems"        "ramfs"
+check "proc/cmdline"            "rux"
+check "proc/1/cmdline"          "init"
+
+# Syscall coverage
+check "stat"                    "File:"
+check "df"                      "rootfs"
+check "uptime"                  "up"
+check "touch + ls"              "tfile"
+check "sleep + echo"            "sleepdone"
+check "rm + echo"               "rmdone"
+check "wc -l"                   "1"
+check "env"                     "PATH="
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
