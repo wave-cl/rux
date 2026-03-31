@@ -63,7 +63,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isiz
         let path = crate::uaccess::read_user_cstr(pathname);
         let fs = crate::kstate::fs();
         let ino = if flags & AT_SYMLINK_NOFOLLOW != 0 {
-            match rux_fs::path::resolve_nofollow(fs, super::PROCESS.cwd_inode, path) {
+            match rux_fs::path::resolve_nofollow(fs, super::PROCESS.fs_ctx.cwd, path) {
                 Ok(ino) => ino,
                 Err(e) => return e,
             }
@@ -100,25 +100,25 @@ pub fn chdir(path_ptr: usize) -> isize {
             return -20; // -ENOTDIR
         }
 
-        super::PROCESS.cwd_inode = ino;
+        super::PROCESS.fs_ctx.cwd = ino;
 
         if path[0] == b'/' {
             let len = path.len().min(255);
-            super::PROCESS.cwd_path[..len].copy_from_slice(&path[..len]);
-            super::PROCESS.cwd_path[len] = 0;
-            super::PROCESS.cwd_path_len = len;
+            super::PROCESS.fs_ctx.cwd_path[..len].copy_from_slice(&path[..len]);
+            super::PROCESS.fs_ctx.cwd_path[len] = 0;
+            super::PROCESS.fs_ctx.cwd_path_len = len;
         } else {
-            let cur_len = super::PROCESS.cwd_path_len;
-            let need_slash = cur_len > 0 && super::PROCESS.cwd_path[cur_len - 1] != b'/';
+            let cur_len = super::PROCESS.fs_ctx.cwd_path_len;
+            let need_slash = cur_len > 0 && super::PROCESS.fs_ctx.cwd_path[cur_len - 1] != b'/';
             let mut pos = cur_len;
-            if need_slash && pos < 255 { super::PROCESS.cwd_path[pos] = b'/'; pos += 1; }
+            if need_slash && pos < 255 { super::PROCESS.fs_ctx.cwd_path[pos] = b'/'; pos += 1; }
             for &b in path {
                 if pos >= 255 { break; }
-                super::PROCESS.cwd_path[pos] = b;
+                super::PROCESS.fs_ctx.cwd_path[pos] = b;
                 pos += 1;
             }
-            super::PROCESS.cwd_path[pos] = 0;
-            super::PROCESS.cwd_path_len = pos;
+            super::PROCESS.fs_ctx.cwd_path[pos] = 0;
+            super::PROCESS.fs_ctx.cwd_path_len = pos;
         }
         0
     }

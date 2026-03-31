@@ -513,6 +513,73 @@ impl SignalCold {
     }
 }
 
+// ── Generic signal delivery (arch-independent algorithm) ──────────────
+
+/// Deliver a pending signal to the user-space handler.
+///
+/// The arch-specific frame/register operations are dispatched via `SignalOps`.
+/// Kernel state (hot/cold/restorer) is passed by reference to avoid coupling
+/// this library function to the kernel's global state.
+///
+/// # Safety
+/// Modifies user-space stack and kernel register save areas via `SignalOps`.
+pub unsafe fn deliver_signal<S: rux_arch::SignalOps>(
+    hot: &mut SignalHot,
+    cold: &mut SignalCold,
+    restorer: &[usize; 32],
+    syscall_result: i64,
+    exit_fn: fn(i32) -> !,
+) -> i64 {
+    let (sig, action, _info) = match cold.dequeue_signal(hot) {
+        Some(v) => v,
+        None => return syscall_result,
+    };
+    let signum = sig as u8;
+
+    // Default action
+    if action.handler_type == SignalHandler::Default {
+        match sig.default_action() {
+            SignalDefault::Terminate | SignalDefault::CoreDump => {
+                exit_fn(128 + signum as i32);
+            }
+            _ => return syscall_result,
+        }
+    }
+    if action.handler_type == SignalHandler::Ignore {
+        return syscall_result;
+    }
+
+    // User handler — arch-specific pre-delivery setup
+    S::sig_pre_deliver();
+
+    // Push signal frame onto user stack (16-byte aligned)
+    let user_sp = S::sig_read_user_sp();
+    let new_sp = (user_sp - S::SIGNAL_FRAME_SIZE) & !0xF;
+    S::sig_write_frame(new_sp, syscall_result, hot.blocked.0, restorer[signum as usize], signum);
+    S::sig_write_user_sp(new_sp);
+    S::sig_redirect_to_handler(action.handler, signum);
+
+    // Block signals during handler (unless SA_NODEFER)
+    let sa_nodefer = action.flags & 0x40000000 != 0;
+    if !sa_nodefer {
+        hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
+    }
+
+    signum as i64
+}
+
+/// Restore pre-signal state from the signal frame on the user stack.
+///
+/// # Safety
+/// Reads from user stack and modifies kernel register save areas via `SignalOps`.
+pub unsafe fn sigreturn<S: rux_arch::SignalOps>(hot: &mut SignalHot) -> i64 {
+    let sp = S::sig_read_user_sp();
+    let (result, saved_mask) = S::sig_restore_frame(sp);
+    S::sig_write_user_sp(sp + S::SIGNAL_FRAME_SIZE);
+    hot.blocked = SignalSet(saved_mask);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -20,11 +20,8 @@ pub struct ProcessState {
     pub program_brk: usize,
     /// Next anonymous mmap virtual address.
     pub mmap_base: usize,
-    /// Current working directory inode (0 = root).
-    pub cwd_inode: u64,
-    /// Current working directory path (for getcwd). Null-terminated.
-    pub cwd_path: [u8; 256],
-    pub cwd_path_len: usize,
+    /// Filesystem context: CWD inode + path cache.
+    pub fs_ctx: rux_proc::fs::FsContext,
     /// Child exit status for wait4.
     pub last_child_exit: i32,
     /// Whether there's a child to collect.
@@ -44,13 +41,7 @@ impl ProcessState {
         Self {
             program_brk: 0,
             mmap_base: 0x10000000,
-            cwd_inode: 0,
-            cwd_path: {
-                let mut buf = [0u8; 256];
-                buf[0] = b'/';
-                buf
-            },
-            cwd_path_len: 1,
+            fs_ctx: rux_proc::fs::FsContext::new(),
             last_child_exit: 0,
             child_available: false,
             in_vfork_child: false,
@@ -101,14 +92,14 @@ pub fn current_time_secs() -> u64 {
 /// Resolve a path using CWD for relative paths.
 pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     let fs = crate::kstate::fs();
-    rux_fs::path::resolve_with_cwd(fs, PROCESS.cwd_inode, path)
+    rux_fs::path::resolve_with_cwd(fs, PROCESS.fs_ctx.cwd, path)
 }
 
 /// Resolve a user path pointer to (parent_inode, basename).
 pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
     let path = crate::uaccess::read_user_cstr(path_ptr);
     let fs = crate::kstate::fs();
-    rux_fs::path::resolve_parent_and_name(fs, PROCESS.cwd_inode, path)
+    rux_fs::path::resolve_parent_and_name(fs, PROCESS.fs_ctx.cwd, path)
 }
 
 /// Fill a Linux struct stat from VFS InodeStat.
@@ -530,63 +521,19 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 // ── Generic signal delivery ─────────────────────────────────────────────
 
 /// Deliver a pending signal to the user-space handler.
-/// Architecture-independent algorithm; arch-specific frame/register ops via `SignalOps`.
+/// Thin wrapper around `rux_proc::signal::deliver_signal` that supplies kernel state.
 pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64) -> i64 {
-    use rux_proc::signal::*;
-
-    let hot = &mut PROCESS.signal_hot;
-    let cold = &mut PROCESS.signal_cold;
-
-    let (sig, action, _info) = match cold.dequeue_signal(hot) {
-        Some(v) => v,
-        None => return syscall_result,
-    };
-    let signum = sig as u8;
-
-    // Default action
-    if action.handler_type == SignalHandler::Default {
-        match sig.default_action() {
-            SignalDefault::Terminate | SignalDefault::CoreDump => {
-                posix::exit(128 + signum as i32);
-                loop {}
-            }
-            _ => return syscall_result,
-        }
-    }
-    if action.handler_type == SignalHandler::Ignore {
-        return syscall_result;
-    }
-
-    // User handler — arch-specific pre-delivery setup (e.g., trampoline mapping)
-    S::sig_pre_deliver();
-
-    // Push signal frame onto user stack (16-byte aligned)
-    let user_sp = S::sig_read_user_sp();
-    let new_sp = (user_sp - S::SIGNAL_FRAME_SIZE) & !0xF;
-    S::sig_write_frame(
-        new_sp, syscall_result, hot.blocked.0,
-        PROCESS.signal_restorer[signum as usize], signum,
-    );
-    S::sig_write_user_sp(new_sp);
-
-    // Redirect to handler
-    S::sig_redirect_to_handler(action.handler, signum);
-
-    // Block signals during handler (unless SA_NODEFER)
-    let sa_nodefer = action.flags & 0x40000000 != 0;
-    if !sa_nodefer {
-        hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
-    }
-
-    signum as i64
+    rux_proc::signal::deliver_signal::<S>(
+        &mut PROCESS.signal_hot,
+        &mut PROCESS.signal_cold,
+        &PROCESS.signal_restorer,
+        syscall_result,
+        |status| { posix::exit(status); loop {} },
+    )
 }
 
 /// Restore pre-signal state from the signal frame on the user stack.
-/// Architecture-independent algorithm; arch-specific register restore via `SignalOps`.
+/// Thin wrapper around `rux_proc::signal::sigreturn` that supplies kernel state.
 pub unsafe fn generic_sigreturn<S: rux_arch::SignalOps>() -> i64 {
-    let sp = S::sig_read_user_sp();
-    let (result, saved_mask) = S::sig_restore_frame(sp);
-    S::sig_write_user_sp(sp + S::SIGNAL_FRAME_SIZE);
-    PROCESS.signal_hot.blocked = rux_proc::signal::SignalSet(saved_mask);
-    result
+    rux_proc::signal::sigreturn::<S>(&mut PROCESS.signal_hot)
 }

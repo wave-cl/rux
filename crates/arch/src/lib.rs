@@ -244,3 +244,22 @@ pub unsafe trait SignalOps {
     /// Optional pre-delivery setup (e.g., aarch64 maps sigreturn trampoline page).
     unsafe fn sig_pre_deliver() {}
 }
+
+/// Linux struct stat layout constants — differs per architecture.
+///
+/// x86_64: st_nlink is u64 at offset 16, st_mode is u32 at offset 24.
+/// aarch64: st_mode is u32 at offset 16, st_nlink is u32 at offset 20.
+pub trait StatLayout {
+    const STAT_SIZE: usize;
+    const INO_OFF: usize;
+    const NLINK_OFF: usize;
+    const NLINK_IS_U64: bool;
+    const MODE_OFF: usize;
+    const UID_OFF: usize;
+    const GID_OFF: usize;
+    const RDEV_OFF: usize;
+    const SIZE_OFF: usize;
+    const BLKSIZE_OFF: usize;
+    const BLKSIZE_IS_I64: bool;
+    const BLOCKS_OFF: usize;
+}

@@ -22,24 +22,7 @@ pub type PageTable = x86_64::paging::PageTable4Level;
 #[cfg(target_arch = "aarch64")]
 pub type PageTable = aarch64::paging::PageTable4Level;
 
-/// Linux struct stat layout constants — differs per architecture.
-///
-/// x86_64: st_nlink is u64 at offset 16, st_mode is u32 at offset 24.
-/// aarch64: st_mode is u32 at offset 16, st_nlink is u32 at offset 20.
-pub trait StatLayout {
-    const STAT_SIZE: usize;        // Total struct size to zero (144 or 128)
-    const INO_OFF: usize;          // st_ino (u64)
-    const NLINK_OFF: usize;        // st_nlink
-    const NLINK_IS_U64: bool;      // true on x86_64, false on aarch64
-    const MODE_OFF: usize;         // st_mode (u32)
-    const UID_OFF: usize;          // st_uid (u32)
-    const GID_OFF: usize;          // st_gid (u32)
-    const RDEV_OFF: usize;         // st_rdev (u64), 0 = skip
-    const SIZE_OFF: usize;         // st_size (i64)
-    const BLKSIZE_OFF: usize;      // st_blksize
-    const BLKSIZE_IS_I64: bool;    // true on x86_64, false on aarch64 (i32)
-    const BLOCKS_OFF: usize;       // st_blocks (i64)
-}
+pub use rux_arch::StatLayout;
 
 /// Fill a Linux struct stat buffer from VFS InodeStat using arch layout constants.
 pub unsafe fn fill_linux_stat<A: StatLayout>(buf: usize, s: &rux_fs::InodeStat) {

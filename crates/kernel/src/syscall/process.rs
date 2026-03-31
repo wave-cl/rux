@@ -37,11 +37,11 @@ pub fn waitpid(_pid: usize, wstatus_ptr: usize, _options: usize) -> isize {
 /// getcwd(buf, size) — POSIX.1
 pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
-        let len = super::PROCESS.cwd_path_len;
+        let len = super::PROCESS.fs_ctx.cwd_path_len;
         if buf == 0 || size < len + 1 { return -34; } // -ERANGE
         let ptr = buf as *mut u8;
         for i in 0..len {
-            *ptr.add(i) = super::PROCESS.cwd_path[i];
+            *ptr.add(i) = super::PROCESS.fs_ctx.cwd_path[i];
         }
         *ptr.add(len) = 0;
     }

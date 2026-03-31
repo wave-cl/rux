@@ -123,7 +123,7 @@ pub struct Task {
     pub times: ProcessTimes,
 
     // ── Padding to 1024 ─────────────────────────────────────────────────
-    pub _pad_final: [u8; 368],
+    pub _pad_final: [u8; 104],
 }
 
 impl Task {
@@ -157,7 +157,7 @@ impl Task {
             creds: Credentials::ROOT,
             fs: FsContext::DEFAULT,
             times: ProcessTimes::ZERO,
-            _pad_final: [0; 368],
+            _pad_final: [0; 104],
         }
     }
 }
@@ -196,7 +196,7 @@ const _: () = {
 
     // FS + times
     assert!(core::mem::offset_of!(Task, fs) == 592);
-    assert!(core::mem::offset_of!(Task, times) == 616);
+    assert!(core::mem::offset_of!(Task, times) == 880);
 };
 
 #[cfg(test)]
