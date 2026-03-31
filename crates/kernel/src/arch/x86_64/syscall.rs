@@ -6,9 +6,9 @@ use super::console;
 
 // ── SYSCALL instruction setup (Linux x86_64 ABI) ───────────────────
 
-/// Kernel stack for syscall entry (used when switching from user RSP).
-/// 64KB should be plenty for the syscall handler call chain.
-static mut SYSCALL_STACK: [u8; 65536] = [0; 65536];
+/// Points to the top of the current task's kernel stack.
+/// Updated on context switch. The SYSCALL entry asm loads RSP from this.
+pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
 /// Saved user RSP during syscall (single-process, no swapgs needed).
 static mut SAVED_USER_RSP: u64 = 0;
@@ -51,7 +51,7 @@ unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         // Switch to kernel stack (save user RSP)
         "mov [rip + {saved_user_rsp}], rsp",
-        "lea rsp, [{syscall_stack} + 65536]",
+        "mov rsp, [{current_kstack_top}]",
 
         // Save callee-saved + syscall-specific regs
         "push rcx",      // user RIP
@@ -115,7 +115,7 @@ unsafe extern "C" fn syscall_entry() {
         "sysretq",
 
         saved_user_rsp = sym SAVED_USER_RSP,
-        syscall_stack = sym SYSCALL_STACK,
+        current_kstack_top = sym CURRENT_KSTACK_TOP,
         handler = sym syscall_dispatch_linux,
     );
 }
@@ -175,8 +175,8 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         frame_addr: usize, syscall_result: i64,
         blocked_mask: u64, restorer: usize, signum: u8,
     ) {
-        // Read saved RCX (user RIP) and R11 (RFLAGS) from SYSCALL_STACK
-        let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
+        // Read saved RCX (user RIP) and R11 (RFLAGS) from kernel stack
+        let stack_top = CURRENT_KSTACK_TOP as *const u64;
         let saved_rip = *stack_top.sub(1);
         let saved_rflags = *stack_top.sub(2);
 
@@ -191,7 +191,7 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
         let _ = signum; // x86_64: signum returned as RAX (function return value)
-        let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+        let stack_top_mut = CURRENT_KSTACK_TOP as *mut u64;
         *stack_top_mut.sub(1) = handler as u64; // RCX = handler address → RIP via sysretq
     }
 
@@ -202,8 +202,8 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         let saved_rax = (*frame).saved_rax;
         let saved_mask = (*frame).saved_mask;
 
-        // Restore RCX (user RIP) and R11 (RFLAGS) on SYSCALL_STACK
-        let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+        // Restore RCX (user RIP) and R11 (RFLAGS) on kernel stack
+        let stack_top_mut = CURRENT_KSTACK_TOP as *mut u64;
         *stack_top_mut.sub(1) = saved_rip;
         *stack_top_mut.sub(2) = saved_rflags;
 
@@ -438,7 +438,7 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
     const CHILD_STACK_VA: usize = 0x7FFE_0000;
 
     unsafe fn save_regs() {
-        let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
+        let stack_top = CURRENT_KSTACK_TOP as *const u64;
         for i in 0..15 {
             VFORK_PARENT_REGS[i] = *stack_top.sub(i + 1);
         }
@@ -482,8 +482,8 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
     }
 
     unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> ! {
-        // Write saved regs back to SYSCALL_STACK
-        let stack_top = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+        // Write saved regs back to kernel stack
+        let stack_top = CURRENT_KSTACK_TOP as *mut u64;
         for i in 0..15 {
             *stack_top.sub(i + 1) = VFORK_PARENT_REGS[i];
         }
@@ -506,7 +506,7 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
     }
 }
 
-/// Saved parent register state from SYSCALL_STACK for VforkContext.
+/// Saved parent register state from kernel stack for VforkContext.
 /// All 15 pushed registers (used by save_regs/restore_and_return_to_user).
 static mut VFORK_PARENT_REGS: [u64; 15] = [0; 15];
 

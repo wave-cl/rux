@@ -161,4 +161,11 @@ pub unsafe fn init_pid1() {
         };
     }
     CURRENT_TASK_IDX = 0;
+
+    // Set the initial kernel stack pointer for the SYSCALL entry.
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP =
+            slot.kstack_top as u64;
+    }
 }
