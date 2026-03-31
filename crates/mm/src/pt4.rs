@@ -272,7 +272,7 @@ impl<A: ArchPaging> PageTable4Level<A> {
         }
     }
 
-    /// Free the user-space address mapping copied during fork.
+    /// Free the user-space address mapping created during fork.
     ///
     /// Walks user-space L3 entries (0..256), frees all user leaf page frames
     /// (those with the USER flag), then frees the page-table structure pages
@@ -281,9 +281,32 @@ impl<A: ArchPaging> PageTable4Level<A> {
     /// Kernel identity-mapped frames (no USER flag) are never freed.
     ///
     /// # Safety
-    /// Page table must be a per-process copy created by `copy_address_space`.
-    /// Must NOT be called on the boot/kernel page table.
+    /// Page table must be a per-process copy. Must NOT be called on the
+    /// boot/kernel page table.
     pub unsafe fn free_user_address_space(&self, alloc: &mut dyn FrameAllocator) {
+        self.free_user_address_space_inner(alloc, &mut |_| true);
+    }
+
+    /// COW-aware variant: calls `should_free_leaf(pa)` for each user leaf frame.
+    /// Only deallocates the leaf frame if the closure returns `true`.
+    /// Page-table structure pages (L0/L1/L2/root) are always freed — they are
+    /// per-process and never shared via COW.
+    ///
+    /// Use this after a COW fork so that shared frames are only freed when the
+    /// last owner releases them (i.e. `dec_ref` returns `true`).
+    pub unsafe fn free_user_address_space_cow(
+        &self,
+        alloc: &mut dyn FrameAllocator,
+        should_free_leaf: &mut dyn FnMut(PhysAddr) -> bool,
+    ) {
+        self.free_user_address_space_inner(alloc, should_free_leaf);
+    }
+
+    unsafe fn free_user_address_space_inner(
+        &self,
+        alloc: &mut dyn FrameAllocator,
+        should_free_leaf: &mut dyn FnMut(PhysAddr) -> bool,
+    ) {
         let l3 = self.root.as_usize() as *const PageTablePage;
         for l3i in 0..256usize {
             let l3e = (*l3).entries[l3i];
@@ -309,19 +332,18 @@ impl<A: ArchPaging> PageTable4Level<A> {
                         let l0e = (*l0).entries[l0i];
                         if !A::Pte::is_present(l0e) { continue; }
                         if !A::Pte::is_user(l0e) { continue; }
-                        // Free the user leaf page
-                        alloc.dealloc(A::Pte::phys_addr(l0e), PageSize::FourK);
+                        let leaf_pa = A::Pte::phys_addr(l0e);
+                        if should_free_leaf(leaf_pa) {
+                            alloc.dealloc(leaf_pa, PageSize::FourK);
+                        }
                     }
-                    // Free the L0 (PT) table frame
+                    // Page-table structure pages are always per-process — always free.
                     alloc.dealloc(l0_pa, PageSize::FourK);
                 }
-                // Free the L1 (PD) table frame
                 alloc.dealloc(l1_pa, PageSize::FourK);
             }
-            // Free the L2 (PDPT) table frame
             alloc.dealloc(l2_pa, PageSize::FourK);
         }
-        // Free the root PML4 frame itself
         alloc.dealloc(self.root, PageSize::FourK);
     }
 
@@ -346,11 +368,15 @@ impl<A: ArchPaging> PageTable4Level<A> {
         Some(&mut (*l0).entries[pt_index(virt, PageLevel::L0)])
     }
 
-    /// Mark a leaf PTE as COW: clear writable, set COW software bit.
+    /// Mark a leaf PTE as COW: clear writable, set COW software bit, flush TLB.
+    ///
+    /// The TLB flush is mandatory: without it, the CPU may keep using the stale
+    /// writable TLB entry and write to the shared frame without triggering a fault.
     pub unsafe fn mark_cow(&self, virt: VirtAddr) {
         if let Some(pte) = self.leaf_pte_mut(virt) {
             A::Pte::set_writable(&mut *pte, false);
             (*pte).0 |= A::cow_bit();
+            A::flush_tlb(virt);
         }
     }
 

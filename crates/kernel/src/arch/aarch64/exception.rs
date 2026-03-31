@@ -30,6 +30,18 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             let ec = esr_ec(esr);
             match ec {
                 0b100100 | 0b100101 => {
+                    // Kernel-mode data abort — may be a COW fault caused by the
+                    // kernel writing to a user COW page (e.g. sys_read into a
+                    // user buffer whose page hasn't been touched since fork).
+                    // User addresses have top 16 bits = 0 (TTBR0 range).
+                    let wnr = esr & (1 << 6) != 0;
+                    let dfsc = esr & 0x3F;
+                    let is_perm = dfsc == 0x0F || dfsc == 0x0E || dfsc == 0x0D;
+                    if wnr && is_perm && (far & 0xFFFF_0000_0000_0000u64 == 0) {
+                        if unsafe { crate::cow::handle_cow_fault(far as usize).is_ok() } {
+                            return; // COW resolved
+                        }
+                    }
                     dump_user_fault("KERNEL DATA ABORT", far, esr, _frame);
                 }
                 0b100000 | 0b100001 => {

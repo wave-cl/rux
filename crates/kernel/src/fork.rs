@@ -51,9 +51,9 @@ pub unsafe fn sys_fork() -> isize {
         }
     }
 
-    // 5. Copy address space (full page copy, no COW)
+    // 5. Share address space with COW (mark all user pages read-only + COW bit)
     let alloc = crate::kstate::alloc();
-    child.pt_root = copy_address_space(parent.pt_root, alloc);
+    child.pt_root = cow_fork_address_space(parent.pt_root, alloc);
 
     // 6. Set up child kernel stack
     child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
@@ -137,17 +137,23 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     }
 }
 
-/// Copy the parent's user address space into a fresh page table (eager copy).
+/// Fork the parent's user address space using copy-on-write.
 ///
-/// COW infrastructure exists (cow.rs, page fault handlers) but is not yet
-/// used here — the eager copy is simpler and more reliable for now.
-/// TODO: Enable COW fork once page fault handling is fully tested.
+/// Both parent and child share the same physical frames initially.
+/// All shared pages are marked read-only + COW bit in both page tables.
+/// On the first write, a page fault fires and `handle_cow_fault` allocates a
+/// private copy for the faulting process.
 ///
-/// Returns the new page table root physical address.
-unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameAllocator) -> u64 {
+/// Each shared frame gets its refcount incremented twice (once per sharer).
+/// Returns the child's new page table root physical address.
+unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameAllocator) -> u64 {
     use rux_mm::FrameAllocator;
 
     let parent_pt = crate::arch::PageTable::from_root(PhysAddr::new(parent_pt_root as usize));
+    // Raw pointer lets the closure call parent_pt.mark_cow() while
+    // walk_user_pages holds &self on the same object — both are &T so this
+    // is sound inside the unsafe fn.
+    let parent_ptr: *const crate::arch::PageTable = &parent_pt;
 
     // Create child page table with kernel identity map
     let mut child_pt = crate::arch::PageTable::new(alloc).expect("child PT alloc");
@@ -156,22 +162,27 @@ unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameA
         crate::arch::Arch::map_kernel_pages(&mut child_pt, alloc);
     }
 
-    // Full user page permissions for the copy
-    let user_rwx = rux_mm::MappingFlags::USER
+    // Initial mapping for shared pages: user-readable + executable, no write.
+    // The first write by either process fires a fault handled by handle_cow_fault.
+    let user_rx = rux_mm::MappingFlags::USER
         .or(rux_mm::MappingFlags::READ)
-        .or(rux_mm::MappingFlags::WRITE)
         .or(rux_mm::MappingFlags::EXECUTE);
 
-    // Walk parent's user pages, copy each frame, map in child.
+    // Walk parent's user pages; for each frame, share it COW with the child.
     parent_pt.walk_user_pages(|va, pa, _flags| {
-        let new_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("fork frame");
-        core::ptr::copy_nonoverlapping(
-            pa.as_usize() as *const u8,
-            new_frame.as_usize() as *mut u8,
-            4096,
-        );
+        // Mark parent's PTE read-only + COW; flush TLB so the CPU uses the
+        // new read-only PTE immediately (no stale writable TLB entry).
+        (*parent_ptr).mark_cow(va);
+
+        // Map child to the same physical frame, also read-only + COW.
         let _ = child_pt.unmap_4k(va);
-        let _ = child_pt.map_4k(va, new_frame, user_rwx, alloc);
+        let _ = child_pt.map_4k(va, pa, user_rx, alloc);
+        child_pt.mark_cow(va);
+
+        // Two processes now share this frame — refcount = 2.
+        // handle_cow_fault uses the refcount to decide copy-vs-remap.
+        crate::cow::inc_ref(pa);
+        crate::cow::inc_ref(pa);
     });
 
     child_pt.root_phys().as_usize() as u64

@@ -444,12 +444,14 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
             crate::arch::Arch::write(kpt);
         }
         // Free the forked PT (the address space we're replacing).
+        // Use the COW-aware variant: shared frames are only freed when their
+        // refcount reaches zero (dec_ref returns true).
         let old_pt_root = crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root;
         if old_pt_root != 0 {
             let old_pt = crate::arch::PageTable::from_root(
                 rux_klib::PhysAddr::new(old_pt_root as usize)
             );
-            old_pt.free_user_address_space(alloc);
+            old_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
             crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root = 0;
         }
     } else {

@@ -86,14 +86,17 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 slot.pid = 0;
                 slot.pt_root = 0;
 
-                // Free the exec'd address space. Fork children bypass begin_child so
-                // their exec'd PT is not in CHILD_PAGES — free it here instead.
+                // Free the child's address space. Fork children bypass begin_child so
+                // their PT is not in CHILD_PAGES — free it here instead.
+                // Use the COW-aware variant: if the child exited before exec-ing,
+                // its pages may still be shared with the parent via COW and must
+                // not be freed until the last owner releases them.
                 if child_pt_root != 0 {
                     let alloc = crate::kstate::alloc();
                     let child_pt = crate::arch::PageTable::from_root(
                         rux_klib::PhysAddr::new(child_pt_root as usize)
                     );
-                    child_pt.free_user_address_space(alloc);
+                    child_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
                 }
 
                 if wstatus_ptr != 0 {

@@ -306,8 +306,11 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             let user = error_code & 4 != 0;
             let write = error_code & 2 != 0;
 
-            // Try COW resolution for user-mode write faults
-            if user && write {
+            // Try COW resolution for any write fault to a user-space address.
+            // This covers both user-mode faults (CPL=3 writes to COW page) and
+            // kernel-mode faults (CPL=0 writes to user COW page via sys_read etc.).
+            // User-space canonical range: VA < 0x0000_8000_0000_0000.
+            if write && cr2 < 0x0000_8000_0000_0000u64 {
                 if unsafe { crate::cow::handle_cow_fault(cr2 as usize).is_ok() } {
                     return; // COW resolved — resume faulting instruction
                 }
