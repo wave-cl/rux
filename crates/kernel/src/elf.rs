@@ -98,22 +98,6 @@ pub unsafe fn load_elf_from_inode(
     // Write exec args to user stack and enter user mode
     let user_sp = rux_proc::execargs::write_to_stack(stack_top as usize);
     {
-        use rux_arch::ConsoleOps;
-        type A = crate::arch::Arch;
-        let mut hb = [0u8; 16];
-        A::write_str("rux: entry=0x");
-        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, elf_info.entry as usize));
-        A::write_str(" sp=0x");
-        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, user_sp));
-        let sp_ptr = user_sp as *const usize;
-        A::write_str(" argc=0x");
-        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, *sp_ptr as usize));
-        A::write_str(" argv0=0x");
-        A::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, *sp_ptr.add(1) as usize));
-        A::write_str("\n");
-    }
-
-    {
         use rux_arch::UserModeOps;
         crate::arch::Arch::enter_user_mode(elf_info.entry as usize, user_sp);
     }

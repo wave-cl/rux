@@ -261,14 +261,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         }
 
         // ── Unknown ────────────────────────────────────────────────
-        Syscall::Unknown(nr) => {
-            use rux_arch::ConsoleOps;
-            crate::arch::Arch::write_str("rux: unknown syscall ");
-            let mut buf = [0u8; 10];
-            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, nr as u32));
-            crate::arch::Arch::write_str("\n");
-            -38
-        }
+        Syscall::Unknown(_) => -38, // -ENOSYS
     }
 }
 
@@ -306,9 +299,6 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 #[cfg(not(feature = "native"))]
 #[inline(never)]
 pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
-    use rux_arch::ConsoleOps;
-    crate::arch::Arch::write_str("rux: vfork()\n");
-
     // 1. Save arch-specific register state
     V::save_regs();
     VFORK_PARENT_USER_SP = V::save_user_sp();
@@ -372,7 +362,6 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
             V::write_pt_root(VFORK_PARENT_PT_ROOT);
         }
 
-        crate::arch::Arch::write_str("rux: vfork parent resumed\n");
         V::clear_jmp();
         PROCESS.in_vfork_child = false;
 
@@ -429,10 +418,6 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 
     rux_proc::execargs::set_from_user(path, argv_ptr, 0);
 
-    crate::arch::Arch::write_str("rux: exec(\"");
-    crate::arch::Arch::write_bytes(path);
-    crate::arch::Arch::write_str("\")\n");
-
     let ino = match rux_fs::path::resolve_path(fs, path) {
         Ok(ino) => ino,
         Err(_) => { crate::arch::Arch::write_str("rux: exec: not found\n"); loop {} }
@@ -478,7 +463,6 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
     crate::arch::aarch64::syscall::reset_trampoline();
 
-    crate::arch::Arch::write_str("rux: entering user mode...\n");
     crate::elf::load_elf_from_inode(ino as u64, alloc);
 }
 

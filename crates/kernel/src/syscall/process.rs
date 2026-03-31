@@ -1,14 +1,9 @@
 //! Process control, CWD, and time syscalls.
 
-use rux_arch::{ConsoleOps, TimerOps};
+use rux_arch::TimerOps;
 type Arch = crate::arch::Arch;
 /// _exit(status) — POSIX.1
 pub fn exit(status: i32) -> ! {
-    Arch::write_str("rux: user exit(");
-    let mut buf = [0u8; 10];
-    Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, status as u32));
-    Arch::write_str(")\n");
-
     unsafe { super::PROCESS.last_child_exit = status; }
 
     unsafe {
@@ -22,33 +17,19 @@ pub fn exit(status: i32) -> ! {
         use crate::task_table::*;
         let idx = CURRENT_TASK_IDX;
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
-            // Sync globals into current slot before changing state.
             TASK_TABLE[idx].exit_code = status;
             TASK_TABLE[idx].state = TaskState::Zombie;
 
             // Find parent and wake it if it's blocked in waitpid.
             let ppid = TASK_TABLE[idx].ppid;
-            Arch::write_str("rux: exit: child idx=");
-            let mut b = [0u8; 10]; Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, idx as u32));
-            Arch::write_str(" ppid=");
-            Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, ppid as u32));
-            Arch::write_str("\n");
             for i in 0..MAX_PROCS {
                 let t = &mut TASK_TABLE[i];
                 if !t.active || t.pid != ppid { continue; }
-                // Update parent's child_available / last_child_exit so
-                // waitpid's simple fast path (for the init process) also works.
                 t.last_child_exit = status;
                 t.child_available = true;
-                Arch::write_str("rux: exit: parent found at i=");
-                Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, i as u32));
-                Arch::write_str(" state=");
-                Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, t.state as u32));
-                Arch::write_str("\n");
                 if t.state == TaskState::WaitingForChild {
                     t.state = TaskState::Ready;
                     crate::scheduler::get().wake_task(i);
-                    Arch::write_str("rux: exit: woke parent\n");
                 }
                 break;
             }
@@ -59,11 +40,11 @@ pub fn exit(status: i32) -> ! {
                 sched.tasks[idx].entity.state = rux_sched::TaskState::Dead;
                 sched.tasks[idx].active = false;
                 sched.dequeue_current();
-                Arch::write_str("rux: exit: calling schedule\n");
                 sched.schedule();
+                // Bug indicator: schedule() should never return for a dead task.
+                use rux_arch::ConsoleOps;
                 Arch::write_str("rux: exit: SCHEDULE RETURNED (should not happen)\n");
             }
-            // Unreachable, but satisfy the type checker.
             loop { core::hint::spin_loop(); }
         }
     }

@@ -12,9 +12,6 @@ use rux_klib::{PhysAddr, VirtAddr};
 /// # Safety
 /// Manipulates page tables, kernel stacks, and scheduler state.
 pub unsafe fn sys_fork() -> isize {
-    use rux_arch::ConsoleOps;
-    crate::arch::Arch::write_str("rux: fork()\n");
-
     // 1. Allocate child task slot
     let child_idx = match alloc_task_slot() {
         Some(idx) => idx,
