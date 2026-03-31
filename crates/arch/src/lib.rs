@@ -201,3 +201,46 @@ pub unsafe trait VforkContext {
     /// Does not return.
     unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> !;
 }
+
+/// Signal delivery and sigreturn: arch-specific user-stack frame operations.
+///
+/// Each architecture implements this to handle:
+/// - Signal frame layout on user stack (register save format differs per ISA)
+/// - User stack pointer access (RSP via global / SP_EL0 via MSR)
+/// - Redirecting execution to signal handler (RCX on syscall stack / ELR in frame)
+/// - Sigreturn trampoline setup (aarch64 needs a mapped code page)
+///
+/// The generic algorithm (`generic_deliver_signal`, `generic_sigreturn`)
+/// calls these methods; the arch provides only the hardware-specific primitives.
+///
+/// # Safety
+/// All methods manipulate user-space stack and kernel register save areas.
+pub unsafe trait SignalOps {
+    /// Size of the arch-specific signal frame pushed onto the user stack.
+    const SIGNAL_FRAME_SIZE: usize;
+
+    /// Read the current user stack pointer.
+    unsafe fn sig_read_user_sp() -> usize;
+    /// Write the user stack pointer.
+    unsafe fn sig_write_user_sp(sp: usize);
+
+    /// Write an arch-specific signal frame at `frame_addr` on the user stack.
+    /// Saves the current PC, flags, syscall result, and blocked mask.
+    unsafe fn sig_write_frame(
+        frame_addr: usize,
+        syscall_result: i64,
+        blocked_mask: u64,
+        restorer: usize,
+        signum: u8,
+    );
+
+    /// Redirect execution to the signal handler with signum as first argument.
+    unsafe fn sig_redirect_to_handler(handler: usize, signum: u8);
+
+    /// Read the signal frame at `frame_addr`, restore arch-specific registers.
+    /// Returns (original_syscall_result, saved_blocked_mask).
+    unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64);
+
+    /// Optional pre-delivery setup (e.g., aarch64 maps sigreturn trampoline page).
+    unsafe fn sig_pre_deliver() {}
+}

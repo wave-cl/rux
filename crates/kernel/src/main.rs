@@ -10,6 +10,7 @@ mod kstate;
 pub mod pipe;
 pub mod pgtrack;
 pub mod syscall;
+pub mod uaccess;
 
 use rux_arch::{ConsoleOps, ExitOps, BootOps};
 use arch::Arch;

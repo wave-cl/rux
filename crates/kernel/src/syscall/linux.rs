@@ -26,18 +26,18 @@ pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
 /// brk(addr) — Linux-specific heap management.
 pub fn brk(addr: usize) -> isize {
     unsafe {
-        if super::PROGRAM_BRK == 0 { super::PROGRAM_BRK = 0x800000; }
-        if addr == 0 { return super::PROGRAM_BRK as isize; }
-        if addr >= super::PROGRAM_BRK {
-            let old_page = (super::PROGRAM_BRK + 0xFFF) & !0xFFF;
+        if super::PROCESS.program_brk == 0 { super::PROCESS.program_brk = 0x800000; }
+        if addr == 0 { return super::PROCESS.program_brk as isize; }
+        if addr >= super::PROCESS.program_brk {
+            let old_page = (super::PROCESS.program_brk + 0xFFF) & !0xFFF;
             let new_page = (addr + 0xFFF) & !0xFFF;
             let flags = rux_mm::MappingFlags::READ
                 .or(rux_mm::MappingFlags::WRITE)
                 .or(rux_mm::MappingFlags::USER);
             super::map_user_pages(old_page, new_page, flags);
-            super::PROGRAM_BRK = addr;
+            super::PROCESS.program_brk = addr;
         }
-        super::PROGRAM_BRK as isize
+        super::PROCESS.program_brk as isize
     }
 }
 

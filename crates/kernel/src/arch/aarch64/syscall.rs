@@ -25,6 +25,7 @@ pub fn reset_trampoline() { unsafe { TRAMPOLINE_MAPPED = false; } }
 pub fn handle_syscall(frame: *mut u8) {
     unsafe {
         let regs = frame as *mut u64;
+        CURRENT_REGS_PTR = regs; // Set for SignalOps + VforkContext
 
         // aarch64 syscall convention: x8 = number, x0-x5 = args
         let nr = *regs.add(8);   // x8
@@ -36,15 +37,13 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // Vfork/exec use generic implementation with arch VforkContext
         let result: i64 = match nr {
-            220 => {
-                CURRENT_REGS_PTR = regs;
-                crate::syscall::generic_vfork::<super::Aarch64>() as i64
-            }
+            220 => crate::syscall::generic_vfork::<super::Aarch64>() as i64,
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             139 => {
                 // rt_sigreturn — restore pre-signal state
-                sigreturn_aarch64(regs);
-                return; // exception frame already modified, just return
+                // generic_sigreturn modifies the exception frame directly via SignalOps
+                let _ = crate::syscall::generic_sigreturn::<super::Aarch64>();
+                return; // exception frame already has restored x0, skip writing it
             }
             _ => {
                 let sc = translate_aarch64(nr as usize);
@@ -56,8 +55,8 @@ pub fn handle_syscall(frame: *mut u8) {
         *regs.add(0) = result as u64;
 
         // Check for pending signals before returning to userspace
-        if !crate::syscall::IN_VFORK_CHILD && crate::syscall::SIGNAL_HOT.has_deliverable() {
-            deliver_signal_aarch64(regs, result);
+        if !crate::syscall::PROCESS.in_vfork_child && crate::syscall::PROCESS.signal_hot.has_deliverable() {
+            crate::syscall::generic_deliver_signal::<super::Aarch64>(result);
         }
     }
 }
@@ -103,88 +102,59 @@ unsafe fn ensure_trampoline() {
     TRAMPOLINE_MAPPED = true;
 }
 
-/// Deliver a pending signal to user-space handler (aarch64).
-unsafe fn deliver_signal_aarch64(regs: *mut u64, syscall_result: i64) {
-    use rux_proc::signal::*;
+// ── SignalOps implementation ──────────────────────────────────────────
 
-    let hot = &mut crate::syscall::SIGNAL_HOT;
-    let cold = &mut crate::syscall::SIGNAL_COLD;
+unsafe impl rux_arch::SignalOps for super::Aarch64 {
+    const SIGNAL_FRAME_SIZE: usize = core::mem::size_of::<SignalFrameAarch64>();
 
-    let (sig, action, _info) = match cold.dequeue_signal(hot) {
-        Some(v) => v,
-        None => return,
-    };
-    let signum = sig as u8;
-
-    // Handle default actions
-    if action.handler_type == SignalHandler::Default {
-        match sig.default_action() {
-            SignalDefault::Terminate | SignalDefault::CoreDump => {
-                crate::syscall::posix::exit(128 + signum as i32);
-            }
-            _ => return,
-        }
-    }
-    if action.handler_type == SignalHandler::Ignore {
-        return;
+    unsafe fn sig_read_user_sp() -> usize {
+        let sp: u64;
+        core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
+        sp as usize
     }
 
-    // User handler — ensure trampoline is mapped
-    ensure_trampoline();
-
-    // Read current SP_EL0
-    let user_sp: u64;
-    core::arch::asm!("mrs {}, sp_el0", out(reg) user_sp, options(nostack));
-
-    // Push signal frame onto user stack
-    let frame_size = core::mem::size_of::<SignalFrameAarch64>();
-    let new_sp = ((user_sp as usize) - frame_size) & !0xF; // 16-byte align
-    let frame = new_sp as *mut SignalFrameAarch64;
-    (*frame).saved_elr = *regs.add(31);      // ELR_EL1
-    (*frame).saved_spsr = *regs.add(32);     // SPSR_EL1
-    (*frame).saved_x0 = syscall_result as u64;
-    (*frame).saved_mask = hot.blocked.0;
-
-    // Update SP_EL0
-    core::arch::asm!("msr sp_el0, {}", in(reg) new_sp as u64, options(nostack));
-
-    // Redirect to handler
-    *regs.add(31) = action.handler as u64;   // ELR_EL1 = handler
-    *regs.add(0) = signum as u64;            // x0 = signal number
-    *regs.add(30) = SIGRETURN_TRAMPOLINE_VA as u64; // x30 (LR) = sigreturn trampoline
-
-    // Block signals during handler
-    let sa_nodefer = action.flags & 0x40000000 != 0;
-    if !sa_nodefer {
-        hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
+    unsafe fn sig_write_user_sp(sp: usize) {
+        core::arch::asm!("msr sp_el0, {}", in(reg) sp as u64, options(nostack));
     }
-}
 
-/// Restore pre-signal state from signal frame on user stack (aarch64).
-unsafe fn sigreturn_aarch64(regs: *mut u64) {
-    use rux_proc::signal::*;
+    unsafe fn sig_write_frame(
+        frame_addr: usize, syscall_result: i64,
+        blocked_mask: u64, _restorer: usize, _signum: u8,
+    ) {
+        let regs = CURRENT_REGS_PTR;
+        let frame = frame_addr as *mut SignalFrameAarch64;
+        (*frame).saved_elr = *regs.add(31);
+        (*frame).saved_spsr = *regs.add(32);
+        (*frame).saved_x0 = syscall_result as u64;
+        (*frame).saved_mask = blocked_mask;
+    }
 
-    // Read SP_EL0
-    let user_sp: u64;
-    core::arch::asm!("mrs {}, sp_el0", out(reg) user_sp, options(nostack));
+    unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
+        let regs = CURRENT_REGS_PTR;
+        *regs.add(31) = handler as u64;                    // ELR_EL1 = handler
+        *regs.add(0) = signum as u64;                      // x0 = signal number
+        *regs.add(30) = SIGRETURN_TRAMPOLINE_VA as u64;    // x30 (LR) = sigreturn trampoline
+    }
 
-    let frame = user_sp as *const SignalFrameAarch64;
-    let saved_elr = (*frame).saved_elr;
-    let saved_spsr = (*frame).saved_spsr;
-    let saved_x0 = (*frame).saved_x0;
-    let saved_mask = (*frame).saved_mask;
+    unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
+        let frame = frame_addr as *const SignalFrameAarch64;
+        let saved_elr = (*frame).saved_elr;
+        let saved_spsr = (*frame).saved_spsr;
+        let saved_x0 = (*frame).saved_x0;
+        let saved_mask = (*frame).saved_mask;
 
-    // Pop signal frame
-    let new_sp = user_sp as usize + core::mem::size_of::<SignalFrameAarch64>();
-    core::arch::asm!("msr sp_el0, {}", in(reg) new_sp as u64, options(nostack));
+        // Restore exception frame registers
+        let regs = CURRENT_REGS_PTR;
+        *regs.add(31) = saved_elr;
+        *regs.add(32) = saved_spsr;
+        *regs.add(0) = saved_x0;
 
-    // Restore exception frame
-    *regs.add(31) = saved_elr;   // ELR_EL1
-    *regs.add(32) = saved_spsr;  // SPSR_EL1
-    *regs.add(0) = saved_x0;    // x0 = original syscall result
+        (saved_x0 as i64, saved_mask)
+    }
 
-    // Restore blocked mask
-    crate::syscall::SIGNAL_HOT.blocked = SignalSet(saved_mask);
+    unsafe fn sig_pre_deliver() {
+        ensure_trampoline();
+    }
 }
 
 /// aarch64 Linux syscall number → generic Syscall enum.

@@ -5,40 +5,63 @@
 
 pub mod posix;
 pub mod linux;
+mod file;
+mod fs_ops;
+mod process;
+mod signal;
+mod memory;
 
 // ── Shared process state ────────────────────────────────────────────
 
-/// Program break for brk().
-pub static mut PROGRAM_BRK: usize = 0;
+/// Per-process state, consolidated into a single struct for clean vfork save/restore.
+#[repr(C)]
+pub struct ProcessState {
+    /// Program break for brk().
+    pub program_brk: usize,
+    /// Next anonymous mmap virtual address.
+    pub mmap_base: usize,
+    /// Current working directory inode (0 = root).
+    pub cwd_inode: u64,
+    /// Current working directory path (for getcwd). Null-terminated.
+    pub cwd_path: [u8; 256],
+    pub cwd_path_len: usize,
+    /// Child exit status for wait4.
+    pub last_child_exit: i32,
+    /// Whether there's a child to collect.
+    pub child_available: bool,
+    /// Whether we're in a vfork child context (skip pipe ref counting in close).
+    pub in_vfork_child: bool,
+    /// Signal pending/blocked bitmasks (hot path — checked every syscall return).
+    pub signal_hot: rux_proc::signal::SignalHot,
+    /// Signal handler table and RT queue (cold path).
+    pub signal_cold: rux_proc::signal::SignalCold,
+    /// Per-signal sa_restorer address (x86_64 only — musl sets this for sigreturn trampoline).
+    pub signal_restorer: [usize; 32],
+}
 
-/// Next anonymous mmap virtual address.
-pub static mut MMAP_BASE: usize = 0x10000000;
+impl ProcessState {
+    pub const fn new() -> Self {
+        Self {
+            program_brk: 0,
+            mmap_base: 0x10000000,
+            cwd_inode: 0,
+            cwd_path: {
+                let mut buf = [0u8; 256];
+                buf[0] = b'/';
+                buf
+            },
+            cwd_path_len: 1,
+            last_child_exit: 0,
+            child_available: false,
+            in_vfork_child: false,
+            signal_hot: rux_proc::signal::SignalHot::new(),
+            signal_cold: rux_proc::signal::SignalCold::new(),
+            signal_restorer: [0; 32],
+        }
+    }
+}
 
-/// Current working directory inode (0 = root).
-pub static mut CWD_INODE: u64 = 0;
-
-/// Current working directory path (for getcwd). Null-terminated.
-pub static mut CWD_PATH: [u8; 256] = {
-    let mut buf = [0u8; 256];
-    buf[0] = b'/';
-    buf
-};
-pub static mut CWD_PATH_LEN: usize = 1;
-
-/// Child exit status for wait4.
-pub static mut LAST_CHILD_EXIT: i32 = 0;
-
-/// Whether there's a child to collect.
-pub static mut CHILD_AVAILABLE: bool = false;
-
-/// Whether we're in a vfork child context (skip pipe ref counting in close).
-pub static mut IN_VFORK_CHILD: bool = false;
-
-// ── Signal state (single-process) ──────────────────────────────────
-pub static mut SIGNAL_HOT: rux_proc::signal::SignalHot = rux_proc::signal::SignalHot::new();
-pub static mut SIGNAL_COLD: rux_proc::signal::SignalCold = rux_proc::signal::SignalCold::new();
-/// Per-signal sa_restorer address (x86_64 only — musl sets this for sigreturn trampoline).
-pub static mut SIGNAL_RESTORER: [usize; 32] = [0; 32];
+pub static mut PROCESS: ProcessState = ProcessState::new();
 
 // ── Page table helper (arch-dispatched) ─────────────────────────────
 
@@ -67,23 +90,26 @@ pub unsafe fn map_user_pages(
 
 /// Read a C string from user memory into a path slice.
 pub unsafe fn read_user_path(path_ptr: usize) -> &'static [u8] {
-    let cstr = path_ptr as *const u8;
-    let mut len = 0usize;
-    while *cstr.add(len) != 0 && len < 256 { len += 1; }
-    core::slice::from_raw_parts(cstr, len)
+    crate::uaccess::read_user_cstr(path_ptr)
+}
+
+/// Get current time in seconds (for timestamp updates on file operations).
+pub fn current_time_secs() -> u64 {
+    use rux_arch::TimerOps;
+    crate::arch::Arch::ticks() / 1000
 }
 
 /// Resolve a path using CWD for relative paths.
 pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     let fs = crate::kstate::fs();
-    rux_fs::path::resolve_with_cwd(fs, CWD_INODE, path)
+    rux_fs::path::resolve_with_cwd(fs, PROCESS.cwd_inode, path)
 }
 
 /// Resolve a path to (parent_inode, basename).
 pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
     let path = read_user_path(path_ptr);
     let fs = crate::kstate::fs();
-    rux_fs::path::resolve_parent_and_name(fs, CWD_INODE, path)
+    rux_fs::path::resolve_parent_and_name(fs, PROCESS.cwd_inode, path)
 }
 
 /// Fill a Linux struct stat from VFS InodeStat.
@@ -277,11 +303,7 @@ pub trait SyscallTranslate {
 // ── Generic vfork/exec ─────────────────────────────────────────────────
 
 /// Saved parent process state for vfork (architecture-independent).
-static mut VFORK_PARENT_MMAP_BASE: usize = 0;
-static mut VFORK_PARENT_PROGRAM_BRK: usize = 0;
-static mut VFORK_PARENT_CWD_INODE: u64 = 0; // inode IDs are genuinely u64
-static mut VFORK_PARENT_CWD_PATH: [u8; 256] = [0u8; 256];
-static mut VFORK_PARENT_CWD_PATH_LEN: usize = 1;
+static mut VFORK_SAVED: ProcessState = ProcessState::new();
 static mut VFORK_PARENT_USER_SP: usize = 0;
 static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
 static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
@@ -318,19 +340,15 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
     VFORK_PARENT_TLS = V::save_tls();
 
     // 2. Save process state that exec resets
-    VFORK_PARENT_MMAP_BASE = MMAP_BASE;
-    VFORK_PARENT_PROGRAM_BRK = PROGRAM_BRK;
-    VFORK_PARENT_CWD_INODE = CWD_INODE;
-    for i in 0..CWD_PATH_LEN { VFORK_PARENT_CWD_PATH[i] = CWD_PATH[i]; }
-    VFORK_PARENT_CWD_PATH_LEN = CWD_PATH_LEN;
+    core::ptr::copy_nonoverlapping(&PROCESS, &mut VFORK_SAVED, 1);
     for i in 0..64 { VFORK_PARENT_FDS[i] = rux_fs::fdtable::FD_TABLE[i]; }
-    CHILD_AVAILABLE = true;
+    PROCESS.child_available = true;
 
     // 3. setjmp — returns 0 on first call, child PID on longjmp
     let val = V::setjmp();
     if val == 0 {
         // ── Child path ─────────────────────────────────────────────
-        IN_VFORK_CHILD = true;
+        PROCESS.in_vfork_child = true;
 
         // Copy parent stack pages to child VA to prevent corruption
         use rux_mm::FrameAllocator;
@@ -366,8 +384,8 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         // Snapshot parent's user data/BSS pages and mmap'd heap/TLS pages
         // so that forkchild() modifications can be undone when the parent
         // resumes.  We scan two ranges:
-        //   1. 0x1000..PROGRAM_BRK  — ELF data/BSS
-        //   2. 0x10000000..MMAP_BASE — musl heap and TLS (mmap'd anonymous pages)
+        //   1. 0x1000..PROCESS.program_brk  — ELF data/BSS
+        //   2. 0x10000000..PROCESS.mmap_base — musl heap and TLS (mmap'd anonymous pages)
         // Only writable pages with PA >= allocator base are snapshotted (skips
         // read-only .text and kernel identity-mapped pages).
         VFORK_SNAP_COUNT = 0;
@@ -396,14 +414,14 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 
         // Range 1: ELF data / BSS
         let mut va = 0x1000usize;
-        while va < VFORK_PARENT_PROGRAM_BRK {
+        while va < VFORK_SAVED.program_brk {
             snap_page!(va);
             va += 4096;
         }
 
         // Range 2: mmap'd heap / TLS (musl allocates these with mmap)
         va = 0x10000000usize;
-        while va < VFORK_PARENT_MMAP_BASE {
+        while va < VFORK_SAVED.mmap_base {
             snap_page!(va);
             va += 4096;
         }
@@ -430,7 +448,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 
         crate::arch::Arch::write_str("rux: vfork parent resumed\n");
         V::clear_jmp();
-        IN_VFORK_CHILD = false;
+        PROCESS.in_vfork_child = false;
 
         // Restore parent's data pages: undo any writes forkchild() made
         // (e.g. g_parsefile state zeroed by closescript()).
@@ -450,12 +468,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         VFORK_SNAP_COUNT = 0;
 
         // Restore process state
-        MMAP_BASE = VFORK_PARENT_MMAP_BASE;
-        PROGRAM_BRK = VFORK_PARENT_PROGRAM_BRK;
-        CWD_INODE = VFORK_PARENT_CWD_INODE;
-        for i in 0..VFORK_PARENT_CWD_PATH_LEN { CWD_PATH[i] = VFORK_PARENT_CWD_PATH[i]; }
-        CWD_PATH[VFORK_PARENT_CWD_PATH_LEN] = 0;
-        CWD_PATH_LEN = VFORK_PARENT_CWD_PATH_LEN;
+        core::ptr::copy_nonoverlapping(&VFORK_SAVED, &mut PROCESS, 1);
         for i in 0..64 { rux_fs::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
 
         // Fix fd 0-2: in real Linux, fork() gives each process its own fd
@@ -494,10 +507,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     let fs = crate::kstate::fs();
     let alloc = crate::kstate::alloc();
 
-    let path_cstr = path_ptr as *const u8;
-    let mut path_len = 0usize;
-    while *path_cstr.add(path_len) != 0 && path_len < 256 { path_len += 1; }
-    let path = core::slice::from_raw_parts(path_cstr, path_len);
+    let path = crate::uaccess::read_user_cstr(path_ptr);
 
     rux_proc::execargs::set_from_user(path, argv_ptr, 0);
 
@@ -517,9 +527,9 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     crate::pgtrack::begin_child(alloc);
 
     // Reset signal state on exec (POSIX: caught signals revert to default)
-    SIGNAL_HOT = rux_proc::signal::SignalHot::new();
-    SIGNAL_COLD = rux_proc::signal::SignalCold::new();
-    SIGNAL_RESTORER = [0; 32];
+    PROCESS.signal_hot = rux_proc::signal::SignalHot::new();
+    PROCESS.signal_cold = rux_proc::signal::SignalCold::new();
+    PROCESS.signal_restorer = [0; 32];
 
     // Reset arch-specific signal trampoline state
     #[cfg(target_arch = "aarch64")]
@@ -527,4 +537,68 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 
     crate::arch::Arch::write_str("rux: entering user mode...\n");
     crate::elf::load_elf_from_inode(ino as u64, alloc);
+}
+
+// ── Generic signal delivery ─────────────────────────────────────────────
+
+/// Deliver a pending signal to the user-space handler.
+/// Architecture-independent algorithm; arch-specific frame/register ops via `SignalOps`.
+pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64) -> i64 {
+    use rux_proc::signal::*;
+
+    let hot = &mut PROCESS.signal_hot;
+    let cold = &mut PROCESS.signal_cold;
+
+    let (sig, action, _info) = match cold.dequeue_signal(hot) {
+        Some(v) => v,
+        None => return syscall_result,
+    };
+    let signum = sig as u8;
+
+    // Default action
+    if action.handler_type == SignalHandler::Default {
+        match sig.default_action() {
+            SignalDefault::Terminate | SignalDefault::CoreDump => {
+                posix::exit(128 + signum as i32);
+                loop {}
+            }
+            _ => return syscall_result,
+        }
+    }
+    if action.handler_type == SignalHandler::Ignore {
+        return syscall_result;
+    }
+
+    // User handler — arch-specific pre-delivery setup (e.g., trampoline mapping)
+    S::sig_pre_deliver();
+
+    // Push signal frame onto user stack (16-byte aligned)
+    let user_sp = S::sig_read_user_sp();
+    let new_sp = (user_sp - S::SIGNAL_FRAME_SIZE) & !0xF;
+    S::sig_write_frame(
+        new_sp, syscall_result, hot.blocked.0,
+        PROCESS.signal_restorer[signum as usize], signum,
+    );
+    S::sig_write_user_sp(new_sp);
+
+    // Redirect to handler
+    S::sig_redirect_to_handler(action.handler, signum);
+
+    // Block signals during handler (unless SA_NODEFER)
+    let sa_nodefer = action.flags & 0x40000000 != 0;
+    if !sa_nodefer {
+        hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
+    }
+
+    signum as i64
+}
+
+/// Restore pre-signal state from the signal frame on the user stack.
+/// Architecture-independent algorithm; arch-specific register restore via `SignalOps`.
+pub unsafe fn generic_sigreturn<S: rux_arch::SignalOps>() -> i64 {
+    let sp = S::sig_read_user_sp();
+    let (result, saved_mask) = S::sig_restore_frame(sp);
+    S::sig_write_user_sp(sp + S::SIGNAL_FRAME_SIZE);
+    PROCESS.signal_hot.blocked = rux_proc::signal::SignalSet(saved_mask);
+    result
 }

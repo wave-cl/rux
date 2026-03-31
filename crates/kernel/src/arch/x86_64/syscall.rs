@@ -135,7 +135,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // sigreturn is handled specially — it restores the pre-signal state
     if nr == 15 {
-        return unsafe { sigreturn_x86() };
+        return unsafe { crate::syscall::generic_sigreturn::<super::X86_64>() };
     }
 
     // Everything else goes through generic dispatch
@@ -144,15 +144,14 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // Check for pending signals before returning to userspace
     unsafe {
-        if !crate::syscall::IN_VFORK_CHILD && crate::syscall::SIGNAL_HOT.has_deliverable() {
-            return deliver_signal_x86(result);
+        if !crate::syscall::PROCESS.in_vfork_child && crate::syscall::PROCESS.signal_hot.has_deliverable() {
+            return crate::syscall::generic_deliver_signal::<super::X86_64>(result);
         }
     }
     result
 }
 
 /// Signal frame layout on user stack (x86_64).
-/// Pushed below the current user RSP when delivering a signal.
 #[repr(C)]
 struct SignalFrameX86 {
     restorer: u64,       // return address (sa_restorer → calls sigreturn)
@@ -163,100 +162,53 @@ struct SignalFrameX86 {
     signum: u64,         // signal number (for sigreturn to pop correctly)
 }
 
-/// Deliver a pending signal to user-space handler (x86_64).
-/// Modifies SAVED_USER_RSP and SYSCALL_STACK to redirect sysretq to the handler.
-unsafe fn deliver_signal_x86(syscall_result: i64) -> i64 {
-    use rux_proc::signal::*;
+// ── SignalOps implementation ──────────────────────────────────────────
 
-    let hot = &mut crate::syscall::SIGNAL_HOT;
-    let cold = &mut crate::syscall::SIGNAL_COLD;
+unsafe impl rux_arch::SignalOps for super::X86_64 {
+    const SIGNAL_FRAME_SIZE: usize = core::mem::size_of::<SignalFrameX86>();
 
-    let (sig, action, _info) = match cold.dequeue_signal(hot) {
-        Some(v) => v,
-        None => return syscall_result,
-    };
-    let signum = sig as u8;
+    unsafe fn sig_read_user_sp() -> usize { SAVED_USER_RSP as usize }
 
-    // Handle default actions
-    if action.handler_type == SignalHandler::Default {
-        match sig.default_action() {
-            SignalDefault::Terminate | SignalDefault::CoreDump => {
-                crate::syscall::posix::exit(128 + signum as i32);
-                loop {}
-            }
-            _ => return syscall_result,
-        }
-    }
-    if action.handler_type == SignalHandler::Ignore {
-        return syscall_result;
-    }
+    unsafe fn sig_write_user_sp(sp: usize) { SAVED_USER_RSP = sp as u64; }
 
-    // User handler — set up signal frame on user stack
-    let user_rsp = SAVED_USER_RSP as usize;
+    unsafe fn sig_write_frame(
+        frame_addr: usize, syscall_result: i64,
+        blocked_mask: u64, restorer: usize, signum: u8,
+    ) {
+        // Read saved RCX (user RIP) and R11 (RFLAGS) from SYSCALL_STACK
+        let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
+        let saved_rip = *stack_top.sub(1);
+        let saved_rflags = *stack_top.sub(2);
 
-    // Read saved RCX (user RIP) and R11 (RFLAGS) from SYSCALL_STACK
-    let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
-    // Stack layout (from top, sub 1-based):
-    // sub(1)=RCX(user RIP), sub(2)=R11(RFLAGS), sub(3)=RBX, sub(4)=RBP,
-    // sub(5)=R12, sub(6)=R13, sub(7)=R14, sub(8)=R15,
-    // sub(9)=RAX(nr), sub(10)=RDI, sub(11)=RSI, sub(12)=RDX,
-    // sub(13)=R10, sub(14)=R8, sub(15)=R9
-    let saved_rip = *stack_top.sub(1);    // RCX = user RIP
-    let saved_rflags = *stack_top.sub(2); // R11 = RFLAGS
-
-    // Push signal frame onto user stack (must be 16-byte aligned)
-    let frame_size = core::mem::size_of::<SignalFrameX86>();
-    let new_rsp = (user_rsp - frame_size) & !0xF; // 16-byte align
-    let frame = new_rsp as *mut SignalFrameX86;
-    (*frame).restorer = crate::syscall::SIGNAL_RESTORER[signum as usize] as u64;
-    (*frame).saved_rip = saved_rip;
-    (*frame).saved_rflags = saved_rflags;
-    (*frame).saved_rax = syscall_result as u64;
-    (*frame).saved_mask = hot.blocked.0;
-    (*frame).signum = signum as u64;
-
-    // Update user stack pointer
-    SAVED_USER_RSP = new_rsp as u64;
-
-    // Redirect return: set RCX (becomes RIP via sysretq) to handler
-    let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
-    *stack_top_mut.sub(1) = action.handler as u64;  // RCX = handler address
-
-    // Block signals during handler execution
-    let sa_nodefer = action.flags & 0x40000000 != 0; // SA_NODEFER
-    if !sa_nodefer {
-        hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
+        let frame = frame_addr as *mut SignalFrameX86;
+        (*frame).restorer = restorer as u64;
+        (*frame).saved_rip = saved_rip;
+        (*frame).saved_rflags = saved_rflags;
+        (*frame).saved_rax = syscall_result as u64;
+        (*frame).saved_mask = blocked_mask;
+        (*frame).signum = signum as u64;
     }
 
-    // Signal number goes in RDI (first arg to handler)
-    signum as i64
-}
+    unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
+        let _ = signum; // x86_64: signum returned as RAX (function return value)
+        let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+        *stack_top_mut.sub(1) = handler as u64; // RCX = handler address → RIP via sysretq
+    }
 
-/// Restore pre-signal state from signal frame on user stack (x86_64).
-unsafe fn sigreturn_x86() -> i64 {
-    use rux_proc::signal::*;
+    unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
+        let frame = frame_addr as *const SignalFrameX86;
+        let saved_rip = (*frame).saved_rip;
+        let saved_rflags = (*frame).saved_rflags;
+        let saved_rax = (*frame).saved_rax;
+        let saved_mask = (*frame).saved_mask;
 
-    let user_rsp = SAVED_USER_RSP as usize;
-    let frame = user_rsp as *const SignalFrameX86;
+        // Restore RCX (user RIP) and R11 (RFLAGS) on SYSCALL_STACK
+        let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+        *stack_top_mut.sub(1) = saved_rip;
+        *stack_top_mut.sub(2) = saved_rflags;
 
-    let saved_rip = (*frame).saved_rip;
-    let saved_rflags = (*frame).saved_rflags;
-    let saved_rax = (*frame).saved_rax;
-    let saved_mask = (*frame).saved_mask;
-
-    // Restore user stack (pop the signal frame)
-    SAVED_USER_RSP = (user_rsp + core::mem::size_of::<SignalFrameX86>()) as u64;
-
-    // Restore blocked mask
-    crate::syscall::SIGNAL_HOT.blocked = SignalSet(saved_mask);
-
-    // Restore saved RCX (user RIP) and R11 (RFLAGS) on SYSCALL_STACK
-    let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
-    *stack_top_mut.sub(1) = saved_rip;     // RCX = original user RIP
-    *stack_top_mut.sub(2) = saved_rflags;  // R11 = original RFLAGS
-
-    // Return the original syscall result (goes into RAX)
-    saved_rax as i64
+        (saved_rax as i64, saved_mask)
+    }
 }
 
 /// x86_64 Linux syscall number → generic Syscall enum.
