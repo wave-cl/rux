@@ -7,6 +7,7 @@ pub mod cpio;
 pub mod vfs;
 pub mod procfs;
 pub mod devfs;
+pub mod getdents;
 
 // ── POSIX constants ─────────────────────────────────────────────────────
 

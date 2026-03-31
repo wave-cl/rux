@@ -263,7 +263,7 @@ pub trait StatLayout {
     const BLKSIZE_IS_I64: bool;
     const BLOCKS_OFF: usize;
 
-    /// Fill a Linux struct stat buffer with the given field values.
+    /// Fill a Linux `struct stat` buffer with the given field values.
     /// Zeroes the buffer first, then writes each field at the arch-specific offset.
     ///
     /// # Safety
@@ -293,5 +293,48 @@ pub trait StatLayout {
             *((buf + Self::BLKSIZE_OFF) as *mut i32) = 4096;
         }
         *((buf + Self::BLOCKS_OFF) as *mut i64) = blocks as i64;
+    }
+}
+
+/// Linux `kernel_sigaction` struct layout — differs per architecture.
+///
+/// x86_64: `[handler(8), flags(8), restorer(8), mask(8)]` = 32 bytes
+/// aarch64: `[handler(8), flags(8), mask(8)]` = 24 bytes (no restorer)
+pub trait SigactionLayout {
+    /// Offset of `sa_mask` field (24 on x86_64, 16 on aarch64).
+    const MASK_OFF: usize;
+    /// Whether the struct has an `sa_restorer` field.
+    const HAS_RESTORER: bool;
+    /// Offset of `sa_restorer` field (16 on x86_64; unused on aarch64).
+    const RESTORER_OFF: usize;
+
+    /// Read a kernel_sigaction struct from user memory.
+    /// Returns (handler_addr, flags, mask, restorer).
+    ///
+    /// # Safety
+    /// `ptr` must point to a valid kernel_sigaction in user memory.
+    unsafe fn read_sigaction(ptr: usize) -> (usize, u32, u64, usize) {
+        let handler = *(ptr as *const usize);
+        let flags = *((ptr + 8) as *const u64) as u32;
+        let mask = *((ptr + Self::MASK_OFF) as *const u64);
+        let restorer = if Self::HAS_RESTORER {
+            *((ptr + Self::RESTORER_OFF) as *const usize)
+        } else {
+            0
+        };
+        (handler, flags, mask, restorer)
+    }
+
+    /// Write a kernel_sigaction struct to user memory.
+    ///
+    /// # Safety
+    /// `ptr` must point to a writable kernel_sigaction buffer in user memory.
+    unsafe fn write_sigaction(ptr: usize, handler: usize, flags: u32, mask: u64, restorer: usize) {
+        *(ptr as *mut usize) = handler;
+        *((ptr + 8) as *mut u64) = flags as u64;
+        *((ptr + Self::MASK_OFF) as *mut u64) = mask;
+        if Self::HAS_RESTORER {
+            *((ptr + Self::RESTORER_OFF) as *mut usize) = restorer;
+        }
     }
 }

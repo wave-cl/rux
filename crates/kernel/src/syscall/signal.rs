@@ -1,19 +1,17 @@
 //! Signal syscalls (POSIX.1).
 
-use rux_arch::TimerOps;
 type Arch = crate::arch::Arch;
+
 /// sigaction(signum, act, oldact) — POSIX.1
-/// Reads/writes musl's kernel_sigaction struct.
-/// x86_64 layout: [handler(8), flags(8), restorer(8), mask(8)] = 32 bytes
-/// aarch64 layout: [handler(8), flags(8), mask(8)] = 24 bytes
+/// Uses the `SigactionLayout` trait to handle arch-specific struct layout.
 pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     use rux_proc::signal::*;
+    use rux_arch::SigactionLayout;
     if signum < 1 || signum > 31 { return -22; }
     let sig = match Signal::from_raw(signum as u8) {
         Some(s) => s,
         None => return -22,
     };
-    // Cannot catch SIGKILL or SIGSTOP
     if sig == Signal::Kill || sig == Signal::Stop { return -22; }
 
     unsafe {
@@ -27,28 +25,15 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
                 SignalHandler::Ignore => 1,
                 SignalHandler::User => old.handler,
             };
-            let p = oldact_ptr as *mut u8;
-            *(p as *mut usize) = handler;
-            *((p as usize + 8) as *mut u64) = old.flags as u64;
-            #[cfg(target_arch = "x86_64")]
-            { *((p as usize + 16) as *mut usize) = super::PROCESS.signal_restorer[signum]; }
-            #[cfg(target_arch = "x86_64")]
-            { *((p as usize + 24) as *mut u64) = old.mask.0; }
-            #[cfg(target_arch = "aarch64")]
-            { *((p as usize + 16) as *mut u64) = old.mask.0; }
+            Arch::write_sigaction(
+                oldact_ptr, handler, old.flags as u32, old.mask.0,
+                super::PROCESS.signal_restorer[signum],
+            );
         }
 
         // Read new action from user act
         if act_ptr != 0 {
-            let p = act_ptr as *const u8;
-            let handler_addr = *(p as *const usize);
-            let flags = *((p as usize + 8) as *const u64) as u32;
-            #[cfg(target_arch = "x86_64")]
-            let restorer = *((p as usize + 16) as *const usize);
-            #[cfg(target_arch = "x86_64")]
-            let mask_raw = *((p as usize + 24) as *const u64);
-            #[cfg(target_arch = "aarch64")]
-            let mask_raw = *((p as usize + 16) as *const u64);
+            let (handler_addr, flags, mask_raw, restorer) = Arch::read_sigaction(act_ptr);
 
             let handler_type = match handler_addr {
                 0 => SignalHandler::Default,
@@ -64,8 +49,9 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
                 _pad1: [0; 4],
             };
             let _ = cold.set_action(sig, action);
-            #[cfg(target_arch = "x86_64")]
-            { super::PROCESS.signal_restorer[signum] = restorer; }
+            if Arch::HAS_RESTORER {
+                super::PROCESS.signal_restorer[signum] = restorer;
+            }
         }
     }
     0

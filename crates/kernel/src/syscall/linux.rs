@@ -46,12 +46,6 @@ pub fn brk(addr: usize) -> isize {
 /// getdents64(fd, dirp, count) — Linux-specific.
 pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, DirEntry, InodeType};
-        let fs = crate::kstate::fs();
-        let out = buf_ptr as *mut u8;
-        let limit = bufsize;
-        let mut pos = 0usize;
-
         let dir_ino = if fd >= 3 {
             match rux_fs::fdtable::get_fd_inode(fd) {
                 Some(ino) => ino,
@@ -60,44 +54,12 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
         } else {
             0 // root
         };
-
-        let mut offset = if fd < 64 {
-            rux_fs::fdtable::FD_TABLE[fd].offset
-        } else {
-            0
-        };
-        let start_pos = pos;
-
-        loop {
-            let mut entry = core::mem::zeroed::<DirEntry>();
-            match fs.readdir(dir_ino, offset, &mut entry) {
-                Ok(true) => {
-                    let nlen = entry.name_len as usize;
-                    let reclen = ((19 + nlen + 1) + 7) & !7;
-                    if pos + reclen > limit { break; }
-                    *((out.add(pos)) as *mut u64) = entry.ino;
-                    *((out.add(pos + 8)) as *mut u64) = (offset + 1) as u64;
-                    *((out.add(pos + 16)) as *mut u16) = reclen as u16;
-                    let dtype: u8 = match entry.kind {
-                        InodeType::File => 8,
-                        InodeType::Directory => 4,
-                        InodeType::Symlink => 10,
-                        _ => 0,
-                    };
-                    *out.add(pos + 18) = dtype;
-                    for i in 0..nlen { *out.add(pos + 19 + i) = entry.name[i]; }
-                    *out.add(pos + 19 + nlen) = 0;
-                    pos += reclen;
-                    offset += 1;
-                }
-                _ => break,
-            }
-        }
-        if fd < 64 {
-            rux_fs::fdtable::FD_TABLE[fd].offset = offset;
-        }
-        if pos == start_pos { return 0; }
-        pos as isize
+        let mut offset = if fd < 64 { rux_fs::fdtable::FD_TABLE[fd].offset } else { 0 };
+        let result = rux_fs::getdents::pack_getdents64(
+            crate::kstate::fs(), dir_ino, buf_ptr as *mut u8, bufsize, &mut offset,
+        );
+        if fd < 64 { rux_fs::fdtable::FD_TABLE[fd].offset = offset; }
+        result
     }
 }
 

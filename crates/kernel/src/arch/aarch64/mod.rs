@@ -60,6 +60,12 @@ impl super::StatLayout for Aarch64 {
     const BLOCKS_OFF: usize = 64;
 }
 
+impl rux_arch::SigactionLayout for Aarch64 {
+    const MASK_OFF: usize = 16;       // after handler(8) + flags(8)
+    const HAS_RESTORER: bool = false;
+    const RESTORER_OFF: usize = 0;    // unused
+}
+
 unsafe impl super::KernelMapOps for Aarch64 {
     unsafe fn map_kernel_pages(
         pt: &mut super::PageTable,

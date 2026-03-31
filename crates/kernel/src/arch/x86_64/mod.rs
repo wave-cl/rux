@@ -63,6 +63,12 @@ impl super::StatLayout for X86_64 {
     const BLOCKS_OFF: usize = 64;
 }
 
+impl rux_arch::SigactionLayout for X86_64 {
+    const MASK_OFF: usize = 24;      // after handler(8) + flags(8) + restorer(8)
+    const HAS_RESTORER: bool = true;
+    const RESTORER_OFF: usize = 16;  // after handler(8) + flags(8)
+}
+
 unsafe impl super::KernelMapOps for X86_64 {
     unsafe fn map_kernel_pages(
         pt: &mut super::PageTable,
