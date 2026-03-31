@@ -182,13 +182,10 @@ impl Scheduler {
 
         self.current = new_idx;
 
-        // Tickless idle: stop timer when going idle, restart when leaving idle
+        // Keep timer always running — slot 0 is the init/shell process which
+        // uses timer interrupts to poll UART input; stopping the timer would
+        // cause console reads to hang forever.
         let ctx = self.ctx.as_ref().expect("context fns not set");
-        if new_idx == 0 && old_idx != 0 {
-            (ctx.stop_timer)();
-        } else if new_idx != 0 && old_idx == 0 {
-            (ctx.start_timer)();
-        }
 
         if new_idx != old_idx {
             // Swap per-process state (page tables, FD tables, globals) before switching

@@ -87,7 +87,12 @@ pub unsafe fn load_elf_from_inode(
     // Activate page table
     {
         use rux_arch::PageTableRootOps;
-        crate::arch::Arch::write(upt.root_phys().as_usize() as u64);
+        let new_root = upt.root_phys().as_usize() as u64;
+        crate::arch::Arch::write(new_root);
+        // Update task slot so swap_process_state restores the exec'd PT, not the forked copy.
+        unsafe {
+            crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root = new_root;
+        }
     }
 
     // Write exec args to user stack and enter user mode

@@ -231,4 +231,5 @@ impl FlatPageTable {
     }
     pub fn walk_user_pages<F: FnMut(VirtAddr, PhysAddr, MappingFlags)>(&self, _f: F) {}
     pub fn root_phys(&self) -> PhysAddr { PhysAddr::new(0) }
+    pub fn free_user_address_space(&self, _alloc: &mut dyn FrameAllocator) {}
 }

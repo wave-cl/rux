@@ -575,8 +575,8 @@ pub unsafe fn deliver_signal<S: rux_arch::SignalOps>(
 /// Reads from user stack and modifies kernel register save areas via `SignalOps`.
 pub unsafe fn sigreturn<S: rux_arch::SignalOps>(hot: &mut SignalHot) -> i64 {
     let sp = S::sig_read_user_sp();
+    // sig_restore_frame handles restoring the user RSP (arch-specific).
     let (result, saved_mask) = S::sig_restore_frame(sp);
-    S::sig_write_user_sp(sp + S::SIGNAL_FRAME_SIZE);
     hot.blocked = SignalSet(saved_mask);
     result
 }

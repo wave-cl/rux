@@ -99,59 +99,128 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
 /// kill(pid, sig) — POSIX.1: send a signal.
 pub fn kill(pid: isize, signum: usize) -> isize {
     use rux_proc::signal::*;
-    // Our process is always PID 1. Accept pid=0,1,-1 as "self".
-    match pid {
-        0 | 1 | -1 => {}
-        _ => return -3, // -ESRCH
-    }
-    if signum == 0 { return 0; } // permission check only
+
     if signum > 31 { return -22; }
+
+    let my_pid = crate::task_table::current_pid() as isize;
+
+    // Determine target: self or another process.
+    let to_self = pid == 0 || pid == -1 || pid == my_pid;
+
+    // signum == 0: permission/existence check only (no signal sent)
+    if signum == 0 {
+        if to_self { return 0; }
+        // For non-self: return ESRCH if process doesn't exist
+        use crate::task_table::*;
+        unsafe {
+            let found = (0..MAX_PROCS).any(|i| {
+                TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32
+            });
+            return if found { 0 } else { -3 }; // -ESRCH
+        }
+    }
+
     let sig = match Signal::from_raw(signum as u8) {
         Some(s) => s,
         None => return -22,
     };
-    unsafe {
-        let hot = &mut super::PROCESS.signal_hot;
-        let cold = &mut super::PROCESS.signal_cold;
-        let action = cold.get_action(sig);
 
-        // SIGKILL always terminates
-        if sig == Signal::Kill {
-            posix_exit(128 + 9);
-        }
+    if to_self {
+        // Send signal to current process.
+        unsafe {
+            let hot = &mut super::PROCESS.signal_hot;
+            let cold = &mut super::PROCESS.signal_cold;
+            let action = cold.get_action(sig);
 
-        // If default action is Terminate/CoreDump and handler is Default, exit now
-        if action.handler_type == SignalHandler::Default {
-            match sig.default_action() {
-                SignalDefault::Terminate | SignalDefault::CoreDump => {
-                    posix_exit(128 + signum as i32);
-                }
-                SignalDefault::Ignore | SignalDefault::Stop | SignalDefault::Continue => {
-                    return 0;
+            // SIGKILL always terminates
+            if sig == Signal::Kill {
+                posix_exit(128 + 9);
+            }
+
+            // If default action is Terminate/CoreDump and handler is Default, exit now
+            if action.handler_type == SignalHandler::Default {
+                match sig.default_action() {
+                    SignalDefault::Terminate | SignalDefault::CoreDump => {
+                        posix_exit(128 + signum as i32);
+                    }
+                    SignalDefault::Ignore | SignalDefault::Stop | SignalDefault::Continue => {
+                        return 0;
+                    }
                 }
             }
-        }
 
-        // If handler is Ignore, do nothing
-        if action.handler_type == SignalHandler::Ignore {
-            return 0;
-        }
+            // If handler is Ignore, do nothing
+            if action.handler_type == SignalHandler::Ignore {
+                return 0;
+            }
 
-        // Queue the signal for delivery on next syscall return
-        let info = SigInfo {
-            signo: signum as u8,
-            code: SigCode::User,
-            _pad0: [0; 2],
-            pid: rux_proc::id::Pid(1),
-            uid: rux_proc::id::Uid(0),
-            _pad1: [0; 4],
-            addr: 0,
-            status: 0,
-            _pad2: [0; 4],
-        };
-        let _ = cold.send_standard(hot, sig, &info);
+            // Queue the signal for delivery on next syscall return
+            let info = SigInfo {
+                signo: signum as u8,
+                code: SigCode::User,
+                _pad0: [0; 2],
+                pid: rux_proc::id::Pid(my_pid as u32),
+                uid: rux_proc::id::Uid(0),
+                _pad1: [0; 4],
+                addr: 0,
+                status: 0,
+                _pad2: [0; 4],
+            };
+            let _ = cold.send_standard(hot, sig, &info);
+        }
+        0
+    } else {
+        // Send signal to another process.
+        use crate::task_table::*;
+        unsafe {
+            // Find target process in TASK_TABLE.
+            let target_idx = (0..MAX_PROCS).find(|&i| {
+                TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32
+            });
+            let target_idx = match target_idx {
+                Some(i) => i,
+                None => return -3, // -ESRCH
+            };
+
+            // SIGKILL: mark target as zombie (no handler check needed)
+            if sig == Signal::Kill {
+                // Force-kill the target: mark zombie, wake parent
+                TASK_TABLE[target_idx].state = TaskState::Zombie;
+                TASK_TABLE[target_idx].exit_code = 128 + 9;
+                let ppid = TASK_TABLE[target_idx].ppid;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == ppid {
+                        TASK_TABLE[i].last_child_exit = 128 + 9;
+                        TASK_TABLE[i].child_available = true;
+                        if TASK_TABLE[i].state == TaskState::WaitingForChild {
+                            TASK_TABLE[i].state = TaskState::Ready;
+                            crate::scheduler::get().wake_task(i);
+                        }
+                        break;
+                    }
+                }
+                let sched = crate::scheduler::get();
+                sched.tasks[target_idx].entity.state = rux_sched::TaskState::Dead;
+                sched.tasks[target_idx].active = false;
+                return 0;
+            }
+
+            // For other signals: set pending bit in target's signal_hot.
+            // The signal will be delivered when the target process next returns from a syscall.
+            TASK_TABLE[target_idx].signal_hot.pending =
+                TASK_TABLE[target_idx].signal_hot.pending.add(signum as u8);
+
+            // If target is sleeping/waiting, wake it so it can handle the signal.
+            match TASK_TABLE[target_idx].state {
+                TaskState::Sleeping | TaskState::WaitingForChild => {
+                    TASK_TABLE[target_idx].state = TaskState::Ready;
+                    crate::scheduler::get().wake_task(target_idx);
+                }
+                _ => {}
+            }
+        }
+        0
     }
-    0
 }
 
 /// Internal exit helper (avoids circular naming with posix::exit).

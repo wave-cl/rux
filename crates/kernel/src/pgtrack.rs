@@ -4,7 +4,7 @@
 /// a convenience wrapper for `begin_child` that supplies the arch-specific
 /// page table root write function.
 
-pub use rux_mm::pgtrack::{set_kernel_pt, track, TrackingAllocator};
+pub use rux_mm::pgtrack::{set_kernel_pt, track, TrackingAllocator, kernel_pt_root};
 
 /// Wrapper that supplies the arch-specific `write_pt_root` callback.
 pub fn begin_child(alloc: &mut dyn rux_mm::FrameAllocator) {

@@ -13,24 +13,146 @@ pub fn exit(status: i32) -> ! {
 
     unsafe {
         use rux_arch::VforkContext;
+        // Check vfork child first — longjmp resumes the parent.
         if crate::arch::Arch::jmp_active() {
             crate::arch::Arch::longjmp(42);
         }
+
+        // Forked child (not vfork): mark zombie, wake parent, dequeue, schedule.
+        use crate::task_table::*;
+        let idx = CURRENT_TASK_IDX;
+        if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
+            // Sync globals into current slot before changing state.
+            TASK_TABLE[idx].exit_code = status;
+            TASK_TABLE[idx].state = TaskState::Zombie;
+
+            // Find parent and wake it if it's blocked in waitpid.
+            let ppid = TASK_TABLE[idx].ppid;
+            Arch::write_str("rux: exit: child idx=");
+            let mut b = [0u8; 10]; Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, idx as u32));
+            Arch::write_str(" ppid=");
+            Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, ppid as u32));
+            Arch::write_str("\n");
+            for i in 0..MAX_PROCS {
+                let t = &mut TASK_TABLE[i];
+                if !t.active || t.pid != ppid { continue; }
+                // Update parent's child_available / last_child_exit so
+                // waitpid's simple fast path (for the init process) also works.
+                t.last_child_exit = status;
+                t.child_available = true;
+                Arch::write_str("rux: exit: parent found at i=");
+                Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, i as u32));
+                Arch::write_str(" state=");
+                Arch::write_str(rux_klib::fmt::u32_to_str(&mut b, t.state as u32));
+                Arch::write_str("\n");
+                if t.state == TaskState::WaitingForChild {
+                    t.state = TaskState::Ready;
+                    crate::scheduler::get().wake_task(i);
+                    Arch::write_str("rux: exit: woke parent\n");
+                }
+                break;
+            }
+
+            // Mark entity Dead so schedule() doesn't re-enqueue us.
+            {
+                let sched = crate::scheduler::get();
+                sched.tasks[idx].entity.state = rux_sched::TaskState::Dead;
+                sched.tasks[idx].active = false;
+                sched.dequeue_current();
+                Arch::write_str("rux: exit: calling schedule\n");
+                sched.schedule();
+                Arch::write_str("rux: exit: SCHEDULE RETURNED (should not happen)\n");
+            }
+            // Unreachable, but satisfy the type checker.
+            loop { core::hint::spin_loop(); }
+        }
     }
+
+    // Only PID 1 (init) reaches here.
     use rux_arch::ExitOps;
     crate::arch::Arch::exit(crate::arch::Arch::EXIT_SUCCESS);
 }
 
 /// waitpid(pid, wstatus, options) — POSIX.1
-pub fn waitpid(_pid: usize, wstatus_ptr: usize, _options: usize) -> isize {
+///
+/// Supports:
+/// - pid == usize::MAX (−1 as usize): wait for any child
+/// - pid > 0: wait for specific PID
+/// - options & 1 (WNOHANG): non-blocking
+pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
     unsafe {
-        if !super::PROCESS.child_available { return -10; } // -ECHILD
-        super::PROCESS.child_available = false;
-        if wstatus_ptr != 0 {
-            let status = (super::PROCESS.last_child_exit as u32) << 8;
-            *(wstatus_ptr as *mut u32) = status;
+        use crate::task_table::*;
+
+        let my_pid = current_pid();
+        const WNOHANG: usize = 1;
+
+        loop {
+            // Scan for a zombie child matching the pid criteria.
+            for i in 0..MAX_PROCS {
+                let t = &TASK_TABLE[i];
+                if !t.active || t.ppid != my_pid { continue; }
+                if t.state != TaskState::Zombie { continue; }
+                // pid == usize::MAX (-1) means "any child"
+                if pid != usize::MAX && pid != 0 && t.pid as usize != pid { continue; }
+
+                // Found a zombie — reap it.
+                let child_pid = t.pid as isize;
+                let exit_code = t.exit_code;
+                let child_pt_root = t.pt_root;
+                let slot = &mut TASK_TABLE[i];
+                slot.active = false;
+                slot.state = TaskState::Free;
+                slot.pid = 0;
+                slot.pt_root = 0;
+
+                // Free the exec'd address space. Fork children bypass begin_child so
+                // their exec'd PT is not in CHILD_PAGES — free it here instead.
+                if child_pt_root != 0 {
+                    let alloc = crate::kstate::alloc();
+                    let child_pt = crate::arch::PageTable::from_root(
+                        rux_klib::PhysAddr::new(child_pt_root as usize)
+                    );
+                    child_pt.free_user_address_space(alloc);
+                }
+
+                if wstatus_ptr != 0 {
+                    *(wstatus_ptr as *mut u32) = (exit_code as u32) << 8;
+                }
+                return child_pid;
+            }
+
+            // WNOHANG: don't block, return 0 if no zombie yet.
+            if options & WNOHANG != 0 { return 0; }
+
+            // Check if this process has any children at all.
+            let has_children = (0..MAX_PROCS).any(|i| {
+                TASK_TABLE[i].active && TASK_TABLE[i].ppid == my_pid
+                    && TASK_TABLE[i].state != TaskState::Zombie
+            });
+            if !has_children {
+                // Also handle the legacy single-process fast path:
+                // PID 1 calls waitpid and there are no multi-process children.
+                if super::PROCESS.child_available {
+                    super::PROCESS.child_available = false;
+                    if wstatus_ptr != 0 {
+                        let status = (super::PROCESS.last_child_exit as u32) << 8;
+                        *(wstatus_ptr as *mut u32) = status;
+                    }
+                    return 42; // fake child PID for vfork path
+                }
+                return -10; // -ECHILD
+            }
+
+            // Block until a child exits.
+            TASK_TABLE[CURRENT_TASK_IDX].state = TaskState::WaitingForChild;
+            {
+                let sched = crate::scheduler::get();
+                // Mark Interruptible so schedule() doesn't re-enqueue the parent.
+                sched.tasks[CURRENT_TASK_IDX].entity.state = rux_sched::TaskState::Interruptible;
+                sched.dequeue_current();
+                sched.schedule(); // returns when woken by child's exit()
+            }
         }
-        42
     }
 }
 

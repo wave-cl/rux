@@ -37,7 +37,17 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {
-            220 => crate::syscall::generic_vfork::<super::Aarch64>() as i64,
+            // nr=220 is clone(flags, ...). Route based on flags:
+            // CLONE_VFORK (0x4000) → setjmp path; else → real fork.
+            220 => {
+                let flags = a0 as usize;
+                const CLONE_VFORK: usize = 0x4000;
+                if flags & CLONE_VFORK != 0 {
+                    crate::syscall::generic_vfork::<super::Aarch64>() as i64
+                } else {
+                    crate::fork::sys_fork() as i64
+                }
+            }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             139 => {
                 // rt_sigreturn — restore pre-signal state
@@ -58,12 +68,11 @@ pub fn handle_syscall(frame: *mut u8) {
         if !crate::syscall::PROCESS.in_vfork_child && crate::syscall::PROCESS.signal_hot.has_deliverable() {
             crate::syscall::generic_deliver_signal::<super::Aarch64>(result);
         }
-        // Check for pending reschedule (set by timer tick)
-        // TODO: enable once multi-process aarch64 context switch is tested
-        // let sched = crate::scheduler::get();
-        // if sched.need_resched {
-        //     sched.schedule();
-        // }
+        // Check for pending reschedule (set by timer tick or fork).
+        let sched = crate::scheduler::get();
+        if sched.need_resched {
+            sched.schedule();
+        }
     }
 }
 
@@ -74,6 +83,7 @@ struct SignalFrameAarch64 {
     saved_spsr: u64,     // original SPSR_EL1
     saved_x0: u64,       // syscall return value
     saved_mask: u64,     // blocked signal mask before handler
+    orig_user_sp: u64,   // original sp_el0 for exact restoration
 }
 
 /// Map the sigreturn trampoline page if not already mapped.
@@ -128,11 +138,14 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         blocked_mask: u64, _restorer: usize, _signum: u8,
     ) {
         let regs = CURRENT_REGS_PTR;
+        let sp: u64;
+        core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
         let frame = frame_addr as *mut SignalFrameAarch64;
         (*frame).saved_elr = *regs.add(31);
         (*frame).saved_spsr = *regs.add(32);
         (*frame).saved_x0 = syscall_result as u64;
         (*frame).saved_mask = blocked_mask;
+        (*frame).orig_user_sp = sp;
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
@@ -148,12 +161,16 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         let saved_spsr = (*frame).saved_spsr;
         let saved_x0 = (*frame).saved_x0;
         let saved_mask = (*frame).saved_mask;
+        let orig_user_sp = (*frame).orig_user_sp;
 
         // Restore exception frame registers
         let regs = CURRENT_REGS_PTR;
         *regs.add(31) = saved_elr;
         *regs.add(32) = saved_spsr;
         *regs.add(0) = saved_x0;
+
+        // Restore user stack pointer
+        core::arch::asm!("msr sp_el0, {}", in(reg) orig_user_sp, options(nostack));
 
         (saved_x0 as i64, saved_mask)
     }

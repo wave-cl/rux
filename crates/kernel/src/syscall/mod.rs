@@ -208,7 +208,8 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Brk => linux::brk(a0),
 
         // ── Process ────────────────────────────────────────────────
-        Syscall::Getpid | Syscall::Getppid => 1, // TODO: use task_table after debugging
+        Syscall::Getpid => crate::task_table::current_pid() as isize,
+        Syscall::Getppid => crate::task_table::current_ppid() as isize,
         Syscall::Exit => posix::exit(a0 as i32),
         Syscall::ExitGroup => linux::exit_group(a0 as i32),
         Syscall::Kill => posix::kill(a0 as isize, a1),
@@ -441,7 +442,32 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     // The exec will create a new page table, replacing the current one.
     VFORK_PARENT_PT_ROOT = V::read_pt_root();
 
-    crate::pgtrack::begin_child(alloc);
+    // Task slot 0 is the init/vfork process. For real fork children (slot > 0),
+    // we must NOT call begin_child because that would free the parent's exec frames.
+    // Instead: directly switch CR3 to kernel PT, free the forked PT, skip CHILD_PAGES.
+    // Fork children use free_user_address_space in waitpid for cleanup.
+    let is_fork_child = crate::task_table::CURRENT_TASK_IDX != 0;
+
+    if is_fork_child {
+        // Switch CR3 to kernel PT so it's safe to free the forked PT.
+        let kpt = crate::pgtrack::kernel_pt_root();
+        if kpt != 0 {
+            use rux_arch::PageTableRootOps;
+            crate::arch::Arch::write(kpt);
+        }
+        // Free the forked PT (the address space we're replacing).
+        let old_pt_root = crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root;
+        if old_pt_root != 0 {
+            let old_pt = crate::arch::PageTable::from_root(
+                rux_klib::PhysAddr::new(old_pt_root as usize)
+            );
+            old_pt.free_user_address_space(alloc);
+            crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root = 0;
+        }
+    } else {
+        // Init/vfork path: begin_child switches CR3 and frees previous child's frames.
+        crate::pgtrack::begin_child(alloc);
+    }
 
     // Reset signal state on exec (POSIX: caught signals revert to default)
     PROCESS.signal_hot = rux_proc::signal::SignalHot::new();

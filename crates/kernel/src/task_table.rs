@@ -152,7 +152,20 @@ pub unsafe fn init_pid1() {
     slot.ppid = 0;
     slot.pgid = 1;
     slot.state = TaskState::Running;
-    slot.kstack_top = KSTACKS[0].as_ptr() as usize + KSTACK_SIZE;
+    // Task 0 (init/shell) uses SYSCALL_STACK for its kernel entry stack,
+    // not KSTACKS[0]. CURRENT_KSTACK_TOP must equal TASK_TABLE[0].kstack_top
+    // so that swap_process_state restores the correct value after context switches.
+    #[cfg(target_arch = "x86_64")]
+    {
+        let kstack = crate::arch::x86_64::syscall::syscall_stack_top() as usize;
+        slot.kstack_top = kstack;
+        crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP = kstack as u64;
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        slot.kstack_top = KSTACKS[0].as_ptr() as usize + KSTACK_SIZE;
+    }
+
     // Console FDs
     for i in 0..3 {
         slot.fds[i] = OpenFile {
@@ -161,14 +174,6 @@ pub unsafe fn init_pid1() {
         };
     }
     CURRENT_TASK_IDX = 0;
-
-    // Set CURRENT_KSTACK_TOP to point to the SYSCALL_STACK top.
-    // SignalOps and VforkContext use this to access the saved register frame.
-    #[cfg(target_arch = "x86_64")]
-    {
-        crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP =
-            crate::arch::x86_64::syscall::syscall_stack_top();
-    }
 }
 
 // ── Context switch process state swap ─────────────────────────────────

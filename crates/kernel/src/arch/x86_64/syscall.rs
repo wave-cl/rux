@@ -24,10 +24,6 @@ pub fn syscall_stack_top() -> u64 {
 #[no_mangle]
 pub static mut SAVED_USER_RSP: u64 = 0;
 
-/// Debug: last RCX value before sysretq
-pub static mut DEBUG_RCX: u64 = 0;
-/// Debug: FS base before sysretq
-pub static mut DEBUG_FS: u64 = 0;
 
 /// Initialize the SYSCALL/SYSRET MSRs.
 pub unsafe fn init_syscall_msrs() {
@@ -60,9 +56,11 @@ pub unsafe fn init_syscall_msrs() {
 #[unsafe(naked)]
 unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
-        // Switch to kernel stack (save user RSP)
+        // Switch to per-task kernel stack (save user RSP).
+        // CURRENT_KSTACK_TOP is updated by swap_process_state on every context switch
+        // so each task uses its own kstack, preventing cross-task stack corruption.
         "mov [rip + {saved_user_rsp}], rsp",
-        "lea rsp, [{syscall_stack} + 65536]",
+        "mov rsp, [rip + {current_kstack_top}]",
 
         // Save callee-saved + syscall-specific regs
         "push rcx",      // user RIP
@@ -126,7 +124,7 @@ unsafe extern "C" fn syscall_entry() {
         "sysretq",
 
         saved_user_rsp = sym SAVED_USER_RSP,
-        syscall_stack = sym SYSCALL_STACK,
+        current_kstack_top = sym CURRENT_KSTACK_TOP,
         handler = sym syscall_dispatch_linux,
     );
 }
@@ -170,7 +168,19 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // Process creation syscalls (handled before generic dispatch)
     match nr {
-        56 | 57 | 58 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64,
+        // 56=clone, 57=fork, 58=vfork
+        // Route vfork (58) and clone with CLONE_VFORK flag to the setjmp path.
+        // All other fork/clone calls go to sys_fork (real multi-process).
+        58 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64,
+        56 => {
+            let flags = a0 as usize;
+            const CLONE_VFORK: usize = 0x4000;
+            if flags & CLONE_VFORK != 0 {
+                return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64;
+            }
+            return unsafe { crate::fork::sys_fork() } as i64;
+        }
+        57 => return unsafe { crate::fork::sys_fork() } as i64,
         59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
         _ => {}
     }
@@ -189,25 +199,29 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         if !crate::syscall::PROCESS.in_vfork_child && crate::syscall::PROCESS.signal_hot.has_deliverable() {
             return crate::syscall::generic_deliver_signal::<super::X86_64>(result);
         }
-        // Check for pending reschedule (set by timer tick)
-        // TODO: enable once multi-process context switch is tested
-        // let sched = crate::scheduler::get();
-        // if sched.need_resched {
-        //     sched.schedule();
-        // }
+        // Check for pending reschedule (set by timer tick or fork).
+        let sched = crate::scheduler::get();
+        if sched.need_resched {
+            sched.schedule();
+        }
     }
     result
 }
 
 /// Signal frame layout on user stack (x86_64).
+/// The restorer word is the "return address" for the signal handler (at frame[0]).
+/// When the handler executes `ret`, RSP advances past the restorer to frame[1] (saved_rip).
+/// At sigreturn time, SAVED_USER_RSP = frame_addr + 8. sig_restore_frame receives frame_addr + 8
+/// and must subtract 8 to find the actual frame start.
 #[repr(C)]
 struct SignalFrameX86 {
-    restorer: u64,       // return address (sa_restorer → calls sigreturn)
-    saved_rip: u64,      // original user RIP (was in RCX)
-    saved_rflags: u64,   // original RFLAGS (was in R11)
-    saved_rax: u64,      // syscall return value
-    saved_mask: u64,     // blocked signal mask before handler
-    signum: u64,         // signal number (for sigreturn to pop correctly)
+    restorer: u64,       // return address (sa_restorer → calls sigreturn)  [frame+0]
+    saved_rip: u64,      // original user RIP (was in RCX)                  [frame+8]
+    saved_rflags: u64,   // original RFLAGS (was in R11)                    [frame+16]
+    saved_rax: u64,      // syscall return value                             [frame+24]
+    saved_mask: u64,     // blocked signal mask before handler               [frame+32]
+    signum: u64,         // signal number                                    [frame+40]
+    orig_user_sp: u64,   // original user RSP (for exact restoration)        [frame+48]
 }
 
 // ── SignalOps implementation ──────────────────────────────────────────
@@ -235,6 +249,8 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         (*frame).saved_rax = syscall_result as u64;
         (*frame).saved_mask = blocked_mask;
         (*frame).signum = signum as u64;
+        // Save original user RSP so sigreturn can restore it exactly.
+        (*frame).orig_user_sp = SAVED_USER_RSP;
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
@@ -244,11 +260,17 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
     }
 
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
-        let frame = frame_addr as *const SignalFrameX86;
+        // frame_addr = SAVED_USER_RSP at sigreturn time = frame_start + 8
+        // (signal handler's `ret` popped the restorer word, advancing RSP by 8)
+        let frame = (frame_addr - 8) as *const SignalFrameX86;
         let saved_rip = (*frame).saved_rip;
         let saved_rflags = (*frame).saved_rflags;
         let saved_rax = (*frame).saved_rax;
         let saved_mask = (*frame).saved_mask;
+        let orig_user_sp = (*frame).orig_user_sp;
+
+        // Restore original user RSP
+        SAVED_USER_RSP = orig_user_sp;
 
         // Restore RCX (user RIP) and R11 (RFLAGS) on kernel stack
         let stack_top_mut = CURRENT_KSTACK_TOP as *mut u64;

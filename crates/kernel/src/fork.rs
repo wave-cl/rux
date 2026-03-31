@@ -81,6 +81,7 @@ pub unsafe fn sys_fork() -> isize {
     let sched = crate::scheduler::get();
     let task = &mut sched.tasks[child_idx];
     task.active = true;
+    task.saved_sp = TASK_TABLE[child_idx].saved_ksp; // context_switch reads this
     task.entity = rux_sched::entity::SchedEntity::new(child_idx as u64);
     task.entity.state = rux_sched::TaskState::Ready;
     task.entity.nice = 0;
@@ -159,7 +160,9 @@ unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameA
         .or(rux_mm::MappingFlags::WRITE)
         .or(rux_mm::MappingFlags::EXECUTE);
 
-    // Walk parent's user pages, copy each frame, map in child
+    // Walk parent's user pages, copy each frame, map in child.
+    // unmap_4k first: kernel identity map may already cover these VAs (same VA=PA range),
+    // so we must remove the kernel-only entry before mapping with user_rwx.
     parent_pt.walk_user_pages(|va, pa, _flags| {
         let new_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("fork frame");
         core::ptr::copy_nonoverlapping(
@@ -167,6 +170,7 @@ unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameA
             new_frame.as_usize() as *mut u8,
             4096,
         );
+        child_pt.unmap_4k(va);
         let _ = child_pt.map_4k(va, new_frame, user_rwx, alloc);
     });
 
@@ -189,11 +193,16 @@ unsafe fn setup_child_kstack_x86(kstack_top: usize) -> usize {
     // Push syscall frame (same layout as syscall_entry pushes)
     // Positions: sub(1)=rcx, sub(2)=r11, ..., sub(15)=r9
     // We push bottom-first (r9 at lowest address, rcx at highest)
-    for i in (1..=15u64).rev() {
+    // Push syscall frame so fork_child_sysret can pop it correctly.
+    // fork_child_sysret pops: r9, r8, r10, rdx, rsi, rdi, rax, r15, r14, r13, r12, rbp, rbx, r11, rcx
+    // The stack grows DOWN; fork_child_sysret pops UP (from low addr to high addr).
+    // So we push in order rcx→r11→...→r9 (i=1→15), putting rcx at HIGH addr and r9 at LOW addr.
+    // syscall_entry push order: rcx(sub(1)), r11(sub(2)), ..., r9(sub(15)).
+    for i in 1..=15u64 {
         sp -= w;
         let val = *parent_top.sub(i as usize);
         if i == 9 {
-            // rax slot (sub(9)): set to 0 for child fork return
+            // rax slot (sub(9)): set to 0 for child fork return value
             *(sp as *mut u64) = 0;
         } else {
             *(sp as *mut u64) = val;

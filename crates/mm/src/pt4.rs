@@ -271,4 +271,57 @@ impl<A: ArchPaging> PageTable4Level<A> {
             }
         }
     }
+
+    /// Free the user-space address mapping copied during fork.
+    ///
+    /// Walks user-space L3 entries (0..256), frees all user leaf page frames
+    /// (those with the USER flag), then frees the page-table structure pages
+    /// (L0/L1/L2 tables and the root PML4 frame).
+    ///
+    /// Kernel identity-mapped frames (no USER flag) are never freed.
+    ///
+    /// # Safety
+    /// Page table must be a per-process copy created by `copy_address_space`.
+    /// Must NOT be called on the boot/kernel page table.
+    pub unsafe fn free_user_address_space(&self, alloc: &mut dyn FrameAllocator) {
+        let l3 = self.root.as_usize() as *const PageTablePage;
+        for l3i in 0..256usize {
+            let l3e = (*l3).entries[l3i];
+            if !A::Pte::is_present(l3e) { continue; }
+
+            let l2_pa = A::Pte::phys_addr(l3e);
+            let l2 = l2_pa.as_usize() as *const PageTablePage;
+            for l2i in 0..PT_ENTRIES {
+                let l2e = (*l2).entries[l2i];
+                if !A::Pte::is_present(l2e) { continue; }
+                if A::Pte::is_huge(l2e) { continue; } // skip 1GB pages
+
+                let l1_pa = A::Pte::phys_addr(l2e);
+                let l1 = l1_pa.as_usize() as *const PageTablePage;
+                for l1i in 0..PT_ENTRIES {
+                    let l1e = (*l1).entries[l1i];
+                    if !A::Pte::is_present(l1e) { continue; }
+                    if A::Pte::is_huge(l1e) { continue; } // skip 2MB pages
+
+                    let l0_pa = A::Pte::phys_addr(l1e);
+                    let l0 = l0_pa.as_usize() as *const PageTablePage;
+                    for l0i in 0..PT_ENTRIES {
+                        let l0e = (*l0).entries[l0i];
+                        if !A::Pte::is_present(l0e) { continue; }
+                        if !A::Pte::is_user(l0e) { continue; }
+                        // Free the user leaf page
+                        alloc.dealloc(A::Pte::phys_addr(l0e), PageSize::FourK);
+                    }
+                    // Free the L0 (PT) table frame
+                    alloc.dealloc(l0_pa, PageSize::FourK);
+                }
+                // Free the L1 (PD) table frame
+                alloc.dealloc(l1_pa, PageSize::FourK);
+            }
+            // Free the L2 (PDPT) table frame
+            alloc.dealloc(l2_pa, PageSize::FourK);
+        }
+        // Free the root PML4 frame itself
+        alloc.dealloc(self.root, PageSize::FourK);
+    }
 }

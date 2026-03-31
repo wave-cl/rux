@@ -28,6 +28,11 @@ pub fn set_kernel_pt(root: u64) {
     unsafe { KERNEL_PT_ROOT = root; }
 }
 
+/// Read the kernel page table root.
+pub fn kernel_pt_root() -> u64 {
+    unsafe { KERNEL_PT_ROOT }
+}
+
 /// Record a page allocation into the active tracker.
 pub fn track(phys: PhysAddr) {
     unsafe {
