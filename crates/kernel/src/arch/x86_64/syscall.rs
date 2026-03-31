@@ -120,15 +120,58 @@ unsafe extern "C" fn syscall_entry() {
     );
 }
 
+/// Fork child return trampoline.
+/// context_switch retq's here. The child's kernel stack has a full
+/// syscall register frame (same layout as syscall_entry pushes).
+/// Pops all saved regs (with RAX=0 for fork return), then sysretq.
+core::arch::global_asm!(r#"
+.att_syntax prefix
+.global fork_child_sysret
+fork_child_sysret:
+    popq %r9
+    popq %r8
+    popq %r10
+    popq %rdx
+    popq %rsi
+    popq %rdi
+    popq %rax
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %rbp
+    popq %rbx
+    popq %r11
+    popq %rcx
+    movq SAVED_USER_RSP(%rip), %rsp
+    sysretq
+"#);
+
+extern "C" {
+    pub fn fork_child_sysret();
+}
+
 /// Rust dispatch for Linux x86_64 syscall ABI.
 /// Called from the assembly entry point with syscall number and arguments.
 #[no_mangle]
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
     use crate::syscall::Syscall;
 
-    // Vfork/exec use generic implementation with arch VforkContext
+    // Process creation syscalls (handled before generic dispatch)
     match nr {
-        56 | 57 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64,
+        56 => {
+            // clone(flags, stack, ...) — check CLONE_VFORK flag
+            let flags = a0;
+            return unsafe {
+                if flags & 0x4000 != 0 { // CLONE_VFORK
+                    crate::syscall::generic_vfork::<super::X86_64>() as i64
+                } else {
+                    crate::fork::sys_fork() as i64
+                }
+            };
+        }
+        57 => return unsafe { crate::fork::sys_fork() } as i64,        // fork()
+        58 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64, // vfork()
         59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
         _ => {}
     }

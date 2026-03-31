@@ -228,4 +228,47 @@ impl<A: ArchPaging> PageTable4Level<A> {
             Ok(new_entry)
         }
     }
+
+    /// Walk all user-space 4K page mappings. Calls `f(va, pa, raw_pte_flags)`
+    /// for each present leaf entry in the lower half of the address space
+    /// (L3 indices 0..256 on x86_64, or 0..256 on aarch64 — user space).
+    ///
+    /// # Safety
+    /// Page table must be valid and accessible via physical addresses.
+    pub unsafe fn walk_user_pages<F>(&self, mut f: F)
+    where F: FnMut(VirtAddr, PhysAddr, u64)
+    {
+        let l3 = self.root.as_usize() as *const PageTablePage;
+        // User space: L3 indices 0..256 (lower 128 TiB of canonical 48-bit space)
+        for l3i in 0..256 {
+            let l3e = (*l3).entries[l3i];
+            if !A::Pte::is_present(l3e) { continue; }
+
+            let l2 = A::Pte::phys_addr(l3e).as_usize() as *const PageTablePage;
+            for l2i in 0..PT_ENTRIES {
+                let l2e = (*l2).entries[l2i];
+                if !A::Pte::is_present(l2e) { continue; }
+                if A::Pte::is_huge(l2e) { continue; } // skip 1G pages (kernel identity map)
+
+                let l1 = A::Pte::phys_addr(l2e).as_usize() as *const PageTablePage;
+                for l1i in 0..PT_ENTRIES {
+                    let l1e = (*l1).entries[l1i];
+                    if !A::Pte::is_present(l1e) { continue; }
+                    if A::Pte::is_huge(l1e) { continue; } // skip 2M pages
+
+                    let l0 = A::Pte::phys_addr(l1e).as_usize() as *const PageTablePage;
+                    for l0i in 0..PT_ENTRIES {
+                        let l0e = (*l0).entries[l0i];
+                        if !A::Pte::is_present(l0e) { continue; }
+                        if !A::Pte::is_user(l0e) { continue; } // skip kernel pages
+
+                        let va = (l3i << 39) | (l2i << 30) | (l1i << 21) | (l0i << 12);
+                        let pa = A::Pte::phys_addr(l0e);
+                        let flags = A::Pte::flags(l0e);
+                        f(VirtAddr::new(va), pa, flags);
+                    }
+                }
+            }
+        }
+    }
 }

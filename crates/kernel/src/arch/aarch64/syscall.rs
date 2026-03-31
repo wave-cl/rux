@@ -35,9 +35,16 @@ pub fn handle_syscall(frame: *mut u8) {
         let a3 = *regs.add(3);   // x3
         let a4 = *regs.add(4);   // x4
 
-        // Vfork/exec use generic implementation with arch VforkContext
+        // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {
-            220 => crate::syscall::generic_vfork::<super::Aarch64>() as i64,
+            220 => {
+                // clone(flags, stack, ...) — check CLONE_VFORK
+                if a0 & 0x4000 != 0 {
+                    crate::syscall::generic_vfork::<super::Aarch64>() as i64
+                } else {
+                    crate::fork::sys_fork() as i64
+                }
+            }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             139 => {
                 // rt_sigreturn — restore pre-signal state
@@ -255,7 +262,7 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
 
 /// Stash the exception frame pointer so VforkContext methods can access it.
 /// Set by handle_syscall before calling generic_vfork.
-static mut CURRENT_REGS_PTR: *mut u64 = core::ptr::null_mut();
+pub static mut CURRENT_REGS_PTR: *mut u64 = core::ptr::null_mut();
 
 /// Saved parent exception frame for VforkContext (34 u64s).
 static mut SAVED_PARENT_FRAME: [u64; FRAME_REGS] = [0; FRAME_REGS];
