@@ -11,6 +11,7 @@ pub mod pipe;
 pub mod pgtrack;
 pub mod syscall;
 pub mod uaccess;
+pub mod task_table;
 
 use rux_arch::{ConsoleOps, ExitOps, BootOps};
 use arch::Arch;

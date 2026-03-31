@@ -78,6 +78,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
 
     // Init kernel state
     crate::kstate::init(vfs_ptr, alloc_ptr);
+    crate::task_table::init_pid1();
     log("rux: kernel state initialized\n");
 
     // Exec /sbin/init
