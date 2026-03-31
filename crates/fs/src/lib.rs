@@ -343,6 +343,7 @@ pub trait FileSystem {
     // ── Attribute operations ────────────────────────────────────────
     fn chmod(&mut self, ino: InodeId, mode: u32) -> Result<(), VfsError>;
     fn chown(&mut self, ino: InodeId, uid: u32, gid: u32) -> Result<(), VfsError>;
+    fn utimes(&mut self, ino: InodeId, atime: u64, mtime: u64) -> Result<(), VfsError>;
 }
 
 // ── Contract tests ─────────────────────────────────────────────────────

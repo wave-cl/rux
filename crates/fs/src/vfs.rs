@@ -237,4 +237,9 @@ impl FileSystem for Vfs {
         let (idx, real_ino) = decode(ino);
         self.get_fs_mut(idx)?.chown(real_ino, uid, gid)
     }
+
+    fn utimes(&mut self, ino: InodeId, atime: u64, mtime: u64) -> Result<(), VfsError> {
+        let (idx, real_ino) = decode(ino);
+        self.get_fs_mut(idx)?.utimes(real_ino, atime, mtime)
+    }
 }

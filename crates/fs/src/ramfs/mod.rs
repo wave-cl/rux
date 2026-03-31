@@ -1096,6 +1096,14 @@ impl FileSystem for RamFs {
         m.gid = gid;
         Ok(())
     }
+
+    fn utimes(&mut self, ino: InodeId, atime: u64, mtime: u64) -> Result<(), VfsError> {
+        let m = self.meta_mut(ino)?;
+        m.atime = atime;
+        m.mtime = mtime;
+        m.ctime = mtime;
+        Ok(())
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────

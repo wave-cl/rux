@@ -190,7 +190,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Chown => posix::chown(a0, a1, a2),     // chown(path, uid, gid)
         Syscall::Fchownat => posix::chown(a1, a2, a3),  // fchownat(dirfd, path, uid, gid, flags)
         Syscall::Fchown => posix::fchown(a0, a1, a2),   // fchown(fd, uid, gid)
-        Syscall::Utimensat => 0,
+        Syscall::Utimensat => posix::utimensat(a0, a1, a2, a3),
 
         // ── Memory ─────────────────────────────────────────────────
         Syscall::Mmap => posix::mmap(a0, a1, a2, a3, a4),

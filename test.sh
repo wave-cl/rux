@@ -82,6 +82,11 @@ OUTPUT=$( { sleep 3; \
     printf 'ls /dev\n'; sleep 1; \
     printf 'kill -0 1 && echo killcheck\n'; sleep 2; \
     printf 'kill -0 99 ; echo exitcode=$?\n'; sleep 2; \
+    printf 'dd if=/dev/zero bs=4 count=1 2>/dev/null | wc -c\n'; sleep 2; \
+    printf 'cat /dev/urandom | head -c 8 | wc -c\n'; sleep 2; \
+    printf 'touch /tmp/ts && stat /tmp/ts | grep Modify\n'; sleep 2; \
+    printf 'echo abc | cat\n'; sleep 2; \
+    printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 3; \
     printf 'exit\n'; sleep 1; \
     } | \
     "$QEMU_X86" -cpu Haswell \
@@ -169,6 +174,11 @@ check "dev/null"                "devnull_ok"
 check "ls /dev shows null"      "null"
 check "kill -0 self"            "killcheck"
 check "kill -0 nonexist"        "exitcode=1"
+check "dev/zero (dd)"          "4"
+check "dev/urandom"            "8"
+check "touch timestamp"        "Modify:"
+check "pipe cat"               "abc"
+check "signal trap"            "trapped_sig"
 
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
@@ -223,6 +233,11 @@ OUTPUT=$( { sleep 8; \
     printf 'ls /dev\n'; sleep 3; \
     printf 'kill -0 1 && echo killcheck\n'; sleep 3; \
     printf 'kill -0 99 ; echo exitcode=$?\n'; sleep 3; \
+    printf 'dd if=/dev/zero bs=4 count=1 2>/dev/null | wc -c\n'; sleep 3; \
+    printf 'cat /dev/urandom | head -c 8 | wc -c\n'; sleep 3; \
+    printf 'touch /tmp/ts && stat /tmp/ts | grep Modify\n'; sleep 3; \
+    printf 'echo abc | cat\n'; sleep 3; \
+    printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 4; \
     printf 'exit\n'; sleep 2; \
     } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
@@ -308,6 +323,11 @@ check "dev/null"                "devnull_ok"
 check "ls /dev shows null"      "null"
 check "kill -0 self"            "killcheck"
 check "kill -0 nonexist"        "exitcode=1"
+check "dev/zero (dd)"          "4"
+check "dev/urandom"            "8"
+check "touch timestamp"        "Modify:"
+check "pipe cat"               "abc"
+check "signal trap"            "trapped_sig"
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"

@@ -48,7 +48,19 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         }
         return len as isize;
     }
-    unsafe { fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE) }
+    unsafe {
+        let result = fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE);
+        // Update mtime on successful file write (skip pipes/console)
+        if result > 0 && fd < 64 {
+            let f = &fdt::FD_TABLE[fd];
+            if f.active && !f.is_console && !f.is_pipe {
+                use rux_fs::FileSystem;
+                let now = current_time_secs();
+                let _ = crate::kstate::fs().utimes(f.ino, now, now);
+            }
+        }
+        result
+    }
 }
 
 /// open(pathname, flags, mode) — POSIX.1
@@ -73,7 +85,11 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                     Err(_) => return -22,
                 };
                 match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
-                    Ok(ino) => fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs()),
+                    Ok(ino) => {
+                        let now = current_time_secs();
+                        let _ = fs.utimes(ino, now, now);
+                        fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
+                    }
                     Err(_) => -13,
                 }
             }
@@ -310,7 +326,11 @@ pub fn mkdir(path_ptr: usize) -> isize {
             Err(_) => return -22,
         };
         match fs.mkdir(dir_ino, fname, 0o755) {
-            Ok(_) => 0,
+            Ok(ino) => {
+                let now = current_time_secs();
+                let _ = fs.utimes(ino, now, now);
+                0
+            }
             Err(_) => -17,
         }
     }
@@ -350,7 +370,9 @@ pub fn creat(path_ptr: usize) -> isize {
             Err(_) => return -22,
         };
         match fs.create(dir_ino, fname, 0o644) {
-            Ok(_ino) => {
+            Ok(ino) => {
+                let now = current_time_secs();
+                let _ = fs.utimes(ino, now, now);
                 let cstr = path_ptr as *const u8;
                 let mut len = 0usize;
                 while *cstr.add(len) != 0 && len < 256 { len += 1; }
@@ -881,6 +903,44 @@ pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
             Err(_) => -2,
         }
     }
+}
+
+/// utimensat(dirfd, path, times, flags) — POSIX.1-2008: set file timestamps.
+/// times is a pointer to two timespec structs (atime, mtime), or NULL for current time.
+pub fn utimensat(_dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        let now = Arch::ticks() / 1000; // seconds since boot
+        let (atime, mtime) = if times_ptr == 0 {
+            (now, now)
+        } else {
+            let a_sec = *(times_ptr as *const u64);
+            let m_sec = *((times_ptr + 16) as *const u64); // skip nsec field
+            // UTIME_NOW = 0x3FFFFFFF, UTIME_OMIT = 0x3FFFFFFE
+            let a_nsec = *((times_ptr + 8) as *const u64);
+            let m_nsec = *((times_ptr + 24) as *const u64);
+            let a = if a_nsec == 0x3FFFFFFF { now } else { a_sec };
+            let m = if m_nsec == 0x3FFFFFFF { now } else { m_sec };
+            (a, m)
+        };
+        // Resolve path (if 0/null, would need fd-based, but busybox always passes path)
+        if path_ptr == 0 { return 0; }
+        let path = super::read_user_path(path_ptr);
+        let ino = match super::resolve_with_cwd(path) {
+            Ok(ino) => ino,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        match fs.utimes(ino, atime, mtime) {
+            Ok(()) => 0,
+            Err(_) => -2,
+        }
+    }
+}
+
+/// Get current time in seconds (for timestamp updates on file operations).
+pub fn current_time_secs() -> u64 {
+    Arch::ticks() / 1000
 }
 
 /// readlinkat(dirfd, pathname, buf, bufsiz) — POSIX.1-2008
