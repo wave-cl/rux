@@ -245,8 +245,11 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
         Syscall::Getgroups | Syscall::Setpgid | Syscall::Getrlimit |
         Syscall::SetRobustList | Syscall::Futex |
-        Syscall::Tgkill | Syscall::Tkill |
         Syscall::SchedGetaffinity | Syscall::Prctl => 0,
+
+        // tgkill(tgid, tid, sig) / tkill(tid, sig) — route to kill()
+        Syscall::Tgkill => posix::kill(a1 as isize, a2),
+        Syscall::Tkill => posix::kill(a0 as isize, a1),
 
         // Dispatched by arch entry point, never reaches generic dispatch
         Syscall::Vfork | Syscall::Execve | Syscall::Sigreturn => 0,
