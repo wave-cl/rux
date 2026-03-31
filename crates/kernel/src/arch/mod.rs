@@ -5,22 +5,28 @@
 //! alias selects the concrete implementation — adding a new arch
 //! means implementing the traits and adding cfg lines here.
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(feature = "native")))]
 pub mod x86_64;
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "native")))]
 pub mod aarch64;
+#[cfg(feature = "native")]
+pub mod native;
 
 /// The concrete architecture type. Implements all arch traits.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(feature = "native")))]
 pub type Arch = x86_64::X86_64;
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "native")))]
 pub type Arch = aarch64::Aarch64;
+#[cfg(feature = "native")]
+pub type Arch = native::NativeArch;
 
 /// The concrete page table type for the current architecture.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(feature = "native")))]
 pub type PageTable = x86_64::paging::PageTable4Level;
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "native")))]
 pub type PageTable = aarch64::paging::PageTable4Level;
+#[cfg(feature = "native")]
+pub type PageTable = native::FlatPageTable;
 
 pub use rux_arch::StatLayout;
 

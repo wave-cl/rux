@@ -1,5 +1,5 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(feature = "native"), no_std)]
+#![cfg_attr(not(feature = "native"), no_main)]
 
 mod arch;
 
@@ -14,12 +14,23 @@ pub mod uaccess;
 pub mod task_table;
 pub mod fork;
 
+#[cfg(feature = "native")]
+mod tests;
+
+/// Entry point for native binary builds (not tests).
+/// Actual testing is done via `cargo test --features native`.
+#[cfg(all(feature = "native", not(test)))]
+fn main() {
+    eprintln!("rux native harness: run with `cargo test --features native`");
+}
+
 use rux_arch::{ConsoleOps, ExitOps, BootOps};
 use arch::Arch;
 
 /// Kernel entry point. Called from boot.S.
 /// On x86_64: `arg` is the multiboot info physical address.
 /// On aarch64: `arg` is unused (DTB pointer, ignored for now).
+#[cfg(not(feature = "native"))]
 #[no_mangle]
 pub extern "C" fn kernel_main(arg: usize) -> ! {
     unsafe { Arch::init(); }
@@ -36,8 +47,9 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
     Arch::exit(Arch::EXIT_SUCCESS);
 }
 
-// ── Panic handler ───────────────────────────────────────────────────
+// ── Panic handler (no_std mode only; std provides one in native mode) ─
 
+#[cfg(not(feature = "native"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     Arch::write_str("PANIC: ");

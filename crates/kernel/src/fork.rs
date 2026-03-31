@@ -63,13 +63,17 @@ pub unsafe fn sys_fork() -> isize {
     child.saved_user_sp = parent.saved_user_sp;
     child.tls = parent.tls;
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
     {
         child.saved_ksp = setup_child_kstack_x86(child.kstack_top);
     }
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
     {
         child.saved_ksp = setup_child_kstack_aarch64(child.kstack_top);
+    }
+    #[cfg(feature = "native")]
+    {
+        child.saved_ksp = 0; // no actual context switch in native mode
     }
 
     // 7. Enqueue child in scheduler
@@ -103,7 +107,7 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.child_available = crate::syscall::PROCESS.child_available;
     for i in 0..64 { slot.fds[i] = rux_fs::fdtable::FD_TABLE[i]; }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
     {
         slot.saved_user_sp = crate::arch::x86_64::syscall::SAVED_USER_RSP as usize;
         let lo: u32; let hi: u32;
@@ -115,7 +119,7 @@ unsafe fn sync_globals_to_slot(idx: usize) {
             cr3
         };
     }
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
     {
         let sp: u64;
         core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
@@ -126,6 +130,12 @@ unsafe fn sync_globals_to_slot(idx: usize) {
         let ttbr: u64;
         core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr, options(nostack));
         slot.pt_root = ttbr;
+    }
+    #[cfg(feature = "native")]
+    {
+        slot.saved_user_sp = 0;
+        slot.tls = 0;
+        slot.pt_root = 0;
     }
 }
 
@@ -165,7 +175,7 @@ unsafe fn copy_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameA
 
 // ── x86_64 child kernel stack setup ──────────────────────────────────
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(feature = "native")))]
 unsafe fn setup_child_kstack_x86(kstack_top: usize) -> usize {
     let w = core::mem::size_of::<u64>();
     let mut sp = kstack_top;
@@ -204,7 +214,7 @@ unsafe fn setup_child_kstack_x86(kstack_top: usize) -> usize {
 
 // ── aarch64 child kernel stack setup ─────────────────────────────────
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "native")))]
 unsafe fn setup_child_kstack_aarch64(kstack_top: usize) -> usize {
     // The parent's exception frame (34 u64s = 272 bytes) is on the current
     // kernel stack. CURRENT_REGS_PTR points to the base of this frame.

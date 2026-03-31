@@ -3,6 +3,9 @@ name = "rux-kernel"
 version = "0.3.0"
 edition = "2021"
 
+[features]
+native = []
+
 [dependencies]
 rux-klib = { path = "../klib" }
 rux-arch = { path = "../arch" }

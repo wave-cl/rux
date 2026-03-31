@@ -297,6 +297,12 @@ static mut VFORK_SNAPSHOT: rux_mm::snapshot::PageSnapshot = rux_mm::snapshot::Pa
 ///
 /// # Safety
 /// Manipulates process state, page tables, and performs setjmp/longjmp.
+#[cfg(feature = "native")]
+pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
+    panic!("vfork not supported in native mode")
+}
+
+#[cfg(not(feature = "native"))]
 #[inline(never)]
 pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
     use rux_arch::ConsoleOps;
@@ -405,6 +411,12 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 ///
 /// # Safety
 /// Replaces the current process image.
+#[cfg(feature = "native")]
+pub unsafe fn generic_exec<V: rux_arch::VforkContext>(_path_ptr: usize, _argv_ptr: usize) -> ! {
+    panic!("exec not supported in native mode")
+}
+
+#[cfg(not(feature = "native"))]
 pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize) -> ! {
     use rux_arch::ConsoleOps;
     use rux_fs::FileSystem;
@@ -437,7 +449,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     PROCESS.signal_restorer = [0; 32];
 
     // Reset arch-specific signal trampoline state
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
     crate::arch::aarch64::syscall::reset_trampoline();
 
     crate::arch::Arch::write_str("rux: entering user mode...\n");

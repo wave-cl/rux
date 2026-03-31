@@ -2,6 +2,8 @@
 ///
 /// Called from arch-specific init after hardware setup is complete.
 /// The arch provides memory addresses, initrd location, and procfs callbacks.
+///
+/// For native (test harness) mode, use `init_native()` instead.
 
 use rux_arch::ConsoleOps;
 
@@ -88,4 +90,77 @@ pub unsafe fn boot(params: BootParams) -> ! {
     let init_ino = rux_fs::path::resolve_path(vfs, b"/sbin/init").expect("/sbin/init not found");
     let alloc = &mut *alloc_ptr;
     crate::elf::load_elf_from_inode(init_ino as u64, alloc);
+}
+
+// ── Native test harness init ──────────────────────────────────────────
+
+/// Initialize kernel state for native (non-QEMU) testing.
+///
+/// Allocates a heap-backed frame pool, unpacks the given cpio archive into
+/// a RamFs, wraps it in a VFS, and sets up the global kernel state.
+/// After this call, `syscall::dispatch()` can be called directly from tests.
+///
+/// # Arguments
+/// * `cpio_data` — raw bytes of a newc-format cpio archive (e.g. the initramfs)
+///
+/// # Safety
+/// Must be called at most once. Single-threaded use only.
+#[cfg(feature = "native")]
+pub unsafe fn init_native(cpio_data: &[u8]) {
+    use rux_mm::frame::BuddyAllocator;
+    use rux_fs::{ramfs::RamFs, vfs::Vfs};
+
+    // ── Frame allocator backed by heap memory ────────────────────────────
+    // Allocate 32MB of heap memory as our "physical frame pool".
+    let phys_size: usize = 32 * 1024 * 1024;
+    let phys_mem: Box<[u8]> = vec![0u8; phys_size].into_boxed_slice();
+    let phys_base = Box::into_raw(phys_mem) as *mut u8 as usize; // cast fat→thin→usize
+    let phys_frames = (phys_size / 4096) as u32;
+
+    let alloc_ptr: *mut BuddyAllocator = {
+        let b: Box<[u8]> = vec![0u8; core::mem::size_of::<BuddyAllocator>()]
+            .into_boxed_slice();
+        let raw = Box::into_raw(b) as *mut BuddyAllocator;
+        // BuddyAllocator is already zeroed; call init() to register the pool
+        (*raw).init(rux_klib::PhysAddr::new(phys_base), phys_frames);
+        raw
+    };
+
+    // ── RamFs ────────────────────────────────────────────────────────────
+    let ramfs_size = core::mem::size_of::<RamFs>();
+    let ramfs_ptr: *mut RamFs = {
+        let b: Box<[u8]> = vec![0u8; ramfs_size].into_boxed_slice();
+        Box::into_raw(b) as *mut RamFs
+    };
+    let alloc_dyn: *mut dyn rux_mm::FrameAllocator = alloc_ptr;
+    RamFs::init_at(ramfs_ptr, alloc_dyn);
+
+    // ── Unpack initramfs cpio into RamFs ─────────────────────────────────
+    rux_fs::cpio::unpack_cpio(&mut *ramfs_ptr, cpio_data, None);
+
+    // ── VFS ──────────────────────────────────────────────────────────────
+    let vfs_ptr: *mut Vfs = {
+        let b: Box<[u8]> = vec![0u8; core::mem::size_of::<Vfs>()].into_boxed_slice();
+        Box::into_raw(b) as *mut Vfs
+    };
+    Vfs::init_at(vfs_ptr, ramfs_ptr);
+
+    // ── Kernel state ──────────────────────────────────────────────────────
+    crate::kstate::init(vfs_ptr, alloc_ptr);
+
+    // ── Task table (PID 1) ────────────────────────────────────────────────
+    crate::task_table::init_pid1();
+
+    // ── FD table: stdin / stdout / stderr ─────────────────────────────────
+    use rux_fs::fdtable::{FD_TABLE, OpenFile};
+    for i in 0..3 {
+        FD_TABLE[i] = OpenFile {
+            ino: 0, offset: 0, flags: 0,
+            active: true, is_console: true,
+            is_pipe: false, pipe_id: 0, pipe_write: false,
+        };
+    }
+
+    // ── Scheduler ─────────────────────────────────────────────────────────
+    crate::scheduler::init_context_fns();
 }
