@@ -12,6 +12,15 @@ use super::console;
 /// Total: 34 u64s (272 bytes)
 const FRAME_REGS: usize = 34;
 
+/// Sigreturn trampoline virtual address (user-accessible page).
+const SIGRETURN_TRAMPOLINE_VA: usize = 0x7FFF_F000;
+
+/// Whether the trampoline page has been mapped in the current page table.
+static mut TRAMPOLINE_MAPPED: bool = false;
+
+/// Reset trampoline state on exec (new page table invalidates old mapping).
+pub fn reset_trampoline() { unsafe { TRAMPOLINE_MAPPED = false; } }
+
 /// Handle SVC from user mode. Called from exception_dispatch.
 pub fn handle_syscall(frame: *mut u8) {
     unsafe {
@@ -32,6 +41,11 @@ pub fn handle_syscall(frame: *mut u8) {
                 crate::syscall::generic_vfork::<super::Aarch64>() as i64
             }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
+            139 => {
+                // rt_sigreturn — restore pre-signal state
+                sigreturn_aarch64(regs);
+                return; // exception frame already modified, just return
+            }
             _ => {
                 let sc = translate_aarch64(nr as usize);
                 crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64
@@ -40,7 +54,137 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // Return value in x0
         *regs.add(0) = result as u64;
+
+        // Check for pending signals before returning to userspace
+        if !crate::syscall::IN_VFORK_CHILD && crate::syscall::SIGNAL_HOT.has_deliverable() {
+            deliver_signal_aarch64(regs, result);
+        }
     }
+}
+
+/// Signal frame layout on user stack (aarch64).
+#[repr(C)]
+struct SignalFrameAarch64 {
+    saved_elr: u64,      // original ELR_EL1 (user return PC)
+    saved_spsr: u64,     // original SPSR_EL1
+    saved_x0: u64,       // syscall return value
+    saved_mask: u64,     // blocked signal mask before handler
+}
+
+/// Map the sigreturn trampoline page if not already mapped.
+unsafe fn ensure_trampoline() {
+    if TRAMPOLINE_MAPPED { return; }
+    use rux_arch::PageTableRootOps;
+    let alloc = crate::kstate::alloc();
+    let root = crate::arch::Arch::read();
+    let mut upt = crate::arch::PageTable::from_root(
+        rux_klib::PhysAddr::new(root as usize));
+
+    use rux_mm::FrameAllocator;
+    let frame = alloc.alloc(rux_mm::PageSize::FourK)
+        .expect("trampoline alloc");
+    let pa = frame.as_usize();
+
+    // Write trampoline code: mov x8, #139; svc #0; brk #0
+    let code = pa as *mut u32;
+    *code.add(0) = 0xD2801168; // mov x8, #139
+    *code.add(1) = 0xD4000001; // svc #0
+    *code.add(2) = 0xD4200000; // brk #0
+
+    let flags = rux_mm::MappingFlags::USER
+        .or(rux_mm::MappingFlags::READ)
+        .or(rux_mm::MappingFlags::EXECUTE);
+    let _ = upt.map_4k(
+        rux_klib::VirtAddr::new(SIGRETURN_TRAMPOLINE_VA),
+        rux_klib::PhysAddr::new(pa),
+        flags,
+        alloc,
+    );
+    TRAMPOLINE_MAPPED = true;
+}
+
+/// Deliver a pending signal to user-space handler (aarch64).
+unsafe fn deliver_signal_aarch64(regs: *mut u64, syscall_result: i64) {
+    use rux_proc::signal::*;
+
+    let hot = &mut crate::syscall::SIGNAL_HOT;
+    let cold = &mut crate::syscall::SIGNAL_COLD;
+
+    let (sig, action, _info) = match cold.dequeue_signal(hot) {
+        Some(v) => v,
+        None => return,
+    };
+    let signum = sig as u8;
+
+    // Handle default actions
+    if action.handler_type == SignalHandler::Default {
+        match sig.default_action() {
+            SignalDefault::Terminate | SignalDefault::CoreDump => {
+                crate::syscall::posix::exit(128 + signum as i32);
+            }
+            _ => return,
+        }
+    }
+    if action.handler_type == SignalHandler::Ignore {
+        return;
+    }
+
+    // User handler — ensure trampoline is mapped
+    ensure_trampoline();
+
+    // Read current SP_EL0
+    let user_sp: u64;
+    core::arch::asm!("mrs {}, sp_el0", out(reg) user_sp, options(nostack));
+
+    // Push signal frame onto user stack
+    let frame_size = core::mem::size_of::<SignalFrameAarch64>();
+    let new_sp = ((user_sp as usize) - frame_size) & !0xF; // 16-byte align
+    let frame = new_sp as *mut SignalFrameAarch64;
+    (*frame).saved_elr = *regs.add(31);      // ELR_EL1
+    (*frame).saved_spsr = *regs.add(32);     // SPSR_EL1
+    (*frame).saved_x0 = syscall_result as u64;
+    (*frame).saved_mask = hot.blocked.0;
+
+    // Update SP_EL0
+    core::arch::asm!("msr sp_el0, {}", in(reg) new_sp as u64, options(nostack));
+
+    // Redirect to handler
+    *regs.add(31) = action.handler as u64;   // ELR_EL1 = handler
+    *regs.add(0) = signum as u64;            // x0 = signal number
+    *regs.add(30) = SIGRETURN_TRAMPOLINE_VA as u64; // x30 (LR) = sigreturn trampoline
+
+    // Block signals during handler
+    let sa_nodefer = action.flags & 0x40000000 != 0;
+    if !sa_nodefer {
+        hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
+    }
+}
+
+/// Restore pre-signal state from signal frame on user stack (aarch64).
+unsafe fn sigreturn_aarch64(regs: *mut u64) {
+    use rux_proc::signal::*;
+
+    // Read SP_EL0
+    let user_sp: u64;
+    core::arch::asm!("mrs {}, sp_el0", out(reg) user_sp, options(nostack));
+
+    let frame = user_sp as *const SignalFrameAarch64;
+    let saved_elr = (*frame).saved_elr;
+    let saved_spsr = (*frame).saved_spsr;
+    let saved_x0 = (*frame).saved_x0;
+    let saved_mask = (*frame).saved_mask;
+
+    // Pop signal frame
+    let new_sp = user_sp as usize + core::mem::size_of::<SignalFrameAarch64>();
+    core::arch::asm!("msr sp_el0, {}", in(reg) new_sp as u64, options(nostack));
+
+    // Restore exception frame
+    *regs.add(31) = saved_elr;   // ELR_EL1
+    *regs.add(32) = saved_spsr;  // SPSR_EL1
+    *regs.add(0) = saved_x0;    // x0 = original syscall result
+
+    // Restore blocked mask
+    crate::syscall::SIGNAL_HOT.blocked = SignalSet(saved_mask);
 }
 
 /// aarch64 Linux syscall number → generic Syscall enum.
@@ -71,11 +215,13 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         34 => Syscall::Mkdirat,             // mkdirat(dirfd, path, mode)
         35 => Syscall::Unlinkat,            // unlinkat(dirfd, path, flags)
         36 => Syscall::Symlinkat,            // symlinkat(target, dirfd, linkpath)
-        37 => Syscall::Link,                // linkat
+        37 => Syscall::Linkat,              // linkat(olddirfd, old, newdirfd, new, flags)
         38 => Syscall::Renameat,            // renameat(olddirfd, old, newdirfd, new)
         49 => Syscall::Chdir,
-        52 | 53 => Syscall::Chmod,          // fchmod/fchmodat
-        54 | 55 => Syscall::Chown,          // fchown/fchownat
+        52 => Syscall::Fchmodat,            // fchmodat(dirfd, path, mode)
+        53 => Syscall::Fchmod,              // fchmod(fd, mode)
+        54 => Syscall::Fchownat,            // fchownat(dirfd, path, uid, gid, flags)
+        55 => Syscall::Fchown,              // fchown(fd, uid, gid)
         88 => Syscall::Utimensat,
         // Memory
         222 => Syscall::Mmap,
@@ -104,6 +250,7 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         134 => Syscall::Sigaction,
         135 => Syscall::Sigprocmask,
         132 => Syscall::Sigaltstack,
+        139 => Syscall::Sigreturn,
         // Time / scheduling
         113 => Syscall::ClockGettime,
         101 => Syscall::Nanosleep,

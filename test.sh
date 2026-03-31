@@ -76,6 +76,12 @@ OUTPUT=$( { sleep 3; \
     printf 'rm /tmp/tfile && echo rmdone\n'; sleep 2; \
     printf 'wc -l /etc/passwd\n'; sleep 2; \
     printf 'env | head -1\n'; sleep 1; \
+    printf 'ln /bin/busybox /tmp/hl && ls /tmp/hl\n'; sleep 2; \
+    printf 'chmod 777 /tmp/hl && stat /tmp/hl\n'; sleep 2; \
+    printf 'echo test > /dev/null && echo devnull_ok\n'; sleep 2; \
+    printf 'ls /dev\n'; sleep 1; \
+    printf 'kill -0 1 && echo killcheck\n'; sleep 2; \
+    printf 'kill -0 99 ; echo exitcode=$?\n'; sleep 2; \
     printf 'exit\n'; sleep 1; \
     } | \
     "$QEMU_X86" -cpu Haswell \
@@ -156,6 +162,14 @@ check "rm + echo"               "rmdone"
 check "wc -l"                   "1"
 check "env"                     "PATH="
 
+# Hard links + chmod + /dev + signals
+check "hard link"               "hl"
+check "chmod (stat)"            "777"
+check "dev/null"                "devnull_ok"
+check "ls /dev shows null"      "null"
+check "kill -0 self"            "killcheck"
+check "kill -0 nonexist"        "exitcode=1"
+
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
@@ -203,6 +217,12 @@ OUTPUT=$( { sleep 8; \
     printf 'rm /tmp/tfile && echo rmdone\n'; sleep 3; \
     printf 'wc -l /etc/passwd\n'; sleep 3; \
     printf 'env | head -1\n'; sleep 3; \
+    printf 'ln /bin/busybox /tmp/hl && ls /tmp/hl\n'; sleep 3; \
+    printf 'chmod 777 /tmp/hl && stat /tmp/hl\n'; sleep 3; \
+    printf 'echo test > /dev/null && echo devnull_ok\n'; sleep 3; \
+    printf 'ls /dev\n'; sleep 3; \
+    printf 'kill -0 1 && echo killcheck\n'; sleep 3; \
+    printf 'kill -0 99 ; echo exitcode=$?\n'; sleep 3; \
     printf 'exit\n'; sleep 2; \
     } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
@@ -280,6 +300,14 @@ check "sleep + echo"            "sleepdone"
 check "rm + echo"               "rmdone"
 check "wc -l"                   "1"
 check "env"                     "PATH="
+
+# Hard links + chmod + /dev + signals
+check "hard link"               "hl"
+check "chmod (stat)"            "777"
+check "dev/null"                "devnull_ok"
+check "ls /dev shows null"      "null"
+check "kill -0 self"            "killcheck"
+check "kill -0 nonexist"        "exitcode=1"
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"

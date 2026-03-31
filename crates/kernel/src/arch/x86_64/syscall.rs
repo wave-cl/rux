@@ -133,9 +133,130 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         _ => {}
     }
 
+    // sigreturn is handled specially — it restores the pre-signal state
+    if nr == 15 {
+        return unsafe { sigreturn_x86() };
+    }
+
     // Everything else goes through generic dispatch
     let sc = translate_x86_64(nr as usize);
-    crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64
+    let result = crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64;
+
+    // Check for pending signals before returning to userspace
+    unsafe {
+        if !crate::syscall::IN_VFORK_CHILD && crate::syscall::SIGNAL_HOT.has_deliverable() {
+            return deliver_signal_x86(result);
+        }
+    }
+    result
+}
+
+/// Signal frame layout on user stack (x86_64).
+/// Pushed below the current user RSP when delivering a signal.
+#[repr(C)]
+struct SignalFrameX86 {
+    restorer: u64,       // return address (sa_restorer → calls sigreturn)
+    saved_rip: u64,      // original user RIP (was in RCX)
+    saved_rflags: u64,   // original RFLAGS (was in R11)
+    saved_rax: u64,      // syscall return value
+    saved_mask: u64,     // blocked signal mask before handler
+    signum: u64,         // signal number (for sigreturn to pop correctly)
+}
+
+/// Deliver a pending signal to user-space handler (x86_64).
+/// Modifies SAVED_USER_RSP and SYSCALL_STACK to redirect sysretq to the handler.
+unsafe fn deliver_signal_x86(syscall_result: i64) -> i64 {
+    use rux_proc::signal::*;
+
+    let hot = &mut crate::syscall::SIGNAL_HOT;
+    let cold = &mut crate::syscall::SIGNAL_COLD;
+
+    let (sig, action, _info) = match cold.dequeue_signal(hot) {
+        Some(v) => v,
+        None => return syscall_result,
+    };
+    let signum = sig as u8;
+
+    // Handle default actions
+    if action.handler_type == SignalHandler::Default {
+        match sig.default_action() {
+            SignalDefault::Terminate | SignalDefault::CoreDump => {
+                crate::syscall::posix::exit(128 + signum as i32);
+                loop {}
+            }
+            _ => return syscall_result,
+        }
+    }
+    if action.handler_type == SignalHandler::Ignore {
+        return syscall_result;
+    }
+
+    // User handler — set up signal frame on user stack
+    let user_rsp = SAVED_USER_RSP as usize;
+
+    // Read saved RCX (user RIP) and R11 (RFLAGS) from SYSCALL_STACK
+    let stack_top = SYSCALL_STACK.as_ptr().add(65536) as *const u64;
+    // Stack layout (from top, sub 1-based):
+    // sub(1)=RCX(user RIP), sub(2)=R11(RFLAGS), sub(3)=RBX, sub(4)=RBP,
+    // sub(5)=R12, sub(6)=R13, sub(7)=R14, sub(8)=R15,
+    // sub(9)=RAX(nr), sub(10)=RDI, sub(11)=RSI, sub(12)=RDX,
+    // sub(13)=R10, sub(14)=R8, sub(15)=R9
+    let saved_rip = *stack_top.sub(1);    // RCX = user RIP
+    let saved_rflags = *stack_top.sub(2); // R11 = RFLAGS
+
+    // Push signal frame onto user stack (must be 16-byte aligned)
+    let frame_size = core::mem::size_of::<SignalFrameX86>();
+    let new_rsp = (user_rsp - frame_size) & !0xF; // 16-byte align
+    let frame = new_rsp as *mut SignalFrameX86;
+    (*frame).restorer = crate::syscall::SIGNAL_RESTORER[signum as usize] as u64;
+    (*frame).saved_rip = saved_rip;
+    (*frame).saved_rflags = saved_rflags;
+    (*frame).saved_rax = syscall_result as u64;
+    (*frame).saved_mask = hot.blocked.0;
+    (*frame).signum = signum as u64;
+
+    // Update user stack pointer
+    SAVED_USER_RSP = new_rsp as u64;
+
+    // Redirect return: set RCX (becomes RIP via sysretq) to handler
+    let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+    *stack_top_mut.sub(1) = action.handler as u64;  // RCX = handler address
+
+    // Block signals during handler execution
+    let sa_nodefer = action.flags & 0x40000000 != 0; // SA_NODEFER
+    if !sa_nodefer {
+        hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
+    }
+
+    // Signal number goes in RDI (first arg to handler)
+    signum as i64
+}
+
+/// Restore pre-signal state from signal frame on user stack (x86_64).
+unsafe fn sigreturn_x86() -> i64 {
+    use rux_proc::signal::*;
+
+    let user_rsp = SAVED_USER_RSP as usize;
+    let frame = user_rsp as *const SignalFrameX86;
+
+    let saved_rip = (*frame).saved_rip;
+    let saved_rflags = (*frame).saved_rflags;
+    let saved_rax = (*frame).saved_rax;
+    let saved_mask = (*frame).saved_mask;
+
+    // Restore user stack (pop the signal frame)
+    SAVED_USER_RSP = (user_rsp + core::mem::size_of::<SignalFrameX86>()) as u64;
+
+    // Restore blocked mask
+    crate::syscall::SIGNAL_HOT.blocked = SignalSet(saved_mask);
+
+    // Restore saved RCX (user RIP) and R11 (RFLAGS) on SYSCALL_STACK
+    let stack_top_mut = SYSCALL_STACK.as_mut_ptr().add(65536) as *mut u64;
+    *stack_top_mut.sub(1) = saved_rip;     // RCX = original user RIP
+    *stack_top_mut.sub(2) = saved_rflags;  // R11 = original RFLAGS
+
+    // Return the original syscall result (goes into RAX)
+    saved_rax as i64
 }
 
 /// x86_64 Linux syscall number → generic Syscall enum.
@@ -157,6 +278,7 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         12 => Syscall::Brk,
         13 => Syscall::Sigaction,
         14 => Syscall::Sigprocmask,
+        15 => Syscall::Sigreturn,
         16 => Syscall::Ioctl,
         20 => Syscall::Writev,
         21 => Syscall::Access,
@@ -178,12 +300,15 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         80 => Syscall::Chdir,
         82 | 264 => Syscall::Rename,       // rename / renameat
         83 => Syscall::Mkdir,
-        86 | 265 => Syscall::Link,          // link / linkat
+        86 => Syscall::Link,               // link(old, new)
+        265 => Syscall::Linkat,            // linkat(olddirfd, old, newdirfd, new, flags)
         87 => Syscall::Unlink,
         88 | 266 => Syscall::Symlink,       // symlink / symlinkat
         89 | 267 => Syscall::Readlink,      // readlink / readlinkat
-        90 | 91 => Syscall::Chmod,          // chmod / fchmod
-        92 | 93 => Syscall::Chown,          // chown / fchown
+        90 => Syscall::Chmod,              // chmod(path, mode)
+        91 => Syscall::Fchmod,             // fchmod(fd, mode)
+        92 => Syscall::Chown,              // chown(path, uid, gid)
+        93 => Syscall::Fchown,             // fchown(fd, uid, gid)
         96 => Syscall::Gettimeofday,
         97 => Syscall::Getrlimit,
         99 => Syscall::Sysinfo,

@@ -34,6 +34,12 @@ pub static mut CHILD_AVAILABLE: bool = false;
 /// Whether we're in a vfork child context (skip pipe ref counting in close).
 pub static mut IN_VFORK_CHILD: bool = false;
 
+// ── Signal state (single-process) ──────────────────────────────────
+pub static mut SIGNAL_HOT: rux_proc::signal::SignalHot = rux_proc::signal::SignalHot::new();
+pub static mut SIGNAL_COLD: rux_proc::signal::SignalCold = rux_proc::signal::SignalCold::new();
+/// Per-signal sa_restorer address (x86_64 only — musl sets this for sigreturn trampoline).
+pub static mut SIGNAL_RESTORER: [usize; 32] = [0; 32];
+
 // ── Page table helper (arch-dispatched) ─────────────────────────────
 
 /// Map zeroed pages into the current user page table.
@@ -100,8 +106,8 @@ pub enum Syscall {
     // Directory / path ops
     Getcwd, Creat, Mknodat, Mkdir, Mkdirat, Unlink, Unlinkat, Chdir,
     Rename, Renameat, Symlink, Symlinkat,
-    // Permissions (stubs)
-    Chmod, Chown, Utimensat,
+    // Permissions
+    Chmod, Fchmod, Fchmodat, Chown, Fchown, Fchownat, Utimensat,
     // Memory
     Mmap, Munmap, Mprotect, Brk,
     // Process
@@ -121,7 +127,9 @@ pub enum Syscall {
     SetRobustList, Futex, Tgkill, Tkill,
     SchedGetaffinity, Getrlimit,
     Poll, Gettimeofday,
-    Prctl, Alarm, Access, Link, Sysinfo, Statfs,
+    Prctl, Alarm, Access, Link, Linkat, Sysinfo, Statfs,
+    // Signals (additional)
+    Sigreturn,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -173,8 +181,16 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Symlink => posix::symlink(a0, a1),
         Syscall::Symlinkat => posix::symlink(a0, a2), // symlinkat(target, dirfd, linkpath)
 
-        // ── Permissions (stubs) ───────────────────────────────────
-        Syscall::Chmod | Syscall::Chown | Syscall::Utimensat | Syscall::Link => 0,
+        // ── Permissions ───────────────────────────────────────────
+        Syscall::Link => posix::link(a0, a1),
+        Syscall::Linkat => posix::link(a1, a3),   // linkat(olddirfd, old, newdirfd, new, flags)
+        Syscall::Chmod => posix::chmod(a0, a1),         // chmod(path, mode)
+        Syscall::Fchmodat => posix::chmod(a1, a2),      // fchmodat(dirfd, path, mode)
+        Syscall::Fchmod => posix::fchmod(a0, a1),       // fchmod(fd, mode)
+        Syscall::Chown => posix::chown(a0, a1, a2),     // chown(path, uid, gid)
+        Syscall::Fchownat => posix::chown(a1, a2, a3),  // fchownat(dirfd, path, uid, gid, flags)
+        Syscall::Fchown => posix::fchown(a0, a1, a2),   // fchown(fd, uid, gid)
+        Syscall::Utimensat => 0,
 
         // ── Memory ─────────────────────────────────────────────────
         Syscall::Mmap => posix::mmap(a0, a1, a2, a3, a4),
@@ -187,7 +203,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Getppid => 1,
         Syscall::Exit => posix::exit(a0 as i32),
         Syscall::ExitGroup => linux::exit_group(a0 as i32),
-        Syscall::Kill => 0,
+        Syscall::Kill => posix::kill(a0 as isize, a1),
         Syscall::Vfork => 0,   // dispatched by arch entry, never reaches here
         Syscall::Execve => 0,
         Syscall::Wait4 => linux::wait4(a0, a1, a2, a3),
@@ -198,6 +214,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Sigaction => posix::sigaction(a0, a1, a2),
         Syscall::Sigprocmask => posix::sigprocmask(a0, a1, a2, a3),
         Syscall::Sigaltstack => 0, // accept and ignore
+        Syscall::Sigreturn => 0,   // handled by arch entry, never reaches here
 
         // ── Terminal / scheduling ──────────────────────────────────
         Syscall::SchedYield | Syscall::Alarm => 0,
@@ -498,6 +515,15 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     VFORK_PARENT_PT_ROOT = V::read_pt_root();
 
     crate::pgtrack::begin_child(alloc);
+
+    // Reset signal state on exec (POSIX: caught signals revert to default)
+    SIGNAL_HOT = rux_proc::signal::SignalHot::new();
+    SIGNAL_COLD = rux_proc::signal::SignalCold::new();
+    SIGNAL_RESTORER = [0; 32];
+
+    // Reset arch-specific signal trampoline state
+    #[cfg(target_arch = "aarch64")]
+    crate::arch::aarch64::syscall::reset_trampoline();
 
     crate::arch::Arch::write_str("rux: entering user mode...\n");
     crate::elf::load_elf_from_inode(ino as u64, alloc);
