@@ -53,6 +53,13 @@ impl ArchPaging for X86Paging {
         );
     }
 
+    unsafe fn flush_tlb_all() {
+        // Reload CR3 to flush all non-global TLB entries
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
+        core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
+    }
+
     fn cow_bit() -> u64 { pte::COW }
 }
 

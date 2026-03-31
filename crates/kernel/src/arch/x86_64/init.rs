@@ -12,6 +12,27 @@ pub fn x86_64_init(multiboot_info: usize) {
     }
     console::write_str("rux: GDT + TSS loaded\n");
 
+    // Enable PCID if supported (CPUID.01H:ECX bit 17).
+    // CR3 bit 63 = "don't flush" when PCID is active.
+    unsafe {
+        let ecx: u32;
+        core::arch::asm!(
+            "push rbx",
+            "cpuid",
+            "pop rbx",
+            inout("eax") 1u32 => _,
+            lateout("ecx") ecx,
+            lateout("edx") _,
+            options(nostack)
+        );
+        if ecx & (1 << 17) != 0 {
+            let cr4: u64;
+            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
+            core::arch::asm!("mov cr4, {}", in(reg) cr4 | (1u64 << 17), options(nostack, preserves_flags));
+            console::write_str("rux: PCID enabled\n");
+        }
+    }
+
     // Initialize IDT with all exception/IRQ handlers
     unsafe { super::idt::init(); }
     console::write_str("rux: IDT loaded\n");

@@ -7,6 +7,9 @@
 const PIPE_BUF_SIZE: usize = 4096;
 const MAX_PIPES: usize = 16;
 
+/// Maximum concurrent processes (must match kernel's MAX_PROCS).
+const MAX_WAITERS: usize = 16;
+
 struct PipeBuf {
     buf: [u8; PIPE_BUF_SIZE],
     read_pos: usize,
@@ -15,6 +18,9 @@ struct PipeBuf {
     readers: u8,
     writers: u8,
     active: bool,
+    /// Task indices waiting on this pipe (for targeted wakeup).
+    waiters: [u8; MAX_WAITERS],
+    waiter_count: u8,
 }
 
 static mut PIPES: [PipeBuf; MAX_PIPES] = {
@@ -22,6 +28,7 @@ static mut PIPES: [PipeBuf; MAX_PIPES] = {
         buf: [0; PIPE_BUF_SIZE],
         read_pos: 0, write_pos: 0, count: 0,
         readers: 0, writers: 0, active: false,
+        waiters: [0; MAX_WAITERS], waiter_count: 0,
     };
     [EMPTY; MAX_PIPES]
 };
@@ -35,6 +42,7 @@ pub fn alloc() -> Result<u8, isize> {
             buf: [0; PIPE_BUF_SIZE],
             read_pos: 0, write_pos: 0, count: 0,
             readers: 1, writers: 1, active: true,
+            waiters: [0; MAX_WAITERS], waiter_count: 0,
         };
         Ok(pipe_id)
     }
@@ -118,6 +126,36 @@ pub fn close(pipe_id: u8, is_write_end: bool) {
     }
 }
 
+/// Register a task as waiting on a pipe (for targeted wakeup).
+pub fn register_waiter(pipe_id: u8, task_idx: u8) {
+    unsafe {
+        let p = &mut PIPES[pipe_id as usize];
+        if !p.active { return; }
+        let n = p.waiter_count as usize;
+        if n < MAX_WAITERS {
+            p.waiters[n] = task_idx;
+            p.waiter_count += 1;
+        }
+    }
+}
+
+/// Get the list of task indices waiting on a pipe.
+/// Returns a slice of length `waiter_count`.
+pub fn get_waiters(pipe_id: u8) -> (u8, [u8; MAX_WAITERS]) {
+    unsafe {
+        let p = &PIPES[pipe_id as usize];
+        (p.waiter_count, p.waiters)
+    }
+}
+
+/// Clear all waiters for a pipe (called after waking them).
+pub fn clear_all_waiters(pipe_id: u8) {
+    unsafe {
+        let p = &mut PIPES[pipe_id as usize];
+        p.waiter_count = 0;
+    }
+}
+
 /// Reset all pipes (called on exec).
 pub fn reset() {
     unsafe {
@@ -126,6 +164,7 @@ pub fn reset() {
                 buf: [0; PIPE_BUF_SIZE],
                 read_pos: 0, write_pos: 0, count: 0,
                 readers: 0, writers: 0, active: false,
+                waiters: [0; MAX_WAITERS], waiter_count: 0,
             };
         }
     }

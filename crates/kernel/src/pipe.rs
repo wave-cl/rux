@@ -12,20 +12,27 @@ pub fn create() -> Result<(u8, isize, isize), isize> {
     }
 }
 
-/// Wake all tasks blocked on a specific pipe (either reading or writing).
-/// Called after a successful pipe write (to wake blocked readers) or
-/// after a successful pipe read (to wake blocked writers).
+/// Wake tasks blocked on a specific pipe using the per-pipe waitlist.
+///
+/// Instead of scanning all MAX_PROCS tasks, reads the waitlist from the
+/// pipe buffer (O(waiters) instead of O(MAX_PROCS)). Called after successful
+/// pipe read (wakes writers), write (wakes readers), or close (EOF/EPIPE).
 pub unsafe fn wake_pipe_waiters(pipe_id: u8) {
     use crate::task_table::*;
     use rux_sched::SchedClassOps;
+
+    let (count, waiters) = rux_ipc::pipe::get_waiters(pipe_id);
+    if count == 0 { return; }
+
     let sched = crate::scheduler::get();
-    for i in 0..MAX_PROCS {
-        if TASK_TABLE[i].active
+    for wi in 0..count as usize {
+        let i = waiters[wi] as usize;
+        if i < MAX_PROCS && TASK_TABLE[i].active
             && TASK_TABLE[i].state == TaskState::WaitingForPipe
-            && TASK_TABLE[i].waiting_pipe_id == pipe_id
         {
             TASK_TABLE[i].state = TaskState::Ready;
             sched.wake_task(i);
         }
     }
+    rux_ipc::pipe::clear_all_waiters(pipe_id);
 }

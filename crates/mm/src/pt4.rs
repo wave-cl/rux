@@ -321,6 +321,9 @@ impl<A: ArchPaging> PageTable4Level<A> {
     /// Flush the TLB for a single page (delegates to `A::flush_tlb()`).
     pub unsafe fn flush_tlb(virt: VirtAddr) { A::flush_tlb(virt); }
 
+    /// Flush all non-global TLB entries (delegates to `A::flush_tlb_all()`).
+    pub unsafe fn flush_tlb_all() { A::flush_tlb_all(); }
+
     /// Free the user-space address mapping created during fork.
     ///
     /// Walks user-space L3 entries (0..256), frees all user leaf page frames

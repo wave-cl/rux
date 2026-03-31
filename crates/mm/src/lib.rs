@@ -144,6 +144,10 @@ pub trait ArchPaging {
     /// Flush TLB for a single page.
     unsafe fn flush_tlb(virt: VirtAddr);
 
+    /// Flush all non-global TLB entries. Used for batch operations
+    /// (e.g., COW fork marks N pages then flushes once).
+    unsafe fn flush_tlb_all();
+
     /// Software-defined COW bit in the PTE (arch-specific location).
     fn cow_bit() -> u64;
 }

@@ -55,10 +55,11 @@ pub unsafe fn sys_fork() -> isize {
     let alloc = crate::kstate::alloc();
     child.pt_root = cow_fork_address_space(parent.pt_root, alloc);
 
-    // 6. Set up child kernel stack
+    // 6. Set up child kernel stack + ASID
     child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
     child.saved_user_sp = parent.saved_user_sp;
     child.tls = parent.tls;
+    child.asid = (child_idx as u16) + 1; // ASID 0 = kernel, 1..N = processes
 
     #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
     {
@@ -129,7 +130,7 @@ unsafe fn sync_globals_to_slot(idx: usize) {
         slot.tls = tls;
         let ttbr: u64;
         core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr, options(nostack));
-        slot.pt_root = ttbr;
+        slot.pt_root = ttbr & 0x0000_FFFF_FFFF_FFFF; // mask out ASID bits [63:48]
     }
     #[cfg(feature = "native")]
     {
@@ -170,14 +171,12 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
     // Walk parent's user pages with mutable PTE access. For each page:
     // 1. Mark parent COW inline (no re-walk) — set read-only + COW bit
     // 2. Map child to same physical frame with COW flags
-    // Previous: 5 walks/page (walk + mark_cow + unmap + map + mark_cow)
-    // Now: 1 walk (inline parent) + 1 walk (child map_4k) + 1 walk (child COW bit)
+    // TLB flush is batched: mark all pages, then one full flush at the end.
     parent_pt.walk_user_pages_mut(|va, pa, parent_pte| {
-        // Mark parent COW inline — no re-walk needed
+        // Mark parent COW inline — no re-walk, no per-page TLB flush
         use rux_arch::pte::PageTableEntryOps;
         crate::arch::ArchPte::set_writable(parent_pte, false);
         parent_pte.0 |= cow;
-        crate::arch::PageTable::flush_tlb(va);
 
         // Map child to same physical frame (read-only, no COW bit yet)
         let _ = child_pt.unmap_4k(va);
@@ -191,6 +190,10 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
         crate::cow::inc_ref(pa);
         crate::cow::inc_ref(pa);
     });
+
+    // Single full TLB flush after all parent pages are marked COW.
+    // This replaces N individual invlpg/tlbi calls with one batch flush.
+    crate::arch::PageTable::flush_tlb_all();
 
     child_pt.root_phys().as_usize() as u64
 }

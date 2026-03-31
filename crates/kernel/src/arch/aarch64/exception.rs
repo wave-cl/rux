@@ -131,6 +131,7 @@ fn dump_user_fault(label: &str, far: u64, esr: u64, frame: *const u8) {
         core::arch::asm!("mrs {}, sp_el0", out(reg) sp_el0, options(nostack));
         let ttbr0: u64;
         core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
+        let ttbr0 = ttbr0 & 0x0000_FFFF_FFFF_FFFF; // mask out ASID bits
         let tpidr: u64;
         core::arch::asm!("mrs {}, tpidr_el0", out(reg) tpidr, options(nostack));
 

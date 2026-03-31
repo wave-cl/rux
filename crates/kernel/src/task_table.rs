@@ -63,6 +63,7 @@ pub struct TaskSlot {
     pub saved_ksp: usize,      // saved kernel SP for context_switch
     pub saved_user_sp: usize,  // user stack pointer
     pub tls: u64,              // FS_BASE / TPIDR_EL0
+    pub asid: u16,             // ASID (aarch64) / PCID (x86_64), 0 = kernel
 
     // ── Wait/exit state ──────────────────────────────────────────────
     pub exit_code: i32,
@@ -87,7 +88,7 @@ impl TaskSlot {
             fds: [EMPTY_FD; 64],
             pt_root: 0,
             kstack_top: 0, saved_ksp: 0,
-            saved_user_sp: 0, tls: 0,
+            saved_user_sp: 0, tls: 0, asid: 0,
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
             waiting_pipe_id: 0,
@@ -170,6 +171,8 @@ pub unsafe fn init_pid1() {
         slot.kstack_top = KSTACKS[0].as_ptr() as usize + KSTACK_SIZE;
     }
 
+    slot.asid = 1; // PID 1 gets ASID 1
+
     // Console FDs
     for i in 0..3 {
         slot.fds[i] = OpenFile {
@@ -251,18 +254,33 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
         core::arch::asm!("msr tpidr_el0, {}", in(reg) new.tls, options(nostack));
     }
 
-    // Switch page table
+    // Switch page table with ASID/PCID to avoid full TLB flush.
+    // TLB entries are tagged with the process's ASID/PCID so entries
+    // from different processes coexist without interference.
     if new.pt_root != 0 && new.pt_root != old.pt_root {
         #[cfg(target_arch = "x86_64")]
-        core::arch::asm!("mov cr3, {}", in(reg) new.pt_root, options(nostack));
+        {
+            // If PCID is enabled (CR4 bit 17), use no-flush CR3 write.
+            // Otherwise, fall back to plain CR3 write (flushes TLB).
+            let cr4: u64;
+            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
+            if cr4 & (1u64 << 17) != 0 {
+                let cr3 = new.pt_root | ((new.asid as u64) & 0xFFF) | (1u64 << 63);
+                core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack));
+            } else {
+                core::arch::asm!("mov cr3, {}", in(reg) new.pt_root, options(nostack));
+            }
+        }
         #[cfg(target_arch = "aarch64")]
         {
+            // ASID-tagged TTBR0: no TLB flush needed. User pages have nG=1
+            // so they're ASID-tagged in the TLB. Kernel pages are Global (nG=0).
+            let ttbr = (new.pt_root & 0x0000_FFFF_FFFF_FFFF)
+                     | ((new.asid as u64) << 48);
             core::arch::asm!(
                 "msr ttbr0_el1, {}",
                 "isb",
-                "tlbi vmalle1is",
-                "dsb ish",
-                in(reg) new.pt_root,
+                in(reg) ttbr,
                 options(nostack)
             );
         }

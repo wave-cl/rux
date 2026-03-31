@@ -275,6 +275,7 @@ unsafe fn pipe_block(pipe_id: u8) {
     use crate::task_table::*;
     use rux_sched::SchedClassOps;
     let idx = CURRENT_TASK_IDX;
+    rux_ipc::pipe::register_waiter(pipe_id, idx as u8);
     TASK_TABLE[idx].state = TaskState::WaitingForPipe;
     TASK_TABLE[idx].waiting_pipe_id = pipe_id;
     let sched = crate::scheduler::get();

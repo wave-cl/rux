@@ -318,7 +318,7 @@ unsafe impl rux_arch::VforkContext for super::Aarch64 {
     unsafe fn read_pt_root() -> u64 {
         let ttbr0: u64;
         core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
-        ttbr0
+        ttbr0 & 0x0000_FFFF_FFFF_FFFF // mask out ASID bits [63:48]
     }
 
     unsafe fn write_pt_root(root: u64) {

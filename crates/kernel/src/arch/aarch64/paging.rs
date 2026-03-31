@@ -31,6 +31,9 @@ impl ArchPaging for Aarch64Paging {
                 f &= !pte::AP_MASK;
                 f |= pte::AP_EL0_RO;
             }
+            // User pages are non-Global (ASID-tagged in TLB).
+            // Kernel pages stay Global (nG=0) so they match any ASID.
+            f |= pte::NG;
         }
 
         if !flags.contains(MappingFlags::EXECUTE) {
@@ -63,6 +66,16 @@ impl ArchPaging for Aarch64Paging {
         );
     }
 
+    unsafe fn flush_tlb_all() {
+        core::arch::asm!(
+            "dsb ishst",
+            "tlbi vmalle1is",
+            "dsb ish",
+            "isb",
+            options(nostack)
+        );
+    }
+
     fn cow_bit() -> u64 { pte::COW }
 }
 
@@ -78,7 +91,8 @@ pub unsafe fn activate(pt: &PageTable4Level) {
     let mair: u64 = 0xFF | (0x00 << 8);
     core::arch::asm!("msr mair_el1, {}", in(reg) mair, options(nostack));
 
-    // TCR_EL1: T0SZ=16 (48-bit VA), 4KB granule, inner shareable
+    // TCR_EL1: T0SZ=16 (48-bit VA), 4KB granule, inner shareable, 8-bit ASID
+    // AS=0 → 8-bit ASID (bits [55:48] of TTBR0, supports 256 processes)
     let tcr: u64 = 16          // T0SZ = 16 (48-bit)
         | (0b00 << 14)         // TG0 = 4KB
         | (0b11 << 8)          // SH0 = inner shareable
@@ -104,7 +118,7 @@ unsafe impl rux_arch::PageTableRootOps for super::Aarch64 {
     fn read() -> u64 {
         let val: u64;
         unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) val, options(nostack)); }
-        val
+        val & 0x0000_FFFF_FFFF_FFFF // mask out ASID bits [63:48]
     }
     unsafe fn write(root: u64) {
         core::arch::asm!(
