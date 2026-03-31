@@ -58,6 +58,8 @@ OUTPUT=$( { sleep 3; \
     printf 'basename /usr/bin/id\n'; sleep 1; \
     printf 'cat /proc/self/status\n'; sleep 2; \
     printf 'true && echo ok42\n'; sleep 1; \
+    printf 'echo redir_test > /tmp/r && cat /tmp/r\n'; sleep 2; \
+    printf 'echo hi > /tmp/t && mv /tmp/t /tmp/t2 && cat /tmp/t2\n'; sleep 2; \
     printf 'printf "hello world\\n" | wc -w\n'; sleep 2; \
     printf 'exit\n'; sleep 1; \
     } | \
@@ -116,6 +118,8 @@ check "seq"                     "3"
 check "basename"                "id"
 check "proc/self/status"        "Pid:"
 check "true && echo"            "ok42"
+check "file redirect"           "redir_test"
+check "rename (file)"           "hi"
 check "printf pipe"             "2"
 
 # ── aarch64 ──────────────────────────────────────────────────────────
@@ -146,6 +150,8 @@ OUTPUT=$( { sleep 8; \
     printf 'basename /usr/bin/id\n'; sleep 3; \
     printf 'cat /proc/self/status\n'; sleep 3; \
     printf 'true && echo ok42\n'; sleep 3; \
+    printf 'echo redir_test > /tmp/r && cat /tmp/r\n'; sleep 3; \
+    printf 'echo hi > /tmp/t && mv /tmp/t /tmp/t2 && cat /tmp/t2\n'; sleep 3; \
     printf 'printf "hello world\\n" | wc -w\n'; sleep 3; \
     printf 'top -b -n1 | head -5\n'; sleep 3; \
     printf 'exit\n'; sleep 2; \
@@ -199,6 +205,8 @@ check "seq"                     "3"
 check "basename"                "id"
 check "proc/self/status"        "Pid:"
 check "true && echo"            "ok42"
+check "file redirect"           "redir_test"
+check "rename (file)"           "hi"
 check "printf pipe"             "2"
 
 # top

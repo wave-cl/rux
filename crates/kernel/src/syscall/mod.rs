@@ -178,7 +178,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
 
         // ── Memory ─────────────────────────────────────────────────
         Syscall::Mmap => posix::mmap(a0, a1, a2, a3, a4),
-        Syscall::Munmap => 0,
+        Syscall::Munmap => posix::munmap(a0, a1),
         Syscall::Mprotect => 0,
         Syscall::Brk => linux::brk(a0),
 
@@ -221,7 +221,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Tgkill | Syscall::Tkill |
         Syscall::SchedGetaffinity | Syscall::Prctl => 0,
         Syscall::Getrlimit => 0,
-        Syscall::Poll => 1,
+        Syscall::Poll => posix::poll(a0, a1, a2),
         Syscall::Gettimeofday => {
             use rux_arch::TimerOps;
             crate::arch::Arch::ticks() as isize
@@ -440,6 +440,23 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         CWD_PATH[VFORK_PARENT_CWD_PATH_LEN] = 0;
         CWD_PATH_LEN = VFORK_PARENT_CWD_PATH_LEN;
         for i in 0..64 { rux_fs::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
+
+        // Fix fd 0-2: in real Linux, fork() gives each process its own fd
+        // table, so shell redirects (dup2(file, 0)) before fork only affect
+        // the child.  In our single-process vfork model the redirect is
+        // captured in VFORK_PARENT_FDS.  After restore, fd 0-2 may still
+        // point to a file instead of the console.  Reset any non-pipe
+        // file-backed fd 0-2 to console so the parent shell works correctly.
+        // Pipe redirects are left alone — the shell manages pipe lifecycle.
+        for i in 0..3 {
+            let f = &rux_fs::fdtable::FD_TABLE[i];
+            if f.active && !f.is_console && !f.is_pipe {
+                rux_fs::fdtable::FD_TABLE[i] = rux_fs::fdtable::OpenFile {
+                    ino: 0, offset: 0, flags: 0, active: true, is_console: true,
+                    is_pipe: false, pipe_id: 0, pipe_write: false,
+                };
+            }
+        }
 
         // Restore TLS
         V::restore_tls(VFORK_PARENT_TLS);
