@@ -73,6 +73,7 @@ pub unsafe fn sys_fork() -> isize {
     }
 
     // 7. Enqueue child in scheduler
+    use rux_sched::SchedClassOps;
     let sched = crate::scheduler::get();
     let task = &mut sched.tasks[child_idx];
     task.active = true;

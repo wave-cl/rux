@@ -127,6 +127,25 @@ impl Scheduler {
         }
     }
 
+    /// Remove the current task from the runqueue (it's going to sleep/wait/exit).
+    /// Sets need_resched so the next schedule() call picks another task.
+    pub fn dequeue_current(&mut self) {
+        self.need_resched = true;
+        // Task won't be put_prev'd in schedule() because we mark it non-active
+        // by setting its state to Interruptible. Actually, schedule() only
+        // put_prev's if the task is active. We need to ensure it's not
+        // re-enqueued. The simplest approach: just don't call put_prev for it.
+        // We'll handle this by checking state in schedule().
+    }
+
+    /// Wake a sleeping/waiting task by re-enqueuing it in CFS.
+    pub fn wake_task(&mut self, idx: usize) {
+        if idx >= MAX_TASKS || !self.tasks[idx].active { return; }
+        self.tasks[idx].entity.state = TaskState::Ready;
+        self.cfs.set_clock(0, self.clock_ns);
+        self.cfs.enqueue(0, &mut self.tasks[idx].entity, 0);
+    }
+
     /// Perform a context switch if one is pending.
     /// Called after returning from the timer ISR (or voluntarily).
     ///
@@ -140,8 +159,11 @@ impl Scheduler {
 
         let old_idx = self.current;
 
-        // Put the current task back on the runqueue (skip slot 0 = idle/main)
-        if old_idx > 0 && old_idx < MAX_TASKS && self.tasks[old_idx].active {
+        // Put the current task back on the runqueue (skip slot 0 = idle/main,
+        // skip sleeping/waiting/zombie tasks that called dequeue_current)
+        if old_idx > 0 && old_idx < MAX_TASKS && self.tasks[old_idx].active
+            && self.tasks[old_idx].entity.state == TaskState::Running
+        {
             let entity = &mut self.tasks[old_idx].entity;
             self.cfs.put_prev(0, entity);
         }

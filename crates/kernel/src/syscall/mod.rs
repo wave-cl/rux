@@ -208,7 +208,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Brk => linux::brk(a0),
 
         // ── Process ────────────────────────────────────────────────
-        Syscall::Getpid | Syscall::Getppid => 1, // single-process: always PID 1
+        Syscall::Getpid | Syscall::Getppid => 1, // TODO: use task_table after debugging
         Syscall::Exit => posix::exit(a0 as i32),
         Syscall::ExitGroup => linux::exit_group(a0 as i32),
         Syscall::Kill => posix::kill(a0 as isize, a1),

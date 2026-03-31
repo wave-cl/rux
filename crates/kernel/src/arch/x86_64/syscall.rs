@@ -6,11 +6,22 @@ use super::console;
 
 // ── SYSCALL instruction setup (Linux x86_64 ABI) ───────────────────
 
+/// Kernel stack for syscall entry. For multi-process, each task will have
+/// its own stack in KSTACKS; CURRENT_KSTACK_TOP selects which is active.
+static mut SYSCALL_STACK: [u8; 65536] = [0; 65536];
+
 /// Points to the top of the current task's kernel stack.
-/// Updated on context switch. The SYSCALL entry asm loads RSP from this.
+/// Used by SignalOps and VforkContext to access the saved register frame.
+/// Updated on context switch (future).
 pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
+/// Get the top address of the default SYSCALL_STACK.
+pub fn syscall_stack_top() -> u64 {
+    unsafe { SYSCALL_STACK.as_ptr() as u64 + 65536 }
+}
+
 /// Saved user RSP during syscall (single-process, no swapgs needed).
+#[no_mangle]
 pub static mut SAVED_USER_RSP: u64 = 0;
 
 /// Debug: last RCX value before sysretq
@@ -51,7 +62,7 @@ unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         // Switch to kernel stack (save user RSP)
         "mov [rip + {saved_user_rsp}], rsp",
-        "mov rsp, [{current_kstack_top}]",
+        "lea rsp, [{syscall_stack} + 65536]",
 
         // Save callee-saved + syscall-specific regs
         "push rcx",      // user RIP
@@ -115,7 +126,7 @@ unsafe extern "C" fn syscall_entry() {
         "sysretq",
 
         saved_user_rsp = sym SAVED_USER_RSP,
-        current_kstack_top = sym CURRENT_KSTACK_TOP,
+        syscall_stack = sym SYSCALL_STACK,
         handler = sym syscall_dispatch_linux,
     );
 }
@@ -159,19 +170,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // Process creation syscalls (handled before generic dispatch)
     match nr {
-        56 => {
-            // clone(flags, stack, ...) — check CLONE_VFORK flag
-            let flags = a0;
-            return unsafe {
-                if flags & 0x4000 != 0 { // CLONE_VFORK
-                    crate::syscall::generic_vfork::<super::X86_64>() as i64
-                } else {
-                    crate::fork::sys_fork() as i64
-                }
-            };
-        }
-        57 => return unsafe { crate::fork::sys_fork() } as i64,        // fork()
-        58 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64, // vfork()
+        56 | 57 | 58 => return unsafe { crate::syscall::generic_vfork::<super::X86_64>() } as i64,
         59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
         _ => {}
     }
@@ -191,10 +190,11 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
             return crate::syscall::generic_deliver_signal::<super::X86_64>(result);
         }
         // Check for pending reschedule (set by timer tick)
-        let sched = crate::scheduler::get();
-        if sched.need_resched {
-            sched.schedule();
-        }
+        // TODO: enable once multi-process context switch is tested
+        // let sched = crate::scheduler::get();
+        // if sched.need_resched {
+        //     sched.schedule();
+        // }
     }
     result
 }

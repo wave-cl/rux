@@ -37,14 +37,7 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {
-            220 => {
-                // clone(flags, stack, ...) — check CLONE_VFORK
-                if a0 & 0x4000 != 0 {
-                    crate::syscall::generic_vfork::<super::Aarch64>() as i64
-                } else {
-                    crate::fork::sys_fork() as i64
-                }
-            }
+            220 => crate::syscall::generic_vfork::<super::Aarch64>() as i64,
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             139 => {
                 // rt_sigreturn — restore pre-signal state
@@ -66,10 +59,11 @@ pub fn handle_syscall(frame: *mut u8) {
             crate::syscall::generic_deliver_signal::<super::Aarch64>(result);
         }
         // Check for pending reschedule (set by timer tick)
-        let sched = crate::scheduler::get();
-        if sched.need_resched {
-            sched.schedule();
-        }
+        // TODO: enable once multi-process aarch64 context switch is tested
+        // let sched = crate::scheduler::get();
+        // if sched.need_resched {
+        //     sched.schedule();
+        // }
     }
 }
 

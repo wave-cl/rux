@@ -6,7 +6,7 @@
 //! On context switch, `swap_process_state()` swaps between slot and globals.
 
 use rux_proc::fs::FsContext;
-use rux_proc::signal::{SignalHot, SignalCold};
+use rux_proc::signal::SignalHot;
 use rux_fs::fdtable::{OpenFile, EMPTY_FD};
 
 /// Maximum number of concurrent processes.
@@ -48,7 +48,8 @@ pub struct TaskSlot {
     pub fs_ctx: FsContext,
     pub in_vfork_child: bool,
     pub signal_hot: SignalHot,
-    pub signal_cold: SignalCold,
+    // Note: signal_cold (3112 bytes) is NOT per-task — too large.
+    // All processes share the global PROCESS.signal_cold for now.
     pub signal_restorer: [usize; 32],
 
     // ── File descriptors (mirrors FD_TABLE global) ────────────────────
@@ -79,7 +80,6 @@ impl TaskSlot {
             fs_ctx: FsContext::new(),
             in_vfork_child: false,
             signal_hot: SignalHot::new(),
-            signal_cold: SignalCold::new(),
             signal_restorer: [0; 32],
             fds: [EMPTY_FD; 64],
             pt_root: 0,
@@ -99,7 +99,7 @@ pub static mut TASK_TABLE: [TaskSlot; MAX_PROCS] = {
 };
 
 /// Kernel stack size per task.
-pub const KSTACK_SIZE: usize = 16384; // 16KB per task
+pub const KSTACK_SIZE: usize = 32768; // 32KB per task
 
 /// Per-task kernel stacks.
 pub static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_PROCS] = [[0; KSTACK_SIZE]; MAX_PROCS];
@@ -162,11 +162,12 @@ pub unsafe fn init_pid1() {
     }
     CURRENT_TASK_IDX = 0;
 
-    // Set the initial kernel stack pointer for the SYSCALL entry.
+    // Set CURRENT_KSTACK_TOP to point to the SYSCALL_STACK top.
+    // SignalOps and VforkContext use this to access the saved register frame.
     #[cfg(target_arch = "x86_64")]
     {
         crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP =
-            slot.kstack_top as u64;
+            crate::arch::x86_64::syscall::syscall_stack_top();
     }
 }
 
