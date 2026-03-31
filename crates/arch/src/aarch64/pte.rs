@@ -6,6 +6,8 @@ pub const TABLE: u64       = 1 << 1;
 pub const AF: u64          = 1 << 10;
 pub const NG: u64          = 1 << 11;
 pub const DBM: u64         = 1 << 51;
+/// Software-defined COW (copy-on-write) bit. PBHA bit 55.
+pub const COW: u64         = 1 << 55;
 pub const PXN: u64         = 1 << 53;
 pub const UXN: u64         = 1 << 54;
 
@@ -80,11 +82,13 @@ impl PageTableEntryOps for Aarch64Pte {
     }
     #[inline(always)]
     fn set_writable(entry: &mut PageTableEntry, val: bool) {
+        // Preserve USER status: if AP was EL0_*, keep EL0; else use EL1.
+        let was_user = (entry.0 & AP_MASK) == AP_EL0_RW || (entry.0 & AP_MASK) == AP_EL0_RO;
         entry.0 &= !AP_MASK;
-        if val {
-            entry.0 |= AP_EL1_RW;
+        if was_user {
+            entry.0 |= if val { AP_EL0_RW } else { AP_EL0_RO };
         } else {
-            entry.0 |= AP_EL1_RO;
+            entry.0 |= if val { AP_EL1_RW } else { AP_EL1_RO };
         }
     }
 }

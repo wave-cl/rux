@@ -10,6 +10,8 @@ pub const ACCESSED: u64    = 1 << 5;
 pub const DIRTY: u64       = 1 << 6;
 pub const HUGE: u64        = 1 << 7;
 pub const GLOBAL: u64      = 1 << 8;
+/// Software-defined COW (copy-on-write) bit. OS-available bit 9.
+pub const COW: u64         = 1 << 9;
 pub const NO_EXECUTE: u64  = 1 << 63;
 
 /// Mask for the physical address field (bits 12-51).

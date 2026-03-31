@@ -52,6 +52,8 @@ impl ArchPaging for X86Paging {
             options(nostack, preserves_flags)
         );
     }
+
+    fn cow_bit() -> u64 { pte::COW }
 }
 
 /// Concrete x86_64 page table type.

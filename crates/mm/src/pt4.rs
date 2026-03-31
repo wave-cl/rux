@@ -324,4 +324,85 @@ impl<A: ArchPaging> PageTable4Level<A> {
         // Free the root PML4 frame itself
         alloc.dealloc(self.root, PageSize::FourK);
     }
+
+    // ── COW (copy-on-write) helpers ─────────────────────────────────
+
+    /// Get a mutable pointer to the leaf (L0) PTE for a 4K virtual address.
+    /// Returns None if the mapping doesn't exist at any level.
+    unsafe fn leaf_pte_mut(&self, virt: VirtAddr) -> Option<*mut PageTableEntry> {
+        let l3 = self.root.as_usize() as *const PageTablePage;
+        let l3e = (*l3).entries[pt_index(virt, PageLevel::L3)];
+        if !A::Pte::is_present(l3e) { return None; }
+
+        let l2 = A::Pte::phys_addr(l3e).as_usize() as *const PageTablePage;
+        let l2e = (*l2).entries[pt_index(virt, PageLevel::L2)];
+        if !A::Pte::is_present(l2e) || A::Pte::is_huge(l2e) { return None; }
+
+        let l1 = A::Pte::phys_addr(l2e).as_usize() as *const PageTablePage;
+        let l1e = (*l1).entries[pt_index(virt, PageLevel::L1)];
+        if !A::Pte::is_present(l1e) || A::Pte::is_huge(l1e) { return None; }
+
+        let l0 = A::Pte::phys_addr(l1e).as_usize() as *mut PageTablePage;
+        Some(&mut (*l0).entries[pt_index(virt, PageLevel::L0)])
+    }
+
+    /// Mark a leaf PTE as COW: clear writable, set COW software bit.
+    pub unsafe fn mark_cow(&self, virt: VirtAddr) {
+        if let Some(pte) = self.leaf_pte_mut(virt) {
+            A::Pte::set_writable(&mut *pte, false);
+            (*pte).0 |= A::cow_bit();
+        }
+    }
+
+    /// Check if a leaf PTE has the COW bit set.
+    pub unsafe fn is_cow(&self, virt: VirtAddr) -> bool {
+        if let Some(pte) = self.leaf_pte_mut(virt) {
+            (*pte).0 & A::cow_bit() != 0
+        } else {
+            false
+        }
+    }
+
+    /// Resolve a COW fault: allocate a new page, copy the old page's contents,
+    /// remap the VA to the new page as writable, clear COW bit, flush TLB.
+    /// Returns the old physical address (caller may need to decrement refcount).
+    pub unsafe fn resolve_cow(
+        &self, virt: VirtAddr, alloc: &mut dyn FrameAllocator,
+    ) -> Result<PhysAddr, MemoryError> {
+        let pte = self.leaf_pte_mut(virt).ok_or(MemoryError::NotMapped)?;
+        let old_pa = A::Pte::phys_addr(*pte);
+
+        // Allocate new frame and copy
+        let new_frame = alloc.alloc(PageSize::FourK)?;
+        let src = old_pa.as_usize() as *const u8;
+        let dst = new_frame.as_usize() as *mut u8;
+        core::ptr::copy_nonoverlapping(src, dst, 4096);
+
+        // Update PTE: new frame, writable, clear COW
+        let old_flags = A::Pte::flags(*pte);
+        *pte = A::Pte::encode(new_frame, old_flags & !A::cow_bit());
+        A::Pte::set_writable(&mut *pte, true);
+
+        A::flush_tlb(virt);
+
+        Ok(old_pa)
+    }
+
+    /// Make a COW page writable without copying (refcount == 1 fast path).
+    /// Clears COW bit and sets writable. Flushes TLB.
+    pub unsafe fn make_writable(&self, virt: VirtAddr) {
+        if let Some(pte) = self.leaf_pte_mut(virt) {
+            (*pte).0 &= !A::cow_bit();
+            A::Pte::set_writable(&mut *pte, true);
+            A::flush_tlb(virt);
+        }
+    }
+
+    /// Remap an existing mapping to a new physical frame with new flags.
+    pub unsafe fn remap(&self, virt: VirtAddr, new_phys: PhysAddr, new_flags: u64) {
+        if let Some(pte) = self.leaf_pte_mut(virt) {
+            *pte = A::Pte::encode(new_phys, new_flags);
+            A::flush_tlb(virt);
+        }
+    }
 }

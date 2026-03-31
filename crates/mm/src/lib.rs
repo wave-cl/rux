@@ -143,6 +143,9 @@ pub trait ArchPaging {
 
     /// Flush TLB for a single page.
     unsafe fn flush_tlb(virt: VirtAddr);
+
+    /// Software-defined COW bit in the PTE (arch-specific location).
+    fn cow_bit() -> u64;
 }
 
 pub trait FrameAllocator {

@@ -62,6 +62,8 @@ impl ArchPaging for Aarch64Paging {
             options(nostack)
         );
     }
+
+    fn cow_bit() -> u64 { pte::COW }
 }
 
 /// Concrete aarch64 page table type.
