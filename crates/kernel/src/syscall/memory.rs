@@ -1,5 +1,7 @@
 //! Memory mapping and poll syscalls.
 
+use rux_fs::fdtable as fdt;
+
 pub fn mmap(addr: usize, len: usize, _prot: usize, mmap_flags: usize, _fd: usize) -> isize {
     unsafe {
         if mmap_flags & 0x20 == 0 { return -12; } // MAP_ANONYMOUS only

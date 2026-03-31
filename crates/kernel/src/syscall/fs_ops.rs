@@ -193,6 +193,8 @@ pub fn creat(path_ptr: usize) -> isize {
             Err(_) => -17,
         }
     }
+}
+
 // ── Path operations ─────────────────────────────────────────────────
 
 /// rename(oldpath, newpath) — POSIX.1
@@ -326,7 +328,7 @@ pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
 pub fn utimensat(_dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        let now = Arch::ticks() / 1000; // seconds since boot
+        let now = super::current_time_secs();
         let (atime, mtime) = if times_ptr == 0 {
             (now, now)
         } else {
