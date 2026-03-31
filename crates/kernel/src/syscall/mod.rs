@@ -98,7 +98,8 @@ pub enum Syscall {
     // File metadata
     Stat, Lstat, Fstat, FstatAt, Faccessat, Readlink, Readlinkat,
     // Directory / path ops
-    Getcwd, Creat, Mkdir, Unlink, Chdir, Rename, Symlink,
+    Getcwd, Creat, Mknodat, Mkdir, Mkdirat, Unlink, Unlinkat, Chdir,
+    Rename, Renameat, Symlink, Symlinkat,
     // Permissions (stubs)
     Chmod, Chown, Utimensat,
     // Memory
@@ -161,11 +162,16 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         // ── Directory / path ops ──────────────────────────────────
         Syscall::Getcwd => posix::getcwd(a0, a1),
         Syscall::Creat => posix::creat(a0),
+        Syscall::Mknodat => posix::creat(a1),      // mknodat(dirfd, path, mode, dev)
         Syscall::Mkdir => posix::mkdir(a0),
+        Syscall::Mkdirat => posix::mkdir(a1),       // mkdirat(dirfd, path, mode)
         Syscall::Unlink => posix::unlink(a0),
+        Syscall::Unlinkat => posix::unlink(a1),     // unlinkat(dirfd, path, flags)
         Syscall::Chdir => posix::chdir(a0),
         Syscall::Rename => posix::rename(a0, a1),
+        Syscall::Renameat => posix::rename(a1, a3),  // renameat(olddirfd, old, newdirfd, new)
         Syscall::Symlink => posix::symlink(a0, a1),
+        Syscall::Symlinkat => posix::symlink(a0, a2), // symlinkat(target, dirfd, linkpath)
 
         // ── Permissions (stubs) ───────────────────────────────────
         Syscall::Chmod | Syscall::Chown | Syscall::Utimensat | Syscall::Link => 0,
@@ -385,16 +391,15 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
             va += 4096;
         }
 
-        {
-            use rux_arch::ConsoleOps;
-            let mut buf = [0u8; 10];
-            crate::arch::Arch::write_str("rux: snap count=");
-            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, VFORK_SNAP_COUNT as u32));
-            crate::arch::Arch::write_str(" brk=");
-            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, VFORK_PARENT_PROGRAM_BRK as u32));
-            crate::arch::Arch::write_str(" mmap=");
-            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, VFORK_PARENT_MMAP_BASE as u32));
-            crate::arch::Arch::write_str("\n");
+        // Range 3: user stack area (contains stack canary, local vars)
+        // The parent's stack frame holds the GCC stack-protector canary
+        // at sp+offset; without snapshotting these pages the canary can
+        // appear corrupted after child exec replaces the address space.
+        let stack_page = parent_sp & !0xFFF;
+        va = stack_page.saturating_sub(child_stack_pages * 4096);
+        while va <= stack_page {
+            snap_page!(va);
+            va += 4096;
         }
 
         return 0; // child gets fork return 0

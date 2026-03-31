@@ -43,7 +43,7 @@ OUTPUT=$( { sleep 3; \
     printf 'cat /proc/version\n'; sleep 1; \
     printf 'free | head -2\n'; sleep 1; \
     printf 'readlink /bin/sh\n'; sleep 1; \
-    printf 'echo hi > /tmp/t && mv /tmp/t /tmp/t2 && cat /tmp/t2\n'; sleep 2; \
+    printf 'ln -s /bin/sh /tmp/mvtest && mv /tmp/mvtest /tmp/mvdone && readlink /tmp/mvdone\n'; sleep 2; \
     printf 'echo hello | wc -w\n'; sleep 2; \
     printf 'grep root /etc/passwd\n'; sleep 1; \
     printf 'expr 2 + 3\n'; sleep 1; \
@@ -51,6 +51,14 @@ OUTPUT=$( { sleep 3; \
     printf 'ls /proc\n'; sleep 1; \
     printf 'ls /proc/1\n'; sleep 1; \
     printf 'top -b -n1 | head -5\n'; sleep 2; \
+    printf 'ln -s /bin/busybox /tmp/mylink && readlink /tmp/mylink\n'; sleep 1; \
+    printf 'mkdir /tmp/d && ls /tmp\n'; sleep 1; \
+    printf 'echo -n abcd | wc -c\n'; sleep 2; \
+    printf 'seq 1 3\n'; sleep 1; \
+    printf 'basename /usr/bin/id\n'; sleep 1; \
+    printf 'cat /proc/self/status\n'; sleep 2; \
+    printf 'true && echo ok42\n'; sleep 1; \
+    printf 'printf "hello world\\n" | wc -w\n'; sleep 2; \
     printf 'exit\n'; sleep 1; \
     } | \
     "$QEMU_X86" -cpu Haswell \
@@ -91,7 +99,7 @@ check "ls /proc/1 shows stat"   "stat"
 
 # File operations
 check "readlink"                "busybox"
-check "rename (mv)"             "hi"
+check "rename (mv)"             "/bin/sh"
 check "pipe (wc -w)"            "1"
 check "grep"                    "root:x:0:0"
 check "expr"                    "5"
@@ -99,6 +107,16 @@ check "id"                      "uid=0(root)"
 
 # top
 check "top shows process"       "PID"
+
+# symlink + mkdir + file ops
+check "symlink"                 "busybox"
+check "mkdir"                   "d"
+check "wc -c (pipe)"            "4"
+check "seq"                     "3"
+check "basename"                "id"
+check "proc/self/status"        "Pid:"
+check "true && echo"            "ok42"
+check "printf pipe"             "2"
 
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
@@ -118,6 +136,18 @@ OUTPUT=$( { sleep 8; \
     printf 'echo hello | wc -w\n'; sleep 3; \
     printf 'id\n'; sleep 3; \
     printf 'ls /proc\n'; sleep 3; \
+    printf 'ls /proc/1\n'; sleep 3; \
+    printf 'grep root /etc/passwd\n'; sleep 3; \
+    printf 'expr 2 + 3\n'; sleep 3; \
+    printf 'ln -s /bin/busybox /tmp/mylink && readlink /tmp/mylink\n'; sleep 3; \
+    printf 'mkdir /tmp/d && ls /tmp\n'; sleep 3; \
+    printf 'echo -n abcd | wc -c\n'; sleep 3; \
+    printf 'seq 1 3\n'; sleep 3; \
+    printf 'basename /usr/bin/id\n'; sleep 3; \
+    printf 'cat /proc/self/status\n'; sleep 3; \
+    printf 'true && echo ok42\n'; sleep 3; \
+    printf 'printf "hello world\\n" | wc -w\n'; sleep 3; \
+    printf 'top -b -n1 | head -5\n'; sleep 3; \
     printf 'exit\n'; sleep 2; \
     } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
@@ -152,11 +182,27 @@ check "ls shows proc"           "proc"
 check "proc/version"            "rux version"
 check "free shows memory"       "Mem:"
 check "ls /proc shows 1"        "1"
+check "ls /proc/1 shows stat"   "stat"
 
 # File operations
 check "readlink"                "busybox"
 check "pipe (wc -w)"            "1"
 check "id"                      "uid=0(root)"
+check "grep"                    "root:x:0:0"
+check "expr"                    "5"
+
+# symlink + mkdir + file ops
+check "symlink"                 "busybox"
+check "mkdir"                   "d"
+check "wc -c (pipe)"            "4"
+check "seq"                     "3"
+check "basename"                "id"
+check "proc/self/status"        "Pid:"
+check "true && echo"            "ok42"
+check "printf pipe"             "2"
+
+# top
+check "top shows process"       "PID"
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
