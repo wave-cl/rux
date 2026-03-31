@@ -86,6 +86,16 @@ OUTPUT=$( { sleep 3; \
     printf 'cat /dev/urandom | head -c 8 | wc -c\n'; sleep 2; \
     printf 'touch /tmp/ts && stat /tmp/ts | grep Modify\n'; sleep 2; \
     printf 'echo abc | cat\n'; sleep 2; \
+    printf 'tail -c 8 /etc/passwd\n'; sleep 2; \
+    printf 'find /etc -type f 2>/dev/null\n'; sleep 2; \
+    printf 'sort /etc/passwd\n'; sleep 2; \
+    printf 'date +%%s\n'; sleep 1; \
+    printf 'echo mypid=$$ done\n'; sleep 1; \
+    printf 'chown 0:0 /tmp/hl && stat /tmp/hl | grep Uid\n'; sleep 2; \
+    printf 'stat /etc/passwd > /dev/null && echo accessok\n'; sleep 1; \
+    printf 'cut -d: -f1 /etc/passwd\n'; sleep 2; \
+    printf 'echo hello | tr a-z A-Z\n'; sleep 2; \
+    printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 2; \
     printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 3; \
     printf 'exit\n'; sleep 1; \
     } | \
@@ -180,6 +190,18 @@ check "touch timestamp"        "Modify:"
 check "pipe cat"               "abc"
 check "signal trap"            "trapped_sig"
 
+# Syscall coverage: lseek, find, sort, clock, pid, chown, access, cut, tr, tee
+check "tail (lseek)"           "/bin/sh"
+check "find /etc"              "passwd"
+check "sort"                   "root"
+check "date (clock)"           "0"
+check "getpid"                  "mypid="
+check "chown"                  "Uid"
+check "test -f (access)"       "accessok"
+check "cut"                    "root"
+check "tr (uppercase)"         "HELLO"
+check "tee"                    "root"
+
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
@@ -237,6 +259,16 @@ OUTPUT=$( { sleep 8; \
     printf 'cat /dev/urandom | head -c 8 | wc -c\n'; sleep 3; \
     printf 'touch /tmp/ts && stat /tmp/ts | grep Modify\n'; sleep 3; \
     printf 'echo abc | cat\n'; sleep 3; \
+    printf 'tail -c 8 /etc/passwd\n'; sleep 3; \
+    printf 'find /etc -type f 2>/dev/null\n'; sleep 3; \
+    printf 'sort /etc/passwd\n'; sleep 3; \
+    printf 'date +%%s\n'; sleep 3; \
+    printf 'echo mypid=$$ done\n'; sleep 3; \
+    printf 'chown 0:0 /tmp/hl && stat /tmp/hl | grep Uid\n'; sleep 3; \
+    printf 'stat /etc/passwd > /dev/null && echo accessok\n'; sleep 3; \
+    printf 'cut -d: -f1 /etc/passwd\n'; sleep 3; \
+    printf 'echo hello | tr a-z A-Z\n'; sleep 3; \
+    printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 3; \
     printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 4; \
     printf 'exit\n'; sleep 2; \
     } | \
@@ -328,6 +360,18 @@ check "dev/urandom"            "8"
 check "touch timestamp"        "Modify:"
 check "pipe cat"               "abc"
 check "signal trap"            "trapped_sig"
+
+# Syscall coverage: lseek, find, sort, clock, pid, chown, access, cut, tr, tee
+check "tail (lseek)"           "/bin/sh"
+check "find /etc"              "passwd"
+check "sort"                   "root"
+check "date (clock)"           "0"
+check "getpid"                  "mypid="
+check "chown"                  "Uid"
+check "test -f (access)"       "accessok"
+check "cut"                    "root"
+check "tr (uppercase)"         "HELLO"
+check "tee"                    "root"
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
