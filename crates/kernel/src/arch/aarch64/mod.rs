@@ -8,6 +8,7 @@ pub mod context;
 pub mod devicetree;
 pub mod paging;
 pub mod syscall;
+pub mod psci;
 
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("exception.S"));
