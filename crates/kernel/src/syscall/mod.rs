@@ -225,8 +225,12 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         // ── User/group IDs (single user: always root) ─────────────
         Syscall::Getuid | Syscall::Geteuid |
         Syscall::Getgid | Syscall::Getegid => 0, // uid=0, gid=0
-        Syscall::Getpgid | Syscall::Setsid |
-        Syscall::Gettid => 1, // single-process: always 1
+        Syscall::Gettid => 1, // TODO: return actual tid once threads exist
+
+        // ── Process groups ────────────────────────────────────────
+        Syscall::Setpgid => posix::setpgid(a0, a1),
+        Syscall::Getpgid => posix::getpgid(a0),
+        Syscall::Setsid  => posix::setsid(),
 
         // ── Linux extensions ───────────────────────────────────────
         Syscall::Getdents64 => linux::getdents64(a0, a1, a2),
@@ -243,7 +247,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         // ── Stubs: accepted but no-op ─────────────────────────────
         Syscall::Mprotect | Syscall::Faccessat | Syscall::Access |
         Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
-        Syscall::Getgroups | Syscall::Setpgid | Syscall::Getrlimit |
+        Syscall::Getgroups | Syscall::Getrlimit |
         Syscall::SetRobustList | Syscall::Futex |
         Syscall::SchedGetaffinity | Syscall::Prctl => 0,
 

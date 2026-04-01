@@ -32,13 +32,15 @@ pub fn exit(status: i32) -> ! {
             TASK_TABLE[idx].exit_code = status;
             TASK_TABLE[idx].state = TaskState::Zombie;
 
-            // Find parent and wake it if it's blocked in waitpid.
+            // Find parent, send SIGCHLD, wake if blocked in waitpid.
             let ppid = TASK_TABLE[idx].ppid;
             for i in 0..MAX_PROCS {
                 let t = &mut TASK_TABLE[i];
                 if !t.active || t.pid != ppid { continue; }
                 t.last_child_exit = status;
                 t.child_available = true;
+                // SIGCHLD (signal 17) to parent
+                t.signal_hot.pending = t.signal_hot.pending.add(17);
                 if t.state == TaskState::WaitingForChild {
                     t.state = TaskState::Ready;
                     crate::scheduler::get().wake_task(i);
@@ -85,8 +87,12 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 let t = &TASK_TABLE[i];
                 if !t.active || t.ppid != my_pid { continue; }
                 if t.state != TaskState::Zombie { continue; }
-                // pid == usize::MAX (-1) means "any child"
-                if pid != usize::MAX && pid != 0 && t.pid as usize != pid { continue; }
+                // pid matching: usize::MAX (-1) = any child, 0 = same process group
+                if pid == 0 {
+                    if t.pgid != TASK_TABLE[CURRENT_TASK_IDX].pgid { continue; }
+                } else if pid != usize::MAX && t.pid as usize != pid {
+                    continue;
+                }
 
                 // Found a zombie — reap it.
                 let child_pid = t.pid as isize;
@@ -246,4 +252,58 @@ pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: us
         }
     }
     0
+}
+
+// ── Process groups ─────────────────────────────────────────────────────
+
+/// setpgid(pid, pgid) — POSIX.1
+/// pid==0 means self. pgid==0 means use pid as the new pgid.
+pub fn setpgid(pid: usize, pgid: usize) -> isize {
+    unsafe {
+        use crate::task_table::*;
+        let my_pid = current_pid();
+        let target_pid = if pid == 0 { my_pid } else { pid as u32 };
+        let new_pgid = if pgid == 0 { target_pid } else { pgid as u32 };
+
+        for i in 0..MAX_PROCS {
+            let t = &mut TASK_TABLE[i];
+            if t.active && t.pid == target_pid {
+                if target_pid != my_pid && t.ppid != my_pid {
+                    return -1; // -EPERM: can only set pgid for self or child
+                }
+                t.pgid = new_pgid;
+                return 0;
+            }
+        }
+        -3 // -ESRCH
+    }
+}
+
+/// getpgid(pid) — POSIX.1
+/// pid==0 means self (also serves as getpgrp).
+pub fn getpgid(pid: usize) -> isize {
+    unsafe {
+        use crate::task_table::*;
+        if pid == 0 {
+            return TASK_TABLE[CURRENT_TASK_IDX].pgid as isize;
+        }
+        for i in 0..MAX_PROCS {
+            if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32 {
+                return TASK_TABLE[i].pgid as isize;
+            }
+        }
+        -3 // -ESRCH
+    }
+}
+
+/// setsid() — POSIX.1
+/// Create a new session. Caller becomes session and process group leader.
+pub fn setsid() -> isize {
+    unsafe {
+        use crate::task_table::*;
+        let idx = CURRENT_TASK_IDX;
+        let pid = TASK_TABLE[idx].pid;
+        TASK_TABLE[idx].pgid = pid;
+        pid as isize
+    }
 }

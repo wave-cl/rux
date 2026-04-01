@@ -104,13 +104,15 @@ pub fn kill(pid: isize, signum: usize) -> isize {
 
     let my_pid = crate::task_table::current_pid() as isize;
 
-    // Determine target: self or another process.
-    let to_self = pid == 0 || pid == -1 || pid == my_pid;
+    // Determine target.
+    // pid > 0: specific process. pid == 0: own process group.
+    // pid == -1: all processes. pid < -1: process group -pid.
+    let to_self = pid == my_pid;
+    let to_pgrp = pid == 0 || pid < -1;
 
     // signum == 0: permission/existence check only (no signal sent)
     if signum == 0 {
-        if to_self { return 0; }
-        // For non-self: return ESRCH if process doesn't exist
+        if to_self || pid == -1 { return 0; }
         use crate::task_table::*;
         unsafe {
             let found = (0..MAX_PROCS).any(|i| {
@@ -124,6 +126,52 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         Some(s) => s,
         None => return -22,
     };
+
+    // Send to process group: pid==0 (own group) or pid<-1 (group -pid)
+    if to_pgrp {
+        use crate::task_table::*;
+        unsafe {
+            let target_pgid = if pid == 0 {
+                TASK_TABLE[CURRENT_TASK_IDX].pgid
+            } else {
+                (-pid) as u32
+            };
+            let mut found = false;
+            for i in 0..MAX_PROCS {
+                if TASK_TABLE[i].active && TASK_TABLE[i].pgid == target_pgid
+                    && TASK_TABLE[i].state != TaskState::Zombie
+                {
+                    found = true;
+                    TASK_TABLE[i].signal_hot.pending =
+                        TASK_TABLE[i].signal_hot.pending.add(signum as u8);
+                    match TASK_TABLE[i].state {
+                        TaskState::Sleeping | TaskState::WaitingForChild => {
+                            TASK_TABLE[i].state = TaskState::Ready;
+                            crate::scheduler::get().wake_task(i);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            return if found { 0 } else { -3 }; // -ESRCH
+        }
+    }
+
+    // pid == -1: send to all processes except init
+    if pid == -1 {
+        use crate::task_table::*;
+        unsafe {
+            for i in 0..MAX_PROCS {
+                if TASK_TABLE[i].active && TASK_TABLE[i].pid != 1
+                    && TASK_TABLE[i].state != TaskState::Zombie
+                {
+                    TASK_TABLE[i].signal_hot.pending =
+                        TASK_TABLE[i].signal_hot.pending.add(signum as u8);
+                }
+            }
+        }
+        return 0;
+    }
 
     if to_self {
         // Send signal to current process.
