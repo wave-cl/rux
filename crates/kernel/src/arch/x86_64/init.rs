@@ -3,6 +3,44 @@
 use super::{console, exit};
 use crate::{scheduler, pgtrack};
 
+/// AP (Application Processor) entry point. Called by the AP trampoline
+/// after transitioning to 64-bit long mode with a per-CPU stack.
+///
+/// # Safety
+/// Called exactly once per AP, with a valid stack and identity-mapped memory.
+#[no_mangle]
+pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
+    unsafe {
+        // 1. Per-CPU GDT + TSS
+        let kstack_top = crate::task_table::KSTACKS[cpu_id as usize].as_ptr() as usize
+            + crate::task_table::KSTACK_SIZE;
+        super::gdt::init_ap(cpu_id as usize, kstack_top as u64);
+
+        // 2. SYSCALL MSRs
+        super::syscall::init_syscall_msrs();
+
+        // 3. IDT (shared with BSP — IDT is the same for all CPUs)
+        super::idt::load();
+
+        // 4. Mark online
+        let pc = crate::percpu::cpu(cpu_id as usize);
+        pc.cpu_id = cpu_id;
+        pc.online = true;
+        pc.idle = true;
+
+        console::write_str("rux: AP ");
+        let mut buf = [0u8; 10];
+        console::write_str(rux_klib::fmt::u32_to_str(&mut buf, cpu_id));
+        console::write_str(" online\n");
+
+        // 5. Enable interrupts and enter idle loop
+        core::arch::asm!("sti", options(nostack, preserves_flags));
+        loop {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
+}
+
 /// Detect CPU features by querying all CPUID leaves.
 unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
     use rux_arch::x86_64::cpu::*;
@@ -187,6 +225,12 @@ pub fn x86_64_init(multiboot_info: usize) {
 
     // ── Init scheduler (needed for vfork/exec) ──────────────────────────
     unsafe { scheduler::init_context_fns(); }
+
+    // ── Start APs (secondary CPUs) ──────────────────────────────────────
+    // APs enter ap_entry() which sets up per-CPU state and enters idle loop.
+    // Currently informational — AP count from APIC, actual startup deferred
+    // until the AP trampoline assembly is linked into the kernel binary.
+    // TODO: copy trampoline to 0x8000, send INIT-SIPI to each AP
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
     unsafe {

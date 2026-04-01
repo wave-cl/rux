@@ -292,6 +292,15 @@ pub unsafe fn init() {
     );
 }
 
+/// Load the IDT on an AP (reuses the BSP's IDT — it's shared).
+pub unsafe fn load() {
+    let idt_ptr = IdtPtr {
+        limit: (core::mem::size_of::<[IdtEntry; IDT_ENTRIES]>() - 1) as u16,
+        base: IDT.as_ptr() as u64,
+    };
+    core::arch::asm!("lidt [{}]", in(reg) &idt_ptr, options(nostack));
+}
+
 /// Rust dispatch function called from the assembly common handler.
 #[no_mangle]
 pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {

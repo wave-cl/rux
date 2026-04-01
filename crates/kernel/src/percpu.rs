@@ -12,14 +12,23 @@ pub const MAX_CPUS: usize = 16;
 pub struct PerCpu {
     /// This CPU's ID (APIC ID on x86_64, MPIDR on aarch64).
     pub cpu_id: u32,
-    /// Whether this CPU is online.
+    /// Whether this CPU is online and executing.
     pub online: bool,
-    _pad: [u8; 3],
+    /// Whether this CPU is in the idle loop (no runnable tasks).
+    pub idle: bool,
+    _pad: [u8; 2],
+    /// Index of the currently running task on this CPU.
+    pub current_task_idx: usize,
+    /// Kernel stack top for this CPU's syscall entry (x86_64: loaded into RSP by SYSCALL).
+    pub kstack_top: u64,
 }
 
 impl PerCpu {
     pub const fn new() -> Self {
-        Self { cpu_id: 0, online: false, _pad: [0; 3] }
+        Self {
+            cpu_id: 0, online: false, idle: true, _pad: [0; 2],
+            current_task_idx: 0, kstack_top: 0,
+        }
     }
 }
 

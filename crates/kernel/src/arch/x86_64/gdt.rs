@@ -151,3 +151,73 @@ pub unsafe fn init(kernel_stack_top: u64) {
         options(nostack, preserves_flags)
     );
 }
+
+// ── Per-CPU GDT + TSS for AP startup ────────────────────────────────
+
+use crate::percpu::MAX_CPUS;
+
+static mut TSS_PERCPU: [Tss; MAX_CPUS] = {
+    const EMPTY: Tss = Tss {
+        reserved0: 0, rsp0: 0, rsp1: 0, rsp2: 0,
+        reserved1: 0, ist: [0; 7], reserved2: 0, reserved3: 0, iopb_offset: 104,
+    };
+    [EMPTY; MAX_CPUS]
+};
+
+static mut GDT_PERCPU: [Gdt; MAX_CPUS] = {
+    const EMPTY: Gdt = Gdt {
+        null: GdtEntry(0),
+        kernel_code: GdtEntry(0x00AF_9A00_0000_FFFF),
+        kernel_data: GdtEntry(0x00CF_9200_0000_FFFF),
+        user_data: GdtEntry(0x00CF_F200_0000_FFFF),
+        user_code: GdtEntry(0x00AF_FA00_0000_FFFF),
+        tss: TssEntry { low: 0, high: 0 },
+    };
+    [EMPTY; MAX_CPUS]
+};
+
+/// Initialize per-CPU GDT + TSS for an AP. Called from ap_entry().
+pub unsafe fn init_ap(cpu_id: usize, kernel_stack_top: u64) {
+    let tss = &mut TSS_PERCPU[cpu_id];
+    tss.rsp0 = kernel_stack_top;
+    tss.iopb_offset = core::mem::size_of::<Tss>() as u16;
+
+    let tss_addr = tss as *const Tss as u64;
+    let tss_size = (core::mem::size_of::<Tss>() - 1) as u64;
+
+    let low: u64 = (tss_size & 0xFFFF)
+        | ((tss_addr & 0xFFFF) << 16)
+        | (((tss_addr >> 16) & 0xFF) << 32)
+        | (0b1000_1001u64 << 40)
+        | (((tss_size >> 16) & 0xF) << 48)
+        | (((tss_addr >> 24) & 0xFF) << 56);
+    let high: u64 = tss_addr >> 32;
+
+    let gdt = &mut GDT_PERCPU[cpu_id];
+    gdt.tss = TssEntry { low, high };
+
+    let gdt_ptr = GdtPtr {
+        limit: (core::mem::size_of::<Gdt>() - 1) as u16,
+        base: gdt as *const Gdt as u64,
+    };
+
+    core::arch::asm!("lgdt [{}]", in(reg) &gdt_ptr, options(nostack));
+
+    // Reload CS via far return
+    core::arch::asm!(
+        "push {kcs}", "lea {tmp}, [rip + 2f]", "push {tmp}", "retfq", "2:",
+        kcs = in(reg) KERNEL_CS as u64, tmp = lateout(reg) _,
+        options(preserves_flags)
+    );
+
+    // Reload data segments
+    core::arch::asm!(
+        "mov ds, {0:x}", "mov es, {0:x}", "mov ss, {0:x}",
+        "xor {1:e}, {1:e}", "mov fs, {1:x}", "mov gs, {1:x}",
+        in(reg) KERNEL_DS, lateout(reg) _,
+        options(nostack, preserves_flags)
+    );
+
+    // Load TSS
+    core::arch::asm!("ltr {0:x}", in(reg) TSS_SEL, options(nostack, preserves_flags));
+}
