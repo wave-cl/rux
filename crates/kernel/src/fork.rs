@@ -168,25 +168,22 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
 
     let cow = crate::arch::PageTable::cow_bit();
 
+    // Precompute raw PTE flags for child COW pages (user, read-only, COW bit set).
+    // Computed once, used for every page in the walk.
+    let cow_child_flags = crate::arch::PageTable::pte_flags(user_rx) | cow;
+
     // Walk parent's user pages with mutable PTE access. For each page:
-    // 1. Mark parent COW inline (no re-walk) — set read-only + COW bit
-    // 2. Map child to same physical frame with COW flags
-    // TLB flush is batched: mark all pages, then one full flush at the end.
+    // 1. Mark parent COW inline (no re-walk)
+    // 2. Map child with pre-computed COW flags in a single walk (map_4k_raw)
+    // Previous: 3 child walks/page (unmap + map + leaf_pte_and_pa).
+    // Now: 1 child walk/page (map_4k_raw).
     parent_pt.walk_user_pages_mut(|va, pa, parent_pte| {
-        // Mark parent COW inline — no re-walk, no per-page TLB flush
         use rux_arch::pte::PageTableEntryOps;
         crate::arch::ArchPte::set_writable(parent_pte, false);
         parent_pte.0 |= cow;
 
-        // Map child to same physical frame (read-only, no COW bit yet)
-        let _ = child_pt.unmap_4k(va);
-        let _ = child_pt.map_4k(va, pa, user_rx, alloc);
-        // Set COW bit on the child's freshly-mapped PTE
-        if let Some((child_pte, _)) = child_pt.leaf_pte_and_pa(va) {
-            (*child_pte).0 |= cow;
-        }
+        let _ = child_pt.map_4k_raw(va, pa, cow_child_flags, alloc);
 
-        // Two sharers — refcount = 2
         crate::cow::inc_ref(pa);
         crate::cow::inc_ref(pa);
     });

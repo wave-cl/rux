@@ -225,8 +225,8 @@ pub unsafe fn load_elf_to_pt(
             let phys = alloc.alloc(PageSize::FourK).expect("seg page");
             let page_ptr = phys.as_usize() as *mut u8;
 
-            // Zero the page
-            for j in 0..4096 { core::ptr::write_volatile(page_ptr.add(j), 0); }
+            // Zero the page (compiler emits memset)
+            core::ptr::write_bytes(page_ptr, 0, 4096);
 
             // Copy file data that falls within this page
             let page_va_start = va;
@@ -246,9 +246,9 @@ pub unsafe fn load_elf_to_pt(
                     let chunk = (len - read_pos).min(4096);
                     let n = reader.read_at(file_off + read_pos as u64, &mut tmp_buf[..chunk]);
                     if n == 0 { break; }
-                    for j in 0..n {
-                        *page_ptr.add(dest_off + read_pos + j) = tmp_buf[j];
-                    }
+                    core::ptr::copy_nonoverlapping(
+                        tmp_buf.as_ptr(), page_ptr.add(dest_off + read_pos), n,
+                    );
                     read_pos += n;
                 }
             }

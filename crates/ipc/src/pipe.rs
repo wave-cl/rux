@@ -60,10 +60,13 @@ pub fn read_ex(pipe_id: u8, buf: *mut u8, len: usize, can_block: bool) -> isize 
             return 0; // non-blocking fallback
         }
         let to_read = len.min(p.count);
-        for i in 0..to_read {
-            *buf.add(i) = p.buf[p.read_pos];
-            p.read_pos = (p.read_pos + 1) % PIPE_BUF_SIZE;
+        // Split into at most 2 contiguous memcpy regions (before/after ring wrap)
+        let first = to_read.min(PIPE_BUF_SIZE - p.read_pos);
+        core::ptr::copy_nonoverlapping(p.buf.as_ptr().add(p.read_pos), buf, first);
+        if first < to_read {
+            core::ptr::copy_nonoverlapping(p.buf.as_ptr(), buf.add(first), to_read - first);
         }
+        p.read_pos = (p.read_pos + to_read) % PIPE_BUF_SIZE;
         p.count -= to_read;
         to_read as isize
     }
@@ -82,10 +85,12 @@ pub fn write_ex(pipe_id: u8, buf: *const u8, len: usize, can_block: bool) -> isi
             return 0; // non-blocking fallback
         }
         let to_write = len.min(space);
-        for i in 0..to_write {
-            p.buf[p.write_pos] = *buf.add(i);
-            p.write_pos = (p.write_pos + 1) % PIPE_BUF_SIZE;
+        let first = to_write.min(PIPE_BUF_SIZE - p.write_pos);
+        core::ptr::copy_nonoverlapping(buf, p.buf.as_mut_ptr().add(p.write_pos), first);
+        if first < to_write {
+            core::ptr::copy_nonoverlapping(buf.add(first), p.buf.as_mut_ptr(), to_write - first);
         }
+        p.write_pos = (p.write_pos + to_write) % PIPE_BUF_SIZE;
         p.count += to_write;
         to_write as isize
     }

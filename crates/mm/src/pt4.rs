@@ -79,6 +79,31 @@ impl<A: ArchPaging> PageTable4Level<A> {
         Ok(())
     }
 
+    /// Map a 4K page with pre-computed raw PTE flags in a single walk.
+    ///
+    /// Unlike `map_4k`, this overwrites any existing mapping (no `AlreadyMapped`
+    /// check) and takes raw arch-specific PTE flags instead of `MappingFlags`.
+    /// Used by COW fork where the child PT is freshly created and the caller
+    /// has pre-computed flags including the COW bit.
+    pub fn map_4k_raw(
+        &mut self,
+        virt: VirtAddr,
+        phys: PhysAddr,
+        raw_flags: u64,
+        alloc: &mut dyn FrameAllocator,
+    ) -> Result<(), MemoryError> {
+        let l3_entry = self.ensure_table(self.root, virt, PageLevel::L3, alloc)?;
+        let l2_entry = self.ensure_table(A::Pte::phys_addr(l3_entry), virt, PageLevel::L2, alloc)?;
+        let l1_entry = self.ensure_table(A::Pte::phys_addr(l2_entry), virt, PageLevel::L1, alloc)?;
+        let l0_phys = A::Pte::phys_addr(l1_entry);
+        let idx = pt_index(virt, PageLevel::L0);
+        unsafe {
+            let page = l0_phys.as_usize() as *mut PageTablePage;
+            (*page).entries[idx] = A::Pte::encode(phys, raw_flags);
+        }
+        Ok(())
+    }
+
     /// Translate a virtual address to its physical address, but only if
     /// the leaf PTE is writable. Returns `NotMapped` if not present or read-only.
     pub fn translate_writable(&self, virt: VirtAddr) -> Result<PhysAddr, MemoryError> {
@@ -317,6 +342,11 @@ impl<A: ArchPaging> PageTable4Level<A> {
 
     /// Return the architecture's COW bit value (delegates to `A::cow_bit()`).
     pub fn cow_bit() -> u64 { A::cow_bit() }
+
+    /// Convert MappingFlags to raw PTE flags (delegates to `A::mapping_to_pte_flags`).
+    pub fn pte_flags(flags: MappingFlags) -> u64 {
+        A::mapping_to_pte_flags(flags) | A::leaf_extra_flags()
+    }
 
     /// Flush the TLB for a single page (delegates to `A::flush_tlb()`).
     pub unsafe fn flush_tlb(virt: VirtAddr) { A::flush_tlb(virt); }
