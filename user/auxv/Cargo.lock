@@ -4,11 +4,11 @@ version = 4
 
 [[package]]
 name = "rux-auxv"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "rux-rt",
 ]
 
 [[package]]
 name = "rux-rt"
-version = "0.3.0"
+version = "0.4.0"
