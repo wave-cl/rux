@@ -194,7 +194,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // Check for pending signals before returning to userspace
     unsafe {
-        if !crate::syscall::PROCESS.in_vfork_child && crate::syscall::PROCESS.signal_hot.has_deliverable() {
+        if crate::syscall::PROCESS.signal_hot.has_deliverable() {
             return crate::syscall::generic_deliver_signal::<super::X86_64>(result);
         }
         // Check for pending reschedule (set by timer tick or fork).
@@ -372,9 +372,8 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let a1 = *regs.add(10);   // RSI
         let a2 = *regs.add(11);   // RDX
 
-        // Vfork/exec use generic implementation
+        // Exec uses generic implementation
         let result: i64 = match nr {
-            57 => crate::syscall::generic_vfork::<super::X86_64>() as i64,
             59 => { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); 0 }
             _ => {
                 let sc = translate_x86_64(nr as usize);

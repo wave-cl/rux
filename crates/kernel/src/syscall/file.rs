@@ -144,7 +144,7 @@ pub fn close(fd: usize) -> isize {
         } else {
             None
         };
-        let r = fdt::sys_close(fd, crate::syscall::PROCESS.in_vfork_child, Some(&crate::pipe::PIPE));
+        let r = fdt::sys_close(fd, Some(&crate::pipe::PIPE));
         if let Some(pid) = pipe_id {
             crate::pipe::wake_pipe_waiters(pid);
         }
@@ -159,7 +159,7 @@ pub fn dup(oldfd: usize) -> isize {
 
 /// dup2(oldfd, newfd) — POSIX.1
 pub fn dup2(oldfd: usize, newfd: usize) -> isize {
-    unsafe { fdt::sys_dup2(oldfd, newfd, crate::syscall::PROCESS.in_vfork_child, Some(&crate::pipe::PIPE)) }
+    unsafe { fdt::sys_dup2(oldfd, newfd, Some(&crate::pipe::PIPE)) }
 }
 
 /// lseek(fd, offset, whence) — POSIX.1

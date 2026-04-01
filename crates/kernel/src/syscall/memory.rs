@@ -80,6 +80,67 @@ pub fn munmap(addr: usize, len: usize) -> isize {
     0
 }
 
+// ── Futex ──────────────────────────────────────────────────────────────
+
+/// futex(uaddr, op, val, ...) — Linux: fast userspace mutex.
+/// Supports FUTEX_WAIT (block if *uaddr == val) and FUTEX_WAKE (wake N waiters).
+pub fn futex(uaddr: usize, op: usize, val: usize) -> isize {
+    const FUTEX_WAIT: usize = 0;
+    const FUTEX_WAKE: usize = 1;
+
+    match op & 0x7F { // mask off FUTEX_PRIVATE_FLAG
+        FUTEX_WAIT => futex_wait(uaddr, val as u32),
+        FUTEX_WAKE => futex_wake(uaddr, val),
+        _ => 0, // unsupported ops succeed silently
+    }
+}
+
+fn futex_wait(uaddr: usize, expected: u32) -> isize {
+    unsafe {
+        use crate::task_table::*;
+        use rux_sched::SchedClassOps;
+
+        // Atomic check: if value changed since caller checked, return EAGAIN
+        if uaddr == 0 || *(uaddr as *const u32) != expected {
+            return -11; // -EAGAIN
+        }
+
+        // Block until woken by FUTEX_WAKE
+        let idx = CURRENT_TASK_IDX;
+        TASK_TABLE[idx].state = TaskState::WaitingForFutex;
+        TASK_TABLE[idx].futex_addr = uaddr;
+        let sched = crate::scheduler::get();
+        sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
+        sched.dequeue_current();
+        sched.schedule();
+        0
+    }
+}
+
+/// Wake up to `max_wake` tasks waiting on the futex at `uaddr`.
+/// Returns the number of tasks woken.
+pub fn futex_wake(uaddr: usize, max_wake: usize) -> isize {
+    unsafe {
+        use crate::task_table::*;
+        use rux_sched::SchedClassOps;
+
+        let sched = crate::scheduler::get();
+        let mut woken = 0usize;
+        for i in 0..MAX_PROCS {
+            if woken >= max_wake { break; }
+            if TASK_TABLE[i].active
+                && TASK_TABLE[i].state == TaskState::WaitingForFutex
+                && TASK_TABLE[i].futex_addr == uaddr
+            {
+                TASK_TABLE[i].state = TaskState::Ready;
+                sched.wake_task(i);
+                woken += 1;
+            }
+        }
+        woken as isize
+    }
+}
+
 /// poll(fds, nfds, timeout) — POSIX.1: check fd readiness.
 /// Returns number of fds with events, or 0 on timeout.
 pub fn poll(fds_ptr: usize, nfds: usize, _timeout: usize) -> isize {

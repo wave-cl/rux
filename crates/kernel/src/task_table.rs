@@ -30,6 +30,8 @@ pub enum TaskState {
     Zombie = 5,
     /// Blocked on pipe read/write.
     WaitingForPipe = 6,
+    /// Blocked on futex (FUTEX_WAIT).
+    WaitingForFutex = 7,
 }
 
 /// Per-process state container.
@@ -48,7 +50,6 @@ pub struct TaskSlot {
     pub program_brk: usize,
     pub mmap_base: usize,
     pub fs_ctx: FsContext,
-    pub in_vfork_child: bool,
     pub signal_hot: SignalHot,
     // Note: signal_cold (3112 bytes) is NOT per-task — too large.
     // All processes share the global PROCESS.signal_cold for now.
@@ -74,6 +75,7 @@ pub struct TaskSlot {
     pub tgid: u32,              // thread group ID (what getpid returns)
     pub clone_flags: u32,       // CLONE_* flags used to create this task
     pub clear_child_tid: usize, // address to write 0 + futex wake on exit
+    pub futex_addr: usize,      // address being waited on (WaitingForFutex)
 }
 
 impl TaskSlot {
@@ -85,14 +87,13 @@ impl TaskSlot {
             program_brk: 0,
             mmap_base: 0x10000000,
             fs_ctx: FsContext::new(),
-            in_vfork_child: false,
             signal_hot: SignalHot::new(),
             signal_restorer: [0; 32],
             fds: [EMPTY_FD; 64],
             pt_root: 0,
             kstack_top: 0, saved_ksp: 0,
             saved_user_sp: 0, tls: 0, asid: 0,
-            tgid: 0, clone_flags: 0, clear_child_tid: 0,
+            tgid: 0, clone_flags: 0, clear_child_tid: 0, futex_addr: 0,
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
             waiting_pipe_id: 0,
@@ -208,7 +209,6 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     old.program_brk = PROCESS.program_brk;
     old.mmap_base = PROCESS.mmap_base;
     old.fs_ctx = PROCESS.fs_ctx;
-    old.in_vfork_child = PROCESS.in_vfork_child;
     old.signal_hot = PROCESS.signal_hot;
     core::ptr::copy_nonoverlapping(
         PROCESS.signal_restorer.as_ptr(), old.signal_restorer.as_mut_ptr(), 32,
@@ -239,7 +239,6 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     PROCESS.program_brk = new.program_brk;
     PROCESS.mmap_base = new.mmap_base;
     PROCESS.fs_ctx = new.fs_ctx;
-    PROCESS.in_vfork_child = new.in_vfork_child;
     PROCESS.signal_hot = new.signal_hot;
     core::ptr::copy_nonoverlapping(
         new.signal_restorer.as_ptr(), PROCESS.signal_restorer.as_mut_ptr(), 32,

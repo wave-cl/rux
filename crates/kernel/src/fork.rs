@@ -34,7 +34,7 @@ pub unsafe fn sys_fork() -> isize {
     child.program_brk = parent.program_brk;
     child.mmap_base = parent.mmap_base;
     child.fs_ctx = parent.fs_ctx;
-    child.in_vfork_child = false;
+
     child.signal_hot = parent.signal_hot;
     // Don't copy signal_cold (handlers) — child inherits via PROCESS global
     child.signal_restorer = parent.signal_restorer;
@@ -133,7 +133,7 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
     child.program_brk = parent.program_brk;
     child.mmap_base = parent.mmap_base;
     child.fs_ctx = parent.fs_ctx;
-    child.in_vfork_child = false;
+
     child.signal_hot = rux_proc::signal::SignalHot::new(); // threads start with no pending signals
     child.signal_restorer = parent.signal_restorer;
     child.last_child_exit = 0;
@@ -204,7 +204,6 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.program_brk = crate::syscall::PROCESS.program_brk;
     slot.mmap_base = crate::syscall::PROCESS.mmap_base;
     slot.fs_ctx = crate::syscall::PROCESS.fs_ctx;
-    slot.in_vfork_child = crate::syscall::PROCESS.in_vfork_child;
     slot.signal_hot = crate::syscall::PROCESS.signal_hot;
     slot.signal_restorer = crate::syscall::PROCESS.signal_restorer;
     slot.last_child_exit = crate::syscall::PROCESS.last_child_exit;

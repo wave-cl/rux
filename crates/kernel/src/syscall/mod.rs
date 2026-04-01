@@ -27,7 +27,6 @@ pub struct ProcessState {
     /// Whether there's a child to collect.
     pub child_available: bool,
     /// Whether we're in a vfork child context (skip pipe ref counting in close).
-    pub in_vfork_child: bool,
     /// Signal pending/blocked bitmasks (hot path — checked every syscall return).
     pub signal_hot: rux_proc::signal::SignalHot,
     /// Signal handler table and RT queue (cold path).
@@ -44,7 +43,6 @@ impl ProcessState {
             fs_ctx: rux_proc::fs::FsContext::new(),
             last_child_exit: 0,
             child_available: false,
-            in_vfork_child: false,
             signal_hot: rux_proc::signal::SignalHot::new(),
             signal_cold: rux_proc::signal::SignalCold::new(),
             signal_restorer: [0; 32],
@@ -248,7 +246,8 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Mprotect | Syscall::Faccessat | Syscall::Access |
         Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
         Syscall::Getgroups | Syscall::Getrlimit |
-        Syscall::SetRobustList | Syscall::Futex |
+        Syscall::Futex => posix::futex(a0, a1, a2),
+        Syscall::SetRobustList |
         Syscall::SchedGetaffinity | Syscall::Prctl => 0,
 
         // tgkill(tgid, tid, sig) / tkill(tid, sig) — route to kill()
@@ -278,131 +277,7 @@ pub trait SyscallTranslate {
     fn translate(nr: usize) -> Syscall;
 }
 
-// ── Generic vfork/exec ─────────────────────────────────────────────────
-
-/// Saved parent process state for vfork (architecture-independent).
-static mut VFORK_SAVED: ProcessState = ProcessState::new();
-static mut VFORK_PARENT_USER_SP: usize = 0;
-static mut VFORK_PARENT_TLS: u64 = 0;       // register-width, set by arch VforkContext
-static mut VFORK_PARENT_PT_ROOT: u64 = 0;   // register-width, set by arch VforkContext
-static mut VFORK_PARENT_FDS: [rux_fs::fdtable::OpenFile; 64] = [rux_fs::fdtable::OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false, is_console: false,
-    is_pipe: false, pipe_id: 0, pipe_write: false,
-}; 64];
-
-/// Page snapshot state for vfork (save/restore writable user pages).
-static mut VFORK_SNAPSHOT: rux_mm::snapshot::PageSnapshot = rux_mm::snapshot::PageSnapshot::new();
-
-/// Generic vfork implementation. The arch provides hardware primitives
-/// via the `VforkContext` trait; this function handles the algorithm.
-///
-/// # Safety
-/// Manipulates process state, page tables, and performs setjmp/longjmp.
-#[cfg(feature = "native")]
-pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
-    panic!("vfork not supported in native mode")
-}
-
-#[cfg(not(feature = "native"))]
-#[inline(never)]
-pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
-    // 1. Save arch-specific register state
-    V::save_regs();
-    VFORK_PARENT_USER_SP = V::save_user_sp();
-    VFORK_PARENT_TLS = V::save_tls();
-
-    // 2. Save process state that exec resets
-    core::ptr::copy_nonoverlapping(&PROCESS, &mut VFORK_SAVED, 1);
-    for i in 0..64 { VFORK_PARENT_FDS[i] = (*rux_fs::fdtable::FD_TABLE)[i]; }
-    PROCESS.child_available = true;
-
-    // 3. setjmp — returns 0 on first call, child PID on longjmp
-    let val = V::setjmp();
-    if val == 0 {
-        // ── Child path ─────────────────────────────────────────────
-        PROCESS.in_vfork_child = true;
-
-        // Copy parent stack pages to child VA to prevent corruption
-        use rux_mm::FrameAllocator;
-        let alloc = crate::kstate::alloc();
-        let parent_sp = VFORK_PARENT_USER_SP;
-        let parent_page_base = parent_sp & !0xFFF;
-        let child_stack_pages = 4usize;
-        let child_va_base = V::CHILD_STACK_VA;
-
-        let mut upt = current_user_page_table();
-        let flags = rux_mm::MappingFlags::READ
-            .or(rux_mm::MappingFlags::WRITE)
-            .or(rux_mm::MappingFlags::USER);
-
-        for p in 0..child_stack_pages {
-            let src_va = parent_page_base - (child_stack_pages - 1 - p) * 4096;
-            let dst_va = child_va_base + p * 4096;
-            let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("child stack");
-            let src = src_va as *const u8;
-            let dst = frame.as_usize() as *mut u8;
-            for j in 0..4096 { *dst.add(j) = *src.add(j); }
-            let _ = upt.unmap_4k(rux_klib::VirtAddr::new(dst_va as usize));
-            let _ = upt.map_4k(rux_klib::VirtAddr::new(dst_va as usize), frame, flags, alloc);
-        }
-
-        // Adjust SP to child stack
-        let offset_in_page = parent_sp - parent_page_base;
-        let child_top_va = child_va_base + (child_stack_pages - 1) * 4096;
-        V::set_user_sp(child_top_va + offset_in_page);
-
-        // Snapshot parent's writable user pages so forkchild() modifications
-        // can be undone when the parent resumes.
-        let stack_page = parent_sp & !0xFFF;
-        VFORK_SNAPSHOT.snapshot_ranges(
-            &mut upt, alloc,
-            VFORK_SAVED.program_brk, VFORK_SAVED.mmap_base,
-            stack_page, child_stack_pages,
-        );
-
-        return 0; // child gets fork return 0
-    } else {
-        // ── Parent resume ──────────────────────────────────────────
-
-        // Restore page table root (exec replaced it)
-        if VFORK_PARENT_PT_ROOT != 0 {
-            V::write_pt_root(VFORK_PARENT_PT_ROOT);
-        }
-
-        V::clear_jmp();
-        PROCESS.in_vfork_child = false;
-
-        // Restore parent's snapshotted pages and free snapshot copies.
-        VFORK_SNAPSHOT.restore_and_free(crate::kstate::alloc());
-
-        // Restore process state
-        core::ptr::copy_nonoverlapping(&VFORK_SAVED, &mut PROCESS, 1);
-        for i in 0..64 { (*rux_fs::fdtable::FD_TABLE)[i] = VFORK_PARENT_FDS[i]; }
-
-        // Fix fd 0-2: in real Linux, fork() gives each process its own fd
-        // table, so shell redirects (dup2(file, 0)) before fork only affect
-        // the child.  In our single-process vfork model the redirect is
-        // captured in VFORK_PARENT_FDS.  After restore, fd 0-2 may still
-        // point to a file instead of the console.  Reset any non-pipe
-        // file-backed fd 0-2 to console so the parent shell works correctly.
-        // Pipe redirects are left alone — the shell manages pipe lifecycle.
-        for i in 0..3 {
-            let f = &(*rux_fs::fdtable::FD_TABLE)[i];
-            if f.active && !f.is_console && !f.is_pipe {
-                (*rux_fs::fdtable::FD_TABLE)[i] = rux_fs::fdtable::OpenFile {
-                    ino: 0, offset: 0, flags: 0, active: true, is_console: true,
-                    is_pipe: false, pipe_id: 0, pipe_write: false,
-                };
-            }
-        }
-
-        // Restore TLS
-        V::restore_tls(VFORK_PARENT_TLS);
-
-        // Restore registers and return to user mode
-        V::restore_and_return_to_user(val, VFORK_PARENT_USER_SP);
-    }
-}
+// ── Generic exec ──────────────────────────────────────────────────────
 
 /// Generic exec implementation.
 ///
@@ -430,11 +305,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
         Err(_) => { crate::arch::Arch::write_str("rux: exec: not found\n"); loop {} }
     };
 
-    // Save page table root so parent can restore on vfork resume.
-    // The exec will create a new page table, replacing the current one.
-    VFORK_PARENT_PT_ROOT = V::read_pt_root();
-
-    // Task slot 0 is the init/vfork process. For real fork children (slot > 0),
+    // Task slot 0 is the init process. For real fork children (slot > 0),
     // we must NOT call begin_child because that would free the parent's exec frames.
     // Instead: directly switch CR3 to kernel PT, free the forked PT, skip CHILD_PAGES.
     // Fork children use free_user_address_space in waitpid for cleanup.
@@ -456,7 +327,9 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
                 rux_klib::PhysAddr::new(old_pt_root as usize)
             );
             old_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
-            crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root = 0;
+            // Set pt_root to kernel PT (not 0) so if preempted before the new
+            // user PT is loaded, swap_process_state switches to a valid PT.
+            crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root = kpt;
         }
     } else {
         // Init/vfork path: begin_child switches CR3 and frees previous child's frames.

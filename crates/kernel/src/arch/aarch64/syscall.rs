@@ -65,7 +65,7 @@ pub fn handle_syscall(frame: *mut u8) {
         *regs.add(0) = result as u64;
 
         // Check for pending signals before returning to userspace
-        if !crate::syscall::PROCESS.in_vfork_child && crate::syscall::PROCESS.signal_hot.has_deliverable() {
+        if crate::syscall::PROCESS.signal_hot.has_deliverable() {
             crate::syscall::generic_deliver_signal::<super::Aarch64>(result);
         }
         // Check for pending reschedule (set by timer tick or fork).

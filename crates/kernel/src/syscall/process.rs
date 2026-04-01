@@ -7,13 +7,7 @@ pub fn exit(status: i32) -> ! {
     unsafe { super::PROCESS.last_child_exit = status; }
 
     unsafe {
-        use rux_arch::VforkContext;
-        // Check vfork child first — longjmp resumes the parent.
-        if crate::arch::Arch::jmp_active() {
-            crate::arch::Arch::longjmp(42);
-        }
-
-        // Forked child (not vfork): close pipe FDs, mark zombie, wake parent, schedule.
+        // Close pipe FDs, mark zombie/free, wake parent, schedule.
         use crate::task_table::*;
         let idx = CURRENT_TASK_IDX;
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
@@ -38,7 +32,7 @@ pub fn exit(status: i32) -> ! {
                 let ctid = TASK_TABLE[idx].clear_child_tid;
                 if ctid != 0 {
                     *(ctid as *mut u32) = 0;
-                    // TODO: futex_wake(ctid) to unblock pthread_join waiters
+                    super::posix::futex_wake(ctid, 1);
                 }
                 // Thread doesn't become zombie — just free the slot
                 TASK_TABLE[idx].active = false;

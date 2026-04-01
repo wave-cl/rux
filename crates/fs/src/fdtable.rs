@@ -119,7 +119,7 @@ pub fn sys_dup(oldfd: usize) -> isize {
         if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
         for newfd in FIRST_FILE_FD..MAX_FDS {
             if !(*FD_TABLE)[newfd].active {
-                return sys_dup2_inner(oldfd, newfd, false, None);
+                return sys_dup2_inner(oldfd, newfd, None);
             }
         }
         -24 // -EMFILE
@@ -135,7 +135,7 @@ pub fn sys_dupfd(oldfd: usize, minfd: usize) -> isize {
         let start = minfd.max(FIRST_FILE_FD);
         for newfd in start..MAX_FDS {
             if !(*FD_TABLE)[newfd].active {
-                return sys_dup2_inner(oldfd, newfd, false, None);
+                return sys_dup2_inner(oldfd, newfd, None);
             }
         }
         -24 // -EMFILE
@@ -143,17 +143,17 @@ pub fn sys_dupfd(oldfd: usize, minfd: usize) -> isize {
 }
 
 /// Duplicate a file descriptor. Real dup2 implementation.
-pub fn sys_dup2(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
-    sys_dup2_inner(oldfd, newfd, in_vfork, pipes)
+pub fn sys_dup2(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize {
+    sys_dup2_inner(oldfd, newfd, pipes)
 }
 
-fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
+fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize {
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
     unsafe {
         if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
         // Close newfd if it's currently open (including pipe cleanup)
         if (*FD_TABLE)[newfd].active {
-            if (*FD_TABLE)[newfd].is_pipe && !in_vfork {
+            if (*FD_TABLE)[newfd].is_pipe {
                 if let Some(p) = pipes {
                     (p.close)((*FD_TABLE)[newfd].pipe_id, (*FD_TABLE)[newfd].pipe_write);
                 }
@@ -169,7 +169,7 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&Pip
         } else {
             (*FD_TABLE)[newfd] = (*FD_TABLE)[oldfd];
             // Increment pipe ref count for the dup'd fd (skip in vfork child)
-            if (*FD_TABLE)[newfd].is_pipe && !in_vfork {
+            if (*FD_TABLE)[newfd].is_pipe {
                 if let Some(p) = pipes {
                     (p.dup_ref)((*FD_TABLE)[newfd].pipe_id, (*FD_TABLE)[newfd].pipe_write);
                 }
@@ -180,7 +180,7 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&Pip
 }
 
 /// Close a file descriptor. Returns 0 on success.
-pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
+pub fn sys_close(fd: usize, pipes: Option<&PipeFns>) -> isize {
     if fd < FIRST_FILE_FD || fd >= MAX_FDS {
         return -9; // -EBADF
     }
@@ -188,7 +188,7 @@ pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
         if !(*FD_TABLE)[fd].active {
             return -9;
         }
-        if (*FD_TABLE)[fd].is_pipe && !in_vfork {
+        if (*FD_TABLE)[fd].is_pipe {
             if let Some(p) = pipes {
                 (p.close)((*FD_TABLE)[fd].pipe_id, (*FD_TABLE)[fd].pipe_write);
             }
@@ -328,7 +328,6 @@ pub fn reset() {
 /// Returns (pipe_id, read_fd, write_fd) or error.
 pub fn create_pipe(
     pipes: &PipeFns,
-    in_vfork: bool,
 ) -> Result<(u8, isize, isize), isize> {
     let pipe_id = (pipes.alloc)()?;
 
@@ -336,7 +335,7 @@ pub fn create_pipe(
     let write_fd = match alloc_pipe_fd(pipe_id, true) {
         Ok(fd) => fd,
         Err(e) => {
-            unsafe { sys_close(read_fd as usize, in_vfork, Some(pipes)) };
+            unsafe { sys_close(read_fd as usize, Some(pipes)) };
             (pipes.close)(pipe_id, false);
             (pipes.close)(pipe_id, true);
             return Err(e);
