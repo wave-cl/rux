@@ -204,7 +204,9 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     // Signal state: copy hot (16 bytes), leave cold in place (3KB, too large to copy every switch)
     old.signal_hot = PROCESS.signal_hot;
     // TODO: signal_cold swap when we have per-process signal handlers
-    old.signal_restorer = PROCESS.signal_restorer;
+    core::ptr::copy_nonoverlapping(
+        PROCESS.signal_restorer.as_ptr(), old.signal_restorer.as_mut_ptr(), 32,
+    );
     old.last_child_exit = PROCESS.last_child_exit;
     old.child_available = PROCESS.child_available;
     core::ptr::copy_nonoverlapping(FD_TABLE.as_ptr(), old.fds.as_mut_ptr(), 64);
@@ -234,7 +236,9 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     PROCESS.fs_ctx = new.fs_ctx;
     PROCESS.in_vfork_child = new.in_vfork_child;
     PROCESS.signal_hot = new.signal_hot;
-    PROCESS.signal_restorer = new.signal_restorer;
+    core::ptr::copy_nonoverlapping(
+        new.signal_restorer.as_ptr(), PROCESS.signal_restorer.as_mut_ptr(), 32,
+    );
     PROCESS.last_child_exit = new.last_child_exit;
     PROCESS.child_available = new.child_available;
     core::ptr::copy_nonoverlapping(new.fds.as_ptr(), FD_TABLE.as_mut_ptr(), 64);

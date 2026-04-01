@@ -150,15 +150,12 @@ pub unsafe fn load_segments(data: &[u8], info: &ElfInfo) {
         // Copy file data
         let src = data.as_ptr().add(seg.file_offset as usize);
         let copy_len = seg.filesz as usize;
-        for j in 0..copy_len {
-            core::ptr::write_volatile(dest.add(j), *src.add(j));
-        }
+        core::ptr::copy_nonoverlapping(src, dest, copy_len);
 
         // Zero BSS (memsz > filesz)
-        let bss_start = copy_len;
-        let bss_end = seg.memsz as usize;
-        for j in bss_start..bss_end {
-            core::ptr::write_volatile(dest.add(j), 0);
+        let bss_len = seg.memsz as usize - copy_len;
+        if bss_len > 0 {
+            core::ptr::write_bytes(dest.add(copy_len), 0, bss_len);
         }
     }
 }

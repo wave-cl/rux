@@ -182,7 +182,7 @@ pub unsafe fn map_zeroed_pages(
     for pa in (start_va..end_va).step_by(4096) {
         let frame = alloc.alloc(PageSize::FourK).expect("map page");
         let ptr = frame.as_usize() as *mut u8;
-        for j in 0..4096 { core::ptr::write_volatile(ptr.add(j), 0); }
+        core::ptr::write_bytes(ptr, 0, 4096);
         let va = VirtAddr::new(pa as usize);
         unmap_fn(va);
         map_fn(va, frame, flags, alloc);

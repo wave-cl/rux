@@ -152,18 +152,31 @@ impl BuddyAllocator {
     }
 
     /// Allocate a block of 2^order contiguous pages.
+    /// Order-0 (4K) uses the PCP cache for O(1) fast path.
     pub fn alloc_order(&mut self, order: u8) -> Result<PhysAddr, MemoryError> {
         if order > MAX_BUDDY_ORDER {
             return Err(MemoryError::InvalidSize);
         }
-        // Use bitmap directly — no caching, maximally predictable.
+        if order == 0 {
+            if self.pcp.is_empty() { self.pcp_refill(); }
+            if !self.pcp.is_empty() {
+                self.free_frames -= 1;
+                return Ok(self.pcp.pop());
+            }
+        }
         self.buddy_alloc(order)
     }
 
     /// Deallocate a block of 2^order contiguous pages.
+    /// Order-0 (4K) goes through PCP cache, draining when overfull.
     pub fn dealloc_order(&mut self, addr: PhysAddr, order: u8) {
         self.free_frames += 1u32 << order;
-        self.buddy_dealloc(addr, order);
+        if order == 0 {
+            self.pcp.push(addr);
+            if self.pcp.is_above_high() { self.pcp_drain(); }
+        } else {
+            self.buddy_dealloc(addr, order);
+        }
     }
 
     /// Total managed memory in bytes.
