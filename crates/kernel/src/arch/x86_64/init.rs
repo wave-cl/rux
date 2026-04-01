@@ -108,10 +108,11 @@ pub fn x86_64_init(multiboot_info: usize) {
         // Enable features via CR4
         let mut cr4: u64;
         core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
+        cr4 |= 1 << 7; // PGE: Page Global Enable (required for GLOBAL bit in huge pages)
         if features.has(PCID)     { cr4 |= 1 << 17; console::write_str("rux: PCID enabled\n"); }
         if features.has(SMEP)     { cr4 |= 1 << 20; console::write_str("rux: SMEP enabled\n"); }
         if features.has(FSGSBASE) { cr4 |= 1 << 16; console::write_str("rux: FSGSBASE enabled\n"); }
-        // SMAP (CR4 bit 21) deferred — requires stac/clac around user memory access
+        // SMAP (CR4 bit 21) — enabled after all user access sites are wrapped with stac/clac
         core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
     }
 
@@ -205,7 +206,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             let rwx = rux_mm::MappingFlags::READ
                 .or(rux_mm::MappingFlags::WRITE)
                 .or(rux_mm::MappingFlags::EXECUTE);
-            kpt.identity_map_range(
+            kpt.identity_map_range_huge(
                 rux_klib::PhysAddr::new(0),
                 128 * 1024 * 1024,
                 rwx,
