@@ -310,3 +310,72 @@ pub unsafe fn load_elf_to_pt(
 
     (stack_top, max_end)
 }
+
+/// Load ELF segments at a base address offset (for ET_DYN / dynamic linker).
+///
+/// Same as `load_elf_to_pt` but adds `base` to all virtual addresses.
+/// Does NOT map a stack (caller manages that). Returns max_segment_end.
+///
+/// # Safety
+/// Same as `load_elf_to_pt`.
+pub unsafe fn load_elf_to_pt_at_base(
+    info: &ElfInfo,
+    reader: &mut dyn ElfReader,
+    pt: &mut dyn ElfPageTable,
+    alloc: &mut dyn FrameAllocator,
+    base: u64,
+) -> u64 {
+    let mut tmp_buf = [0u8; 4096];
+    let mut max_end: u64 = 0;
+
+    for i in 0..info.num_segments {
+        let seg = &info.segments[i];
+        let vaddr_base = (base + seg.vaddr) & !0xFFF;
+        let vaddr_end = ((base + seg.vaddr + seg.memsz) + 0xFFF) & !0xFFF;
+        let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
+
+        if vaddr_end > max_end { max_end = vaddr_end; }
+
+        let mut flags = MappingFlags::USER;
+        if seg.flags & PF_R != 0 { flags = flags.or(MappingFlags::READ); }
+        if seg.flags & PF_W != 0 { flags = flags.or(MappingFlags::WRITE); }
+        if seg.flags & PF_X != 0 { flags = flags.or(MappingFlags::EXECUTE); }
+
+        for p in 0..num_pages {
+            let va = vaddr_base + (p as u64) * 4096;
+            let phys = alloc.alloc(PageSize::FourK).expect("interp page");
+            let page_ptr = phys.as_usize() as *mut u8;
+            core::ptr::write_bytes(page_ptr, 0, 4096);
+
+            let page_va_start = va;
+            let page_va_end = va + 4096;
+            let seg_file_start = base + seg.vaddr;
+            let seg_file_end = base + seg.vaddr + seg.filesz;
+            let copy_start = page_va_start.max(seg_file_start);
+            let copy_end = page_va_end.min(seg_file_end);
+
+            if copy_start < copy_end {
+                let file_off = seg.file_offset + (copy_start - (base + seg.vaddr));
+                let dest_off = (copy_start - page_va_start) as usize;
+                let len = (copy_end - copy_start) as usize;
+
+                let mut read_pos = 0;
+                while read_pos < len {
+                    let chunk = (len - read_pos).min(4096);
+                    let n = reader.read_at(file_off + read_pos as u64, &mut tmp_buf[..chunk]);
+                    if n == 0 { break; }
+                    core::ptr::copy_nonoverlapping(
+                        tmp_buf.as_ptr(), page_ptr.add(dest_off + read_pos), n,
+                    );
+                    read_pos += n;
+                }
+            }
+
+            let va_addr = VirtAddr::new(va as usize);
+            pt.unmap_4k(va_addr);
+            pt.map_4k(va_addr, phys, flags, alloc);
+        }
+    }
+
+    max_end
+}
