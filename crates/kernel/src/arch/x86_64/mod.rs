@@ -83,5 +83,9 @@ unsafe impl super::KernelMapOps for X86_64 {
         let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
         pt.identity_map_range(PhysAddr::new(0), 128 * 1024 * 1024, kflags, alloc)
             .expect("kernel map");
+        // Map LAPIC MMIO (0xFEE00000) for SMP support
+        let dev_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::NO_CACHE);
+        pt.identity_map_range(PhysAddr::new(0xFEE00000), 4096, dev_flags, alloc)
+            .expect("lapic map");
     }
 }

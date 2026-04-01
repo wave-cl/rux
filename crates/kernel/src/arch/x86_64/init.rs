@@ -210,7 +210,14 @@ pub fn x86_64_init(multiboot_info: usize) {
                 rwx,
                 alloc,
             ).expect("identity map failed");
-            console::write_str("rux: identity mapped 0-128 MiB\n");
+            // Map LAPIC MMIO for SMP
+            let dev_flags = rux_mm::MappingFlags::READ
+                .or(rux_mm::MappingFlags::WRITE)
+                .or(rux_mm::MappingFlags::NO_CACHE);
+            kpt.identity_map_range(
+                rux_klib::PhysAddr::new(0xFEE00000), 4096, dev_flags, alloc,
+            ).expect("lapic map");
+            console::write_str("rux: identity mapped 0-128 MiB + LAPIC\n");
 
             super::paging::activate(&kpt);
             pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
@@ -226,12 +233,58 @@ pub fn x86_64_init(multiboot_info: usize) {
     // ── Init scheduler (needed for vfork/exec) ──────────────────────────
     unsafe { scheduler::init_context_fns(); }
 
-    // ── SMP: LAPIC + AP startup ──────────────────────────────────────────
-    // LAPIC init and AP startup require identity-mapping 0xFEE00000 (LAPIC MMIO)
-    // and careful timing (INIT-SIPI protocol needs PIT delays). Deferred to
-    // after the scheduler and boot sequence are complete.
-    // The infrastructure (apic.rs, ap_trampoline.S, gdt::init_ap) is ready.
-    // TODO: add a post-boot AP startup phase.
+    // ── SMP: LAPIC init + AP startup ────────────────────────────────────
+    // LAPIC MMIO is now mapped (identity_map_range in kpt setup above).
+    // PIT timer is running (initialized above). Safe to init LAPIC and start APs.
+    unsafe {
+        super::apic::init_bsp();
+        let bsp_id = super::apic::bsp_id();
+        console::write_str("rux: BSP LAPIC ID=");
+        let mut buf2 = [0u8; 10];
+        console::write_str(rux_klib::fmt::u32_to_str(&mut buf2, bsp_id));
+        console::write_str("\n");
+
+        // Copy AP trampoline to physical 0x8000
+        extern "C" {
+            static ap_trampoline_start: u8;
+            static ap_trampoline_end: u8;
+        }
+        let src = &ap_trampoline_start as *const u8;
+        let end = &ap_trampoline_end as *const u8;
+        let size = end as usize - src as usize;
+        core::ptr::copy_nonoverlapping(src, 0x8000 as *mut u8, size);
+
+        // Fill trampoline data at 0x8F00
+        let data = 0x8F00 as *mut u64;
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
+        *data.add(0) = cr3;  // CR3
+        let ap_stack = crate::task_table::KSTACKS[1].as_ptr() as u64
+            + crate::task_table::KSTACK_SIZE as u64;
+        *data.add(1) = ap_stack;                          // stack_top
+        *data.add(2) = ap_entry as *const () as u64;      // entry_fn
+        *data.add(3) = 1;                                 // cpu_id
+
+        // INIT-SIPI-SIPI to AP 1
+        let ap_apic_id = 1u32;
+        super::apic::send_init(ap_apic_id);
+        // Busy-wait ~10ms
+        let t0 = super::pit::ticks();
+        while super::pit::ticks() - t0 < 10 { core::hint::spin_loop(); }
+        // SIPI: vector 0x08 = page 0x8000
+        super::apic::send_sipi(ap_apic_id, 0x08);
+        // Wait up to 100ms for AP online
+        let t0 = super::pit::ticks();
+        while super::pit::ticks() - t0 < 100 {
+            if crate::percpu::cpu(1).online { break; }
+            core::hint::spin_loop();
+        }
+        if crate::percpu::cpu(1).online {
+            console::write_str("rux: AP 1 online\n");
+        } else {
+            console::write_str("rux: AP 1 not responding (single-CPU)\n");
+        }
+    }
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
     unsafe {
