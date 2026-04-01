@@ -18,6 +18,7 @@
  *   +0x18: u32 cpu_id        (AP's CPU ID)
  */
 
+.att_syntax prefix
 .section .text
 
 /* Offsets into the trampoline data area */

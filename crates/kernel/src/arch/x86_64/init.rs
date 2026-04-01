@@ -226,11 +226,12 @@ pub fn x86_64_init(multiboot_info: usize) {
     // ── Init scheduler (needed for vfork/exec) ──────────────────────────
     unsafe { scheduler::init_context_fns(); }
 
-    // ── Start APs (secondary CPUs) ──────────────────────────────────────
-    // APs enter ap_entry() which sets up per-CPU state and enters idle loop.
-    // Currently informational — AP count from APIC, actual startup deferred
-    // until the AP trampoline assembly is linked into the kernel binary.
-    // TODO: copy trampoline to 0x8000, send INIT-SIPI to each AP
+    // ── SMP: LAPIC + AP startup ──────────────────────────────────────────
+    // LAPIC init and AP startup require identity-mapping 0xFEE00000 (LAPIC MMIO)
+    // and careful timing (INIT-SIPI protocol needs PIT delays). Deferred to
+    // after the scheduler and boot sequence are complete.
+    // The infrastructure (apic.rs, ap_trampoline.S, gdt::init_ap) is ready.
+    // TODO: add a post-boot AP startup phase.
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
     unsafe {

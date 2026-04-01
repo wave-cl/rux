@@ -13,6 +13,8 @@ pub mod apic;
 
 // Include boot assembly: multiboot1 header + 32→64 bit transition
 core::arch::global_asm!(include_str!("boot.S"));
+// AP trampoline: 16-bit → long mode startup code, copied to 0x8000 at runtime
+core::arch::global_asm!(include_str!("ap_trampoline.S"));
 
 /// Zero-sized marker type for x86_64 architecture trait implementations.
 pub struct X86_64;
