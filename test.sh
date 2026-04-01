@@ -57,6 +57,7 @@ OUTPUT=$( { sleep 4; \
     printf 'mkdir /tmp/d && ls /tmp\n'; sleep 1; \
     printf 'echo -n abcd | wc -c\n'; sleep 2; \
     printf 'seq 1 3\n'; sleep 1; \
+    printf '/bin/auxv\n'; sleep 2; \
     printf 'basename /usr/bin/id\n'; sleep 1; \
     printf 'cat /proc/self/status\n'; sleep 2; \
     printf 'true && echo ok42\n'; sleep 1; \
@@ -152,6 +153,7 @@ check "symlink"                 "busybox"
 check "mkdir"                   "d"
 check "wc -c (pipe)"            "4"
 check "seq"                     "3"
+check "auxv verifier"           "auxv_ok"
 check "basename"                "id"
 check "proc/self/status"        "Pid:"
 check "true && echo"            "ok42"
@@ -229,6 +231,7 @@ OUTPUT=$( { sleep 8; \
     printf 'mkdir /tmp/d && ls /tmp\n'; sleep 3; \
     printf 'echo -n abcd | wc -c\n'; sleep 3; \
     printf 'seq 1 3\n'; sleep 3; \
+    printf '/bin/auxv\n'; sleep 3; \
     printf 'basename /usr/bin/id\n'; sleep 3; \
     printf 'cat /proc/self/status\n'; sleep 3; \
     printf 'true && echo ok42\n'; sleep 3; \
@@ -322,6 +325,7 @@ check "symlink"                 "busybox"
 check "mkdir"                   "d"
 check "wc -c (pipe)"            "4"
 check "seq"                     "3"
+check "auxv verifier"           "auxv_ok"
 check "basename"                "id"
 check "proc/self/status"        "Pid:"
 check "true && echo"            "ok42"
