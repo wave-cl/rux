@@ -101,7 +101,7 @@ OUTPUT=$( { sleep 4; \
     printf 'cat /proc/$$/stat | cut -d" " -f5\n'; sleep 2; \
     printf 'exit\n'; sleep 1; \
     } | \
-    "$QEMU_X86" -cpu Haswell \
+    "$QEMU_X86" -cpu Haswell -smp 2 \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -initrd initramfs/initramfs_x86_64.cpio \
     -serial mon:stdio -display none \
@@ -111,6 +111,7 @@ OUTPUT=$( { sleep 4; \
 # Boot
 check "boot banner"             "rux 0.4.0 (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
+check "AP 1 online"             "AP 1 online"
 check "cpio unpacked"           "cpio: unpacked"
 check "procfs mounted"          "procfs mounted at /proc"
 check "exec init"               "exec /sbin/init"
