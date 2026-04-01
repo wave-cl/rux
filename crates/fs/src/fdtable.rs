@@ -41,13 +41,34 @@ pub const EMPTY_FD: OpenFile = OpenFile {
     is_pipe: false, pipe_id: 0, pipe_write: false,
 };
 
-pub static mut FD_TABLE: [OpenFile; MAX_FDS] = [EMPTY_FD; MAX_FDS];
+/// Boot-time storage used before init_pid1 points FD_TABLE at a task slot.
+static mut FD_TABLE_STORAGE: [OpenFile; MAX_FDS] = [EMPTY_FD; MAX_FDS];
+
+/// Pointer to the current task's FD array. On context switch, this is
+/// reassigned to the new task's `fds` field — no copy needed.
+/// Before init_pid1, points to FD_TABLE_STORAGE.
+pub static mut FD_TABLE: *mut [OpenFile; MAX_FDS] = core::ptr::null_mut();
+
+/// Point FD_TABLE at a task's FD array. Called on context switch and init.
+///
+/// # Safety
+/// `fds` must be a valid pointer to a `[OpenFile; MAX_FDS]` that outlives
+/// all accesses through FD_TABLE (i.e., a TaskSlot.fds field).
+#[inline(always)]
+pub unsafe fn set_active_fds(fds: *mut [OpenFile; MAX_FDS]) {
+    FD_TABLE = fds;
+}
+
+/// Point FD_TABLE at boot-time storage (used before task table exists).
+pub unsafe fn init_boot_fds() {
+    FD_TABLE = &mut FD_TABLE_STORAGE as *mut [OpenFile; MAX_FDS];
+}
 
 /// Get the inode for a file descriptor (for getdents to read directory).
 pub fn get_fd_inode(fd: usize) -> Option<u64> {
     unsafe {
-        if fd < MAX_FDS && FD_TABLE[fd].active {
-            Some(FD_TABLE[fd].ino)
+        if fd < MAX_FDS && (*FD_TABLE)[fd].active {
+            Some((*FD_TABLE)[fd].ino)
         } else {
             None
         }
@@ -67,7 +88,7 @@ pub fn sys_open<F: FileSystem>(path: &[u8], fs: &mut F) -> isize {
 pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) -> isize {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
-            if !FD_TABLE[fd].active {
+            if !(*FD_TABLE)[fd].active {
                 let mut offset = 0usize;
                 // O_APPEND: start at end of file
                 if flags & 0x400 != 0 {
@@ -80,7 +101,7 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
                 if flags & 0x200 != 0 {
                     let _ = fs.truncate(ino, 0);
                 }
-                FD_TABLE[fd] = OpenFile {
+                (*FD_TABLE)[fd] = OpenFile {
                     ino: ino as u64, offset, flags, active: true, is_console: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                 };
@@ -95,9 +116,9 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
 pub fn sys_dup(oldfd: usize) -> isize {
     if oldfd >= MAX_FDS { return -9; }
     unsafe {
-        if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
+        if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
         for newfd in FIRST_FILE_FD..MAX_FDS {
-            if !FD_TABLE[newfd].active {
+            if !(*FD_TABLE)[newfd].active {
                 return sys_dup2_inner(oldfd, newfd, false, None);
             }
         }
@@ -110,10 +131,10 @@ pub fn sys_dup(oldfd: usize) -> isize {
 pub fn sys_dupfd(oldfd: usize, minfd: usize) -> isize {
     if oldfd >= MAX_FDS { return -9; }
     unsafe {
-        if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
+        if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
         let start = minfd.max(FIRST_FILE_FD);
         for newfd in start..MAX_FDS {
-            if !FD_TABLE[newfd].active {
+            if !(*FD_TABLE)[newfd].active {
                 return sys_dup2_inner(oldfd, newfd, false, None);
             }
         }
@@ -129,28 +150,28 @@ pub fn sys_dup2(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&PipeF
 fn sys_dup2_inner(oldfd: usize, newfd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
     unsafe {
-        if oldfd > 2 && !FD_TABLE[oldfd].active { return -9; }
+        if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
         // Close newfd if it's currently open (including pipe cleanup)
-        if FD_TABLE[newfd].active {
-            if FD_TABLE[newfd].is_pipe && !in_vfork {
+        if (*FD_TABLE)[newfd].active {
+            if (*FD_TABLE)[newfd].is_pipe && !in_vfork {
                 if let Some(p) = pipes {
-                    (p.close)(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
+                    (p.close)((*FD_TABLE)[newfd].pipe_id, (*FD_TABLE)[newfd].pipe_write);
                 }
             }
-            FD_TABLE[newfd].active = false;
+            (*FD_TABLE)[newfd].active = false;
         }
-        if oldfd <= 2 && (!FD_TABLE[oldfd].active || FD_TABLE[oldfd].is_console) {
+        if oldfd <= 2 && (!(*FD_TABLE)[oldfd].active || (*FD_TABLE)[oldfd].is_console) {
             // Duping a console fd (stdin/stdout/stderr not redirected)
-            FD_TABLE[newfd] = OpenFile {
+            (*FD_TABLE)[newfd] = OpenFile {
                 ino: 0, offset: 0, flags: 0, active: true, is_console: true,
                 is_pipe: false, pipe_id: 0, pipe_write: false,
             };
         } else {
-            FD_TABLE[newfd] = FD_TABLE[oldfd];
+            (*FD_TABLE)[newfd] = (*FD_TABLE)[oldfd];
             // Increment pipe ref count for the dup'd fd (skip in vfork child)
-            if FD_TABLE[newfd].is_pipe && !in_vfork {
+            if (*FD_TABLE)[newfd].is_pipe && !in_vfork {
                 if let Some(p) = pipes {
-                    (p.dup_ref)(FD_TABLE[newfd].pipe_id, FD_TABLE[newfd].pipe_write);
+                    (p.dup_ref)((*FD_TABLE)[newfd].pipe_id, (*FD_TABLE)[newfd].pipe_write);
                 }
             }
         }
@@ -164,15 +185,15 @@ pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
         return -9; // -EBADF
     }
     unsafe {
-        if !FD_TABLE[fd].active {
+        if !(*FD_TABLE)[fd].active {
             return -9;
         }
-        if FD_TABLE[fd].is_pipe && !in_vfork {
+        if (*FD_TABLE)[fd].is_pipe && !in_vfork {
             if let Some(p) = pipes {
-                (p.close)(FD_TABLE[fd].pipe_id, FD_TABLE[fd].pipe_write);
+                (p.close)((*FD_TABLE)[fd].pipe_id, (*FD_TABLE)[fd].pipe_write);
             }
         }
-        FD_TABLE[fd].active = false;
+        (*FD_TABLE)[fd].active = false;
     }
     0
 }
@@ -181,8 +202,8 @@ pub fn sys_close(fd: usize, in_vfork: bool, pipes: Option<&PipeFns>) -> isize {
 pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
-            if !FD_TABLE[fd].active {
-                FD_TABLE[fd] = OpenFile {
+            if !(*FD_TABLE)[fd].active {
+                (*FD_TABLE)[fd] = OpenFile {
                     ino: 0, offset: 0, flags: 0, active: true, is_console: false,
                     is_pipe: true, pipe_id, pipe_write: is_write,
                 };
@@ -199,13 +220,13 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
         return -9;
     }
     unsafe {
-        if !FD_TABLE[fd].active {
+        if !(*FD_TABLE)[fd].active {
             return -9;
         }
-        if FD_TABLE[fd].is_pipe {
-            return (pipes.read)(FD_TABLE[fd].pipe_id, buf, len);
+        if (*FD_TABLE)[fd].is_pipe {
+            return (pipes.read)((*FD_TABLE)[fd].pipe_id, buf, len);
         }
-        let f = &mut FD_TABLE[fd];
+        let f = &mut (*FD_TABLE)[fd];
         if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
             return if len == 0 { 0 } else { -14 }; // -EFAULT
         }
@@ -238,13 +259,13 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
         return -9;
     }
     unsafe {
-        if !FD_TABLE[fd].active {
+        if !(*FD_TABLE)[fd].active {
             return -9;
         }
-        if FD_TABLE[fd].is_pipe {
-            return (pipes.write)(FD_TABLE[fd].pipe_id, buf, len);
+        if (*FD_TABLE)[fd].is_pipe {
+            return (pipes.write)((*FD_TABLE)[fd].pipe_id, buf, len);
         }
-        let f = &mut FD_TABLE[fd];
+        let f = &mut (*FD_TABLE)[fd];
         // Validate user buffer pointer
         if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
             return if len == 0 { 0 } else { -14 }; // -EFAULT
@@ -267,10 +288,10 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
         return -9; // -EBADF
     }
     unsafe {
-        if !FD_TABLE[fd].active {
+        if !(*FD_TABLE)[fd].active {
             return -9;
         }
-        let f = &mut FD_TABLE[fd];
+        let f = &mut (*FD_TABLE)[fd];
         let new_off: i64 = match whence {
             0 => offset, // SEEK_SET
             1 => f.offset as i64 + offset, // SEEK_CUR
@@ -296,7 +317,7 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
 pub fn reset() {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
-            FD_TABLE[fd].active = false;
+            (*FD_TABLE)[fd].active = false;
         }
     }
 }
@@ -329,6 +350,6 @@ pub fn create_pipe(
 pub fn is_console_fd(fd: usize) -> bool {
     unsafe {
         if fd >= MAX_FDS { return false; }
-        !FD_TABLE[fd].active || FD_TABLE[fd].is_console
+        !(*FD_TABLE)[fd].active || (*FD_TABLE)[fd].is_console
     }
 }

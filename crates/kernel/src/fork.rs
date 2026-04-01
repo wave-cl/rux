@@ -104,9 +104,7 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.signal_restorer = crate::syscall::PROCESS.signal_restorer;
     slot.last_child_exit = crate::syscall::PROCESS.last_child_exit;
     slot.child_available = crate::syscall::PROCESS.child_available;
-    core::ptr::copy_nonoverlapping(
-        rux_fs::fdtable::FD_TABLE.as_ptr(), slot.fds.as_mut_ptr(), 64,
-    );
+    // FD_TABLE is a pointer into slot.fds — no copy needed.
 
     #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
     {

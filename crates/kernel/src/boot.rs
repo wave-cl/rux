@@ -153,15 +153,8 @@ pub unsafe fn init_native(cpio_data: &[u8]) {
     crate::task_table::init_pid1();
     { use rux_mm::FrameAllocator; crate::cow::init((*alloc_ptr).alloc_base()); }
 
-    // ── FD table: stdin / stdout / stderr ─────────────────────────────────
-    use rux_fs::fdtable::{FD_TABLE, OpenFile};
-    for i in 0..3 {
-        FD_TABLE[i] = OpenFile {
-            ino: 0, offset: 0, flags: 0,
-            active: true, is_console: true,
-            is_pipe: false, pipe_id: 0, pipe_write: false,
-        };
-    }
+    // FD table console setup is done by init_pid1() which writes to
+    // TASK_TABLE[0].fds and points FD_TABLE at it.
 
     // ── Scheduler ─────────────────────────────────────────────────────────
     crate::scheduler::init_context_fns();

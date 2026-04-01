@@ -62,7 +62,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, _timeout: usize) -> isize {
 
             if fd >= 64 { *revents_ptr = 0; continue; }
 
-            let f = &fdt::FD_TABLE[fd];
+            let f = &(*fdt::FD_TABLE)[fd];
             let mut revents: i16 = 0;
             if f.active || fd <= 2 {
                 // Console fds and active fds are always ready for I/O

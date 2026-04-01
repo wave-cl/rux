@@ -20,10 +20,10 @@ pub fn exit(status: i32) -> ! {
             // Close all pipe FDs so reader/writer counts drop correctly.
             // Without this, blocked pipe waiters never see EOF/EPIPE.
             for i in 0..64usize {
-                if rux_fs::fdtable::FD_TABLE[i].active && rux_fs::fdtable::FD_TABLE[i].is_pipe {
-                    let pid = rux_fs::fdtable::FD_TABLE[i].pipe_id;
-                    let pw = rux_fs::fdtable::FD_TABLE[i].pipe_write;
-                    rux_fs::fdtable::FD_TABLE[i].active = false;
+                if (*rux_fs::fdtable::FD_TABLE)[i].active && (*rux_fs::fdtable::FD_TABLE)[i].is_pipe {
+                    let pid = (*rux_fs::fdtable::FD_TABLE)[i].pipe_id;
+                    let pw = (*rux_fs::fdtable::FD_TABLE)[i].pipe_write;
+                    (*rux_fs::fdtable::FD_TABLE)[i].active = false;
                     (crate::pipe::PIPE.close)(pid, pw);
                     crate::pipe::wake_pipe_waiters(pid);
                 }

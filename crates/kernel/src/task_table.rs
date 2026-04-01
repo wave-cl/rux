@@ -181,6 +181,10 @@ pub unsafe fn init_pid1() {
         };
     }
     CURRENT_TASK_IDX = 0;
+
+    // Point FD_TABLE at this task's fd array — all FD accesses go directly
+    // into the slot, eliminating the copy on context switch.
+    rux_fs::fdtable::set_active_fds(&mut TASK_TABLE[0].fds);
 }
 
 // ── Context switch process state swap ─────────────────────────────────
@@ -193,23 +197,19 @@ pub unsafe fn init_pid1() {
 /// Must be called with interrupts disabled (during schedule()).
 pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     use crate::syscall::PROCESS;
-    use rux_fs::fdtable::FD_TABLE;
-
     // ── Save current globals → old slot ──────────────────────────────
+    // Note: FD_TABLE is a pointer into old.fds — no FD copy needed.
     let old = &mut TASK_TABLE[old_idx];
     old.program_brk = PROCESS.program_brk;
     old.mmap_base = PROCESS.mmap_base;
     old.fs_ctx = PROCESS.fs_ctx;
     old.in_vfork_child = PROCESS.in_vfork_child;
-    // Signal state: copy hot (16 bytes), leave cold in place (3KB, too large to copy every switch)
     old.signal_hot = PROCESS.signal_hot;
-    // TODO: signal_cold swap when we have per-process signal handlers
     core::ptr::copy_nonoverlapping(
         PROCESS.signal_restorer.as_ptr(), old.signal_restorer.as_mut_ptr(), 32,
     );
     old.last_child_exit = PROCESS.last_child_exit;
     old.child_available = PROCESS.child_available;
-    core::ptr::copy_nonoverlapping(FD_TABLE.as_ptr(), old.fds.as_mut_ptr(), 64);
 
     // Save hardware state
     #[cfg(target_arch = "x86_64")]
@@ -241,7 +241,8 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     );
     PROCESS.last_child_exit = new.last_child_exit;
     PROCESS.child_available = new.child_available;
-    core::ptr::copy_nonoverlapping(new.fds.as_ptr(), FD_TABLE.as_mut_ptr(), 64);
+    // Point FD_TABLE at the new task's fd array (pointer swap, not copy).
+    rux_fs::fdtable::set_active_fds(&mut TASK_TABLE[new_idx].fds);
 
     // Restore hardware state
     #[cfg(target_arch = "x86_64")]

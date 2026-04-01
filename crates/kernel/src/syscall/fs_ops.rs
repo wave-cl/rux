@@ -32,7 +32,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
     }
     if fd <= 2 {
         unsafe {
-            if fdt::FD_TABLE[fd].is_pipe {
+            if (*fdt::FD_TABLE)[fd].is_pipe {
                 synthetic_stat(buf, 0o10666); // S_IFIFO | 0666
                 return 0;
             }
@@ -40,7 +40,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
     }
     unsafe {
         use rux_fs::FileSystem;
-        let f = &fdt::FD_TABLE[fd];
+        let f = &(*fdt::FD_TABLE)[fd];
         if !f.active { return -9; }
         let fs = crate::kstate::fs();
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
@@ -281,7 +281,7 @@ pub fn fchmod(fd: usize, mode: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
         if fd >= 64 { return -9; }
-        let f = &rux_fs::fdtable::FD_TABLE[fd];
+        let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
         if !f.active { return -9; }
         let fs = crate::kstate::fs();
         match fs.chmod(f.ino, mode as u32) {
@@ -313,7 +313,7 @@ pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
         if fd >= 64 { return -9; }
-        let f = &rux_fs::fdtable::FD_TABLE[fd];
+        let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
         if !f.active { return -9; }
         let fs = crate::kstate::fs();
         match fs.chown(f.ino, uid as u32, gid as u32) {

@@ -24,8 +24,8 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         return len as isize;
     }
     unsafe {
-        if fd < 64 && fdt::FD_TABLE[fd].active && fdt::FD_TABLE[fd].is_pipe {
-            let pipe_id = fdt::FD_TABLE[fd].pipe_id;
+        if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+            let pipe_id = (*fdt::FD_TABLE)[fd].pipe_id;
             loop {
                 let r = rux_ipc::pipe::read_ex(pipe_id, buf as *mut u8, len, true);
                 if r != -11 {
@@ -35,7 +35,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
                 if !can_pipe_block() { return 0; }
                 pipe_block(pipe_id);
                 // After waking, re-check that the FD is still a valid pipe
-                if fd >= 64 || !fdt::FD_TABLE[fd].active || !fdt::FD_TABLE[fd].is_pipe {
+                if fd >= 64 || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
                     return 0;
                 }
             }
@@ -54,8 +54,8 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         return len as isize;
     }
     unsafe {
-        let result = if fd < 64 && fdt::FD_TABLE[fd].active && fdt::FD_TABLE[fd].is_pipe {
-            let pipe_id = fdt::FD_TABLE[fd].pipe_id;
+        let result = if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+            let pipe_id = (*fdt::FD_TABLE)[fd].pipe_id;
             loop {
                 let r = rux_ipc::pipe::write_ex(pipe_id, buf as *const u8, len, true);
                 if r != -11 {
@@ -64,7 +64,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
                 }
                 if !can_pipe_block() { break -32; }
                 pipe_block(pipe_id);
-                if fd >= 64 || !fdt::FD_TABLE[fd].active || !fdt::FD_TABLE[fd].is_pipe {
+                if fd >= 64 || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
                     break -32;
                 }
             }
@@ -83,7 +83,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         }
         // Update mtime on successful file write (skip pipes/console)
         if result > 0 && fd < 64 {
-            let f = &fdt::FD_TABLE[fd];
+            let f = &(*fdt::FD_TABLE)[fd];
             if f.active && !f.is_console && !f.is_pipe {
                 use rux_fs::FileSystem;
                 let now = super::current_time_secs();
@@ -139,8 +139,8 @@ pub fn close(fd: usize) -> isize {
     unsafe {
         // If closing a pipe end, wake any tasks blocked on that pipe so they
         // can see the new EOF / EPIPE condition.
-        let pipe_id = if fd < 64 && fdt::FD_TABLE[fd].active && fdt::FD_TABLE[fd].is_pipe {
-            Some(fdt::FD_TABLE[fd].pipe_id)
+        let pipe_id = if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+            Some((*fdt::FD_TABLE)[fd].pipe_id)
         } else {
             None
         };
@@ -177,8 +177,8 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
         3 => {
             // F_GETFL
             unsafe {
-                if fd < 64 && fdt::FD_TABLE[fd].active {
-                    fdt::FD_TABLE[fd].flags as isize
+                if fd < 64 && (*fdt::FD_TABLE)[fd].active {
+                    (*fdt::FD_TABLE)[fd].flags as isize
                 } else {
                     0
                 }

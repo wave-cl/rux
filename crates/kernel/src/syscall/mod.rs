@@ -309,7 +309,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 
     // 2. Save process state that exec resets
     core::ptr::copy_nonoverlapping(&PROCESS, &mut VFORK_SAVED, 1);
-    for i in 0..64 { VFORK_PARENT_FDS[i] = rux_fs::fdtable::FD_TABLE[i]; }
+    for i in 0..64 { VFORK_PARENT_FDS[i] = (*rux_fs::fdtable::FD_TABLE)[i]; }
     PROCESS.child_available = true;
 
     // 3. setjmp — returns 0 on first call, child PID on longjmp
@@ -373,7 +373,7 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
 
         // Restore process state
         core::ptr::copy_nonoverlapping(&VFORK_SAVED, &mut PROCESS, 1);
-        for i in 0..64 { rux_fs::fdtable::FD_TABLE[i] = VFORK_PARENT_FDS[i]; }
+        for i in 0..64 { (*rux_fs::fdtable::FD_TABLE)[i] = VFORK_PARENT_FDS[i]; }
 
         // Fix fd 0-2: in real Linux, fork() gives each process its own fd
         // table, so shell redirects (dup2(file, 0)) before fork only affect
@@ -383,9 +383,9 @@ pub unsafe fn generic_vfork<V: rux_arch::VforkContext>() -> isize {
         // file-backed fd 0-2 to console so the parent shell works correctly.
         // Pipe redirects are left alone — the shell manages pipe lifecycle.
         for i in 0..3 {
-            let f = &rux_fs::fdtable::FD_TABLE[i];
+            let f = &(*rux_fs::fdtable::FD_TABLE)[i];
             if f.active && !f.is_console && !f.is_pipe {
-                rux_fs::fdtable::FD_TABLE[i] = rux_fs::fdtable::OpenFile {
+                (*rux_fs::fdtable::FD_TABLE)[i] = rux_fs::fdtable::OpenFile {
                     ino: 0, offset: 0, flags: 0, active: true, is_console: true,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                 };
