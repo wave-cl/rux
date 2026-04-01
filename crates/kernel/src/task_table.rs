@@ -71,6 +71,9 @@ pub struct TaskSlot {
     pub last_child_exit: i32,
     pub child_available: bool,
     pub waiting_pipe_id: u8,    // pipe id when WaitingForPipe
+    pub tgid: u32,              // thread group ID (what getpid returns)
+    pub clone_flags: u32,       // CLONE_* flags used to create this task
+    pub clear_child_tid: usize, // address to write 0 + futex wake on exit
 }
 
 impl TaskSlot {
@@ -89,6 +92,7 @@ impl TaskSlot {
             pt_root: 0,
             kstack_top: 0, saved_ksp: 0,
             saved_user_sp: 0, tls: 0, asid: 0,
+            tgid: 0, clone_flags: 0, clear_child_tid: 0,
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
             waiting_pipe_id: 0,
@@ -172,6 +176,7 @@ pub unsafe fn init_pid1() {
     }
 
     slot.asid = 1; // PID 1 gets ASID 1
+    slot.tgid = 1; // PID 1's thread group is itself
 
     // Console FDs
     for i in 0..3 {

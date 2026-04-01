@@ -103,9 +103,13 @@ pub fn statfs(_path_ptr: usize, buf_ptr: usize) -> isize {
     0
 }
 
-/// set_tid_address(tidptr) — Linux-specific TLS.
-pub fn set_tid_address(_tidptr: usize) -> isize {
-    1 // TID = 1
+/// set_tid_address(tidptr) — Linux: store clear_child_tid pointer, return tid.
+pub fn set_tid_address(tidptr: usize) -> isize {
+    unsafe {
+        use crate::task_table::*;
+        TASK_TABLE[CURRENT_TASK_IDX].clear_child_tid = tidptr;
+        TASK_TABLE[CURRENT_TASK_IDX].pid as isize
+    }
 }
 
 /// sysinfo(info) — Linux-specific system information.

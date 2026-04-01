@@ -38,10 +38,15 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {
-            // nr=220 is clone(flags, ...). COW fork replaces vfork — both
-            // parent and child run concurrently with COW isolation.
+            // nr=220 is clone(flags, stack, ptid, tls, ctid)
             220 => {
-                crate::fork::sys_fork() as i64
+                let flags = a0 as usize;
+                const CLONE_VM: usize = 0x100;
+                if flags & CLONE_VM != 0 {
+                    crate::fork::sys_clone(flags, a1 as usize, a4 as usize) as i64
+                } else {
+                    crate::fork::sys_fork() as i64
+                }
             }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             139 => {

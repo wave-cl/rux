@@ -42,6 +42,8 @@ pub unsafe fn sys_fork() -> isize {
     child.child_available = false;
     child.exit_code = 0;
     child.wake_at = 0;
+    child.tgid = child_pid; // new process = new thread group
+    child.clone_flags = 0;
 
     // 4. Copy FD table + bump pipe refcounts
     for i in 0..64 {
@@ -89,6 +91,109 @@ pub unsafe fn sys_fork() -> isize {
     // 8. Mark parent as having a child available (for wait)
     TASK_TABLE[parent_idx].child_available = true;
     crate::syscall::PROCESS.child_available = true;
+
+    child_pid as isize
+}
+
+// ── Clone flags ──────────────────────────────────────────────────────
+
+const CLONE_VM: usize = 0x100;
+const CLONE_FS: usize = 0x200;
+const CLONE_FILES: usize = 0x400;
+const CLONE_SIGHAND: usize = 0x800;
+const CLONE_THREAD: usize = 0x10000;
+const CLONE_CHILD_CLEARTID: usize = 0x200000;
+
+/// clone() syscall for threads (CLONE_VM set).
+///
+/// Creates a new task sharing the parent's address space. The child uses
+/// `child_stack` as its user stack pointer. With CLONE_THREAD, the child
+/// shares the parent's thread group (getpid returns the same tgid).
+///
+/// # Safety
+/// Manipulates page tables, kernel stacks, and scheduler state.
+pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) -> isize {
+    let child_idx = match alloc_task_slot() {
+        Some(idx) => idx,
+        None => return -11,
+    };
+    let child_pid = alloc_pid();
+    let parent_idx = CURRENT_TASK_IDX;
+
+    sync_globals_to_slot(parent_idx);
+
+    let parent = &TASK_TABLE[parent_idx];
+    let child = &mut TASK_TABLE[child_idx];
+
+    child.active = true;
+    child.pid = child_pid;
+    child.ppid = parent.pid;
+    child.pgid = parent.pgid;
+    child.state = TaskState::Ready;
+    child.program_brk = parent.program_brk;
+    child.mmap_base = parent.mmap_base;
+    child.fs_ctx = parent.fs_ctx;
+    child.in_vfork_child = false;
+    child.signal_hot = rux_proc::signal::SignalHot::new(); // threads start with no pending signals
+    child.signal_restorer = parent.signal_restorer;
+    child.last_child_exit = 0;
+    child.child_available = false;
+    child.exit_code = 0;
+    child.wake_at = 0;
+    child.clone_flags = flags as u32;
+    child.clear_child_tid = if flags & CLONE_CHILD_CLEARTID != 0 { child_tid_ptr } else { 0 };
+
+    // CLONE_THREAD: same thread group (getpid returns parent's tgid)
+    child.tgid = if flags & CLONE_THREAD != 0 { parent.tgid } else { child_pid };
+
+    // CLONE_VM: share address space (same page table, no COW)
+    child.pt_root = parent.pt_root;
+    child.asid = parent.asid; // same ASID since same address space
+
+    // CLONE_FILES: share FD table (copy parent's FDs to child slot)
+    // In the pointer-swap model, each task has its own fds array.
+    // For threads, we copy the parent's FDs so both start with the same view.
+    for i in 0..64 {
+        child.fds[i] = parent.fds[i];
+        if child.fds[i].active && child.fds[i].is_pipe {
+            (crate::pipe::PIPE.dup_ref)(child.fds[i].pipe_id, child.fds[i].pipe_write);
+        }
+    }
+
+    // Set up child kernel stack with user stack from clone argument
+    child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
+    child.saved_user_sp = if child_stack != 0 { child_stack } else { parent.saved_user_sp };
+    child.tls = parent.tls;
+
+    #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
+    {
+        child.saved_ksp = setup_child_kstack_x86(child.kstack_top);
+    }
+    #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
+    {
+        child.saved_ksp = setup_child_kstack_aarch64(child.kstack_top);
+    }
+    #[cfg(feature = "native")]
+    {
+        child.saved_ksp = 0;
+    }
+
+    // Enqueue child
+    use rux_sched::SchedClassOps;
+    let sched = crate::scheduler::get();
+    let task = &mut sched.tasks[child_idx];
+    task.active = true;
+    task.saved_sp = TASK_TABLE[child_idx].saved_ksp;
+    task.entity = rux_sched::entity::SchedEntity::new(child_idx as u64);
+    task.entity.state = rux_sched::TaskState::Ready;
+    task.entity.nice = 0;
+    sched.cfs.set_clock(0, sched.clock_ns);
+    sched.cfs.enqueue(0, &mut task.entity, rux_sched::fair::constants::WF_FORK);
+
+    // Write child tid to user space if requested
+    if child_tid_ptr != 0 {
+        *(child_tid_ptr as *mut u32) = child_pid;
+    }
 
     child_pid as isize
 }

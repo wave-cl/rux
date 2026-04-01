@@ -30,22 +30,36 @@ pub fn exit(status: i32) -> ! {
             }
 
             TASK_TABLE[idx].exit_code = status;
-            TASK_TABLE[idx].state = TaskState::Zombie;
 
-            // Find parent, send SIGCHLD, wake if blocked in waitpid.
-            let ppid = TASK_TABLE[idx].ppid;
-            for i in 0..MAX_PROCS {
-                let t = &mut TASK_TABLE[i];
-                if !t.active || t.pid != ppid { continue; }
-                t.last_child_exit = status;
-                t.child_available = true;
-                // SIGCHLD (signal 17) to parent
-                t.signal_hot.pending = t.signal_hot.pending.add(17);
-                if t.state == TaskState::WaitingForChild {
-                    t.state = TaskState::Ready;
-                    crate::scheduler::get().wake_task(i);
+            // CLONE_THREAD: thread exit — write 0 to clear_child_tid, skip zombie.
+            let is_thread = TASK_TABLE[idx].clone_flags & 0x10000 != 0; // CLONE_THREAD
+            if is_thread {
+                // clear_child_tid: write 0 to user address (for pthread_join / futex)
+                let ctid = TASK_TABLE[idx].clear_child_tid;
+                if ctid != 0 {
+                    *(ctid as *mut u32) = 0;
+                    // TODO: futex_wake(ctid) to unblock pthread_join waiters
                 }
-                break;
+                // Thread doesn't become zombie — just free the slot
+                TASK_TABLE[idx].active = false;
+                TASK_TABLE[idx].state = TaskState::Free;
+            } else {
+                TASK_TABLE[idx].state = TaskState::Zombie;
+
+                // Find parent, send SIGCHLD, wake if blocked in waitpid.
+                let ppid = TASK_TABLE[idx].ppid;
+                for i in 0..MAX_PROCS {
+                    let t = &mut TASK_TABLE[i];
+                    if !t.active || t.pid != ppid { continue; }
+                    t.last_child_exit = status;
+                    t.child_available = true;
+                    t.signal_hot.pending = t.signal_hot.pending.add(17); // SIGCHLD
+                    if t.state == TaskState::WaitingForChild {
+                        t.state = TaskState::Ready;
+                        crate::scheduler::get().wake_task(i);
+                    }
+                    break;
+                }
             }
 
             // Mark entity Dead so schedule() doesn't re-enqueue us.

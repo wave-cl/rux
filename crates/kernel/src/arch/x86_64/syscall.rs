@@ -168,12 +168,17 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // Process creation syscalls (handled before generic dispatch)
     match nr {
-        // 56=clone, 57=fork, 58=vfork
-        // COW fork makes vfork unnecessary — both parent and child run
-        // concurrently with copy-on-write isolation. This eliminates the
-        // vfork deadlock where a pipe-blocking child couldn't be woken
-        // because the parent was suspended in setjmp.
-        56 | 57 | 58 => return unsafe { crate::fork::sys_fork() } as i64,
+        // 56=clone(flags, stack, ptid, ctid, tls), 57=fork, 58=vfork
+        56 => {
+            let flags = a0 as usize;
+            const CLONE_VM: usize = 0x100;
+            if flags & CLONE_VM != 0 {
+                // Thread: shared address space
+                return unsafe { crate::fork::sys_clone(flags, a1 as usize, a3 as usize) } as i64;
+            }
+            return unsafe { crate::fork::sys_fork() } as i64;
+        }
+        57 | 58 => return unsafe { crate::fork::sys_fork() } as i64,
         59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
         _ => {}
     }

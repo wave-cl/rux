@@ -208,7 +208,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Brk => linux::brk(a0),
 
         // ── Process ────────────────────────────────────────────────
-        Syscall::Getpid => crate::task_table::current_pid() as isize,
+        Syscall::Getpid => unsafe { crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].tgid as isize },
         Syscall::Getppid => crate::task_table::current_ppid() as isize,
         Syscall::Exit => posix::exit(a0 as i32),
         Syscall::ExitGroup => linux::exit_group(a0 as i32),
@@ -225,7 +225,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         // ── User/group IDs (single user: always root) ─────────────
         Syscall::Getuid | Syscall::Geteuid |
         Syscall::Getgid | Syscall::Getegid => 0, // uid=0, gid=0
-        Syscall::Gettid => 1, // TODO: return actual tid once threads exist
+        Syscall::Gettid => unsafe { crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pid as isize },
 
         // ── Process groups ────────────────────────────────────────
         Syscall::Setpgid => posix::setpgid(a0, a1),
