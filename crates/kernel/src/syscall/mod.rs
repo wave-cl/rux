@@ -8,7 +8,7 @@ pub mod linux;
 mod file;
 mod fs_ops;
 mod process;
-mod signal;
+pub(crate) mod signal;
 mod memory;
 
 // ── Shared process state ────────────────────────────────────────────

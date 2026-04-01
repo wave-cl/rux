@@ -6,22 +6,16 @@ type Arch = crate::arch::Arch;
 /// read(fd, buf, count) — POSIX.1
 pub fn read(fd: usize, buf: usize, len: usize) -> isize {
     if fd == 0 && fdt::is_console_fd(0) {
-        // stdin from console
+        // stdin from console — route through TTY line discipline
         unsafe {
+            let tty = &mut crate::tty::TTY;
             let ptr = buf as *mut u8;
-            for i in 0..len {
-                let b = Arch::read_byte();
-                if b == 0x03 {
-                    if i == 0 { return -4; } // -EINTR
-                    return i as isize;
-                }
-                *ptr.add(i) = b;
-                if b == b'\n' {
-                    return (i + 1) as isize;
-                }
-            }
+            return if tty.cooked {
+                tty.read_canonical::<Arch>(ptr, len)
+            } else {
+                tty.read_raw::<Arch>(ptr, len)
+            };
         }
-        return len as isize;
     }
     unsafe {
         if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
@@ -221,21 +215,48 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
         TCGETS => {
             if arg != 0 {
                 unsafe {
+                    let tty = &crate::tty::TTY;
                     let ptr = arg as *mut u8;
                     for i in 0..60 { *ptr.add(i) = 0; }
-                    *(arg as *mut u32) = 0x500;
-                    *((arg + 4) as *mut u32) = 0x5;
-                    *((arg + 8) as *mut u32) = 0xBF;
-                    *((arg + 12) as *mut u32) = 0x8A3B;
+                    *(arg as *mut u32) = 0x500; // c_iflag
+                    *((arg + 4) as *mut u32) = 0x5; // c_oflag
+                    *((arg + 8) as *mut u32) = 0xBF; // c_cflag
+                    // c_lflag: build from actual TTY state
+                    let mut lflag: u32 = 0;
+                    if tty.cooked { lflag |= 0x2; }   // ICANON
+                    if tty.echo   { lflag |= 0x8; }   // ECHO
+                    if tty.isig   { lflag |= 0x1; }   // ISIG
+                    lflag |= 0x8A30; // ECHOE | ECHOK | IEXTEN | ECHOCTL
+                    *((arg + 12) as *mut u32) = lflag;
+                }
+            }
+            0
+        }
+        // TCSETS / TCSETSW / TCSETSF: set terminal attributes
+        0x5402 | 0x5403 | 0x5404 => {
+            if arg != 0 {
+                unsafe {
+                    let tty = &mut crate::tty::TTY;
+                    let lflag = *((arg + 12) as *const u32);
+                    tty.cooked = lflag & 0x2 != 0; // ICANON
+                    tty.echo   = lflag & 0x8 != 0; // ECHO
+                    tty.isig   = lflag & 0x1 != 0; // ISIG
                 }
             }
             0
         }
         TIOCGPGRP => {
-            if arg != 0 { unsafe { *(arg as *mut i32) = 1; } }
+            if arg != 0 {
+                unsafe { *(arg as *mut i32) = crate::tty::TTY.foreground_pgid as i32; }
+            }
             0
         }
-        TIOCSPGRP | 0x5402 | 0x5403 | 0x5404 => 0,
+        TIOCSPGRP => {
+            if arg != 0 {
+                unsafe { crate::tty::TTY.foreground_pgid = *(arg as *const i32) as u32; }
+            }
+            0
+        }
         _ => -25 // -ENOTTY
     }
 }

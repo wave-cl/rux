@@ -36,7 +36,7 @@ pub unsafe fn sys_fork() -> isize {
     child.fs_ctx = parent.fs_ctx;
 
     child.signal_hot = parent.signal_hot;
-    // Don't copy signal_cold (handlers) — child inherits via PROCESS global
+    // TODO: per-process signal_cold (currently shared global)
     child.signal_restorer = parent.signal_restorer;
     child.last_child_exit = 0;
     child.child_available = false;
@@ -135,6 +135,7 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
     child.fs_ctx = parent.fs_ctx;
 
     child.signal_hot = rux_proc::signal::SignalHot::new(); // threads start with no pending signals
+    // TODO: per-process signal_cold (currently shared global)
     child.signal_restorer = parent.signal_restorer;
     child.last_child_exit = 0;
     child.child_available = false;

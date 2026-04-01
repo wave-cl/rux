@@ -51,8 +51,8 @@ pub struct TaskSlot {
     pub mmap_base: usize,
     pub fs_ctx: FsContext,
     pub signal_hot: SignalHot,
-    // Note: signal_cold (3112 bytes) is NOT per-task — too large.
-    // All processes share the global PROCESS.signal_cold for now.
+    // TODO: per-process signal_cold. Currently all processes share PROCESS.signal_cold.
+    // 3KB per slot (16 × 3KB = 48KB BSS) overflows aarch64 memory layout.
     pub signal_restorer: [usize; 32],
 
     // ── File descriptors (mirrors FD_TABLE global) ────────────────────
@@ -113,6 +113,7 @@ pub const KSTACK_SIZE: usize = 16384; // 16KB per task
 
 /// Per-task kernel stacks.
 pub static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_PROCS] = [[0; KSTACK_SIZE]; MAX_PROCS];
+
 
 /// Index of the currently running task in TASK_TABLE.
 pub static mut CURRENT_TASK_IDX: usize = 0;
