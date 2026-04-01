@@ -14,6 +14,7 @@ pub mod pgtrack;
 pub mod syscall;
 pub mod uaccess;
 pub mod task_table;
+pub mod percpu;
 pub mod fork;
 
 #[cfg(feature = "native")]

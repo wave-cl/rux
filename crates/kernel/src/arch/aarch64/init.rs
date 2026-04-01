@@ -5,6 +5,9 @@ use super::exit;
 use crate::{scheduler, pgtrack};
 
 pub fn aarch64_init(dtb_addr: usize) {
+    // Initialize BSP per-CPU data
+    unsafe { crate::percpu::init_bsp(); }
+
     console::write_str("rux: aarch64 running in EL1\n");
 
     // Detect CPU features from ID registers

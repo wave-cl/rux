@@ -49,6 +49,9 @@ unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
 }
 
 pub fn x86_64_init(multiboot_info: usize) {
+    // Initialize BSP per-CPU data (must be first — other code may read it)
+    unsafe { crate::percpu::init_bsp(); }
+
     // Initialize GDT with TSS — use the actual boot_stack_top from boot.S
     unsafe {
         extern "C" { static boot_stack_top: u8; }
