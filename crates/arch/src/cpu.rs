@@ -26,6 +26,23 @@ impl CpuFeatures {
     }
 }
 
+/// Global detected CPU features. Set once at boot by `set_cpu_features()`.
+static mut CPU_FEATURES: CpuFeatures = CpuFeatures::EMPTY;
+
+/// Store detected features (called once at boot).
+///
+/// # Safety
+/// Must be called before any concurrent access (single-CPU boot context).
+pub unsafe fn set_cpu_features(f: CpuFeatures) {
+    CPU_FEATURES = f;
+}
+
+/// Read the detected features. Safe after boot init completes.
+#[inline(always)]
+pub fn cpu_features() -> CpuFeatures {
+    unsafe { CPU_FEATURES }
+}
+
 /// Detect CPU features at runtime.
 pub trait CpuDetect {
     fn detect() -> CpuFeatures;

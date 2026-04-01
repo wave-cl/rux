@@ -25,6 +25,7 @@ pub const fn parse_cpuid_01(ecx: u32, edx: u32) -> CpuFeatures {
     if edx & (1 << 26) != 0 { f |= SSE2; }
     if ecx & (1 << 23) != 0 { f |= POPCNT; }
     if ecx & (1 << 21) != 0 { f |= X2APIC; }
+    if ecx & (1 << 17) != 0 { f |= PCID; }
     if ecx & (1 << 26) != 0 { f |= XSAVE; }
     CpuFeatures(f)
 }

@@ -7,6 +7,18 @@ use crate::{scheduler, pgtrack};
 pub fn aarch64_init(dtb_addr: usize) {
     console::write_str("rux: aarch64 running in EL1\n");
 
+    // Detect CPU features from ID registers
+    unsafe {
+        use rux_arch::aarch64::cpu::*;
+        let isar0: u64;
+        let pfr0: u64;
+        core::arch::asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0, options(nostack));
+        core::arch::asm!("mrs {}, id_aa64pfr0_el1", out(reg) pfr0, options(nostack));
+        let features = parse_isar0(isar0).or(parse_pfr0(pfr0));
+        rux_arch::cpu::set_cpu_features(features);
+        if features.has(ATOMICS) { console::write_str("rux: LSE atomics detected\n"); }
+    }
+
     unsafe { super::exception::init(); }
     console::write_str("rux: exception vectors installed\n");
 

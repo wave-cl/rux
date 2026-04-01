@@ -3,6 +3,51 @@
 use super::{console, exit};
 use crate::{scheduler, pgtrack};
 
+/// Detect CPU features by querying all CPUID leaves.
+unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
+    use rux_arch::x86_64::cpu::*;
+
+    // Leaf 1: basic features
+    let (ecx1, edx1): (u32, u32);
+    core::arch::asm!(
+        "push rbx", "cpuid", "pop rbx",
+        inout("eax") 1u32 => _, lateout("ecx") ecx1, lateout("edx") edx1,
+        options(nostack)
+    );
+    let f1 = parse_cpuid_01(ecx1, edx1);
+
+    // Leaf 7 subleaf 0: extended features
+    let ebx7: u64;
+    core::arch::asm!(
+        "push rbx", "cpuid", "mov {out}, rbx", "pop rbx",
+        out = out(reg) ebx7,
+        inout("eax") 7u32 => _, inout("ecx") 0u32 => _, lateout("edx") _,
+        options(nostack)
+    );
+    let ebx7 = ebx7 as u32;
+    let f7 = parse_cpuid_07(ebx7);
+
+    // Extended leaf 0x80000001: NX, GBPAGES
+    let edx_ext1: u32;
+    core::arch::asm!(
+        "push rbx", "cpuid", "pop rbx",
+        inout("eax") 0x80000001u32 => _, lateout("ecx") _, lateout("edx") edx_ext1,
+        options(nostack)
+    );
+    let fe1 = parse_cpuid_ext_01(edx_ext1);
+
+    // Extended leaf 0x80000007: invariant TSC
+    let edx_ext7: u32;
+    core::arch::asm!(
+        "push rbx", "cpuid", "pop rbx",
+        inout("eax") 0x80000007u32 => _, lateout("ecx") _, lateout("edx") edx_ext7,
+        options(nostack)
+    );
+    let fe7 = parse_cpuid_ext_07(edx_ext7);
+
+    f1.or(f7).or(fe1).or(fe7)
+}
+
 pub fn x86_64_init(multiboot_info: usize) {
     // Initialize GDT with TSS — use the actual boot_stack_top from boot.S
     unsafe {
@@ -12,25 +57,20 @@ pub fn x86_64_init(multiboot_info: usize) {
     }
     console::write_str("rux: GDT + TSS loaded\n");
 
-    // Enable PCID if supported (CPUID.01H:ECX bit 17).
-    // CR3 bit 63 = "don't flush" when PCID is active.
+    // Detect and enable CPU features
     unsafe {
-        let ecx: u32;
-        core::arch::asm!(
-            "push rbx",
-            "cpuid",
-            "pop rbx",
-            inout("eax") 1u32 => _,
-            lateout("ecx") ecx,
-            lateout("edx") _,
-            options(nostack)
-        );
-        if ecx & (1 << 17) != 0 {
-            let cr4: u64;
-            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
-            core::arch::asm!("mov cr4, {}", in(reg) cr4 | (1u64 << 17), options(nostack, preserves_flags));
-            console::write_str("rux: PCID enabled\n");
-        }
+        use rux_arch::x86_64::cpu::*;
+        let features = detect_x86_features();
+        rux_arch::cpu::set_cpu_features(features);
+
+        // Enable features via CR4
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
+        if features.has(PCID)     { cr4 |= 1 << 17; console::write_str("rux: PCID enabled\n"); }
+        if features.has(SMEP)     { cr4 |= 1 << 20; console::write_str("rux: SMEP enabled\n"); }
+        if features.has(FSGSBASE) { cr4 |= 1 << 16; console::write_str("rux: FSGSBASE enabled\n"); }
+        // SMAP (CR4 bit 21) deferred — requires stac/clac around user memory access
+        core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
     }
 
     // Initialize IDT with all exception/IRQ handlers
