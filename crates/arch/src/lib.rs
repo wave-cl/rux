@@ -16,6 +16,7 @@ pub use aarch64::context::*;
 // ── Architecture-independent modules ────────────────────────────────────
 pub mod pte;
 pub mod cpu;
+pub mod numa;
 pub mod syscall;
 pub mod stack;
 pub mod barrier;

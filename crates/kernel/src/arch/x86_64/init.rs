@@ -177,6 +177,11 @@ pub fn x86_64_init(multiboot_info: usize) {
         }
     }
 
+    // ── ACPI / NUMA topology (informational) ────────────────────────────
+    // Scan for RSDP after identity map is active (0xE0000 region accessible).
+    // Disabled on QEMU Multiboot1 — RSDP region may not be mapped correctly.
+    // TODO: re-enable once RSDP scan is validated on real hardware.
+
     // ── Init scheduler (needed for vfork/exec) ──────────────────────────
     unsafe { scheduler::init_context_fns(); }
 
