@@ -96,7 +96,8 @@ OUTPUT=$( { sleep 4; \
     printf 'cut -d: -f1 /etc/passwd\n'; sleep 2; \
     printf 'echo hello | tr a-z A-Z\n'; sleep 2; \
     printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 5; \
-    printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 2; \
+    printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 5; \
+    printf 'cat /proc/$$/stat | cut -d" " -f5\n'; sleep 2; \
     printf 'exit\n'; sleep 1; \
     } | \
     "$QEMU_X86" -cpu Haswell \
@@ -201,6 +202,7 @@ check "test -f (access)"       "accessok"
 check "cut"                    "root"
 check "tr (uppercase)"         "HELLO"
 check "tee"                    "root"
+check "proc stat pgid"         "1"
 
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
@@ -269,7 +271,8 @@ OUTPUT=$( { sleep 8; \
     printf 'cut -d: -f1 /etc/passwd\n'; sleep 3; \
     printf 'echo hello | tr a-z A-Z\n'; sleep 3; \
     printf 'trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap\n'; sleep 6; \
-    printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 3; \
+    printf 'tee /tmp/tee_out < /etc/passwd > /dev/null && cat /tmp/tee_out | head -1\n'; sleep 5; \
+    printf 'cat /proc/$$/stat | cut -d" " -f5\n'; sleep 3; \
     printf 'exit\n'; sleep 2; \
     } | \
     "$QEMU_AA64" -machine virt -cpu cortex-a72 \
@@ -372,6 +375,7 @@ check "test -f (access)"       "accessok"
 check "cut"                    "root"
 check "tr (uppercase)"         "HELLO"
 check "tee"                    "root"
+check "proc stat pgid"         "1"
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
