@@ -305,6 +305,9 @@ pub unsafe fn load_elf_to_pt(
     }
     let stack_top = stack_base + stack_pages * 4096;
 
+    // Guard page below user stack — catches stack overflow with a page fault
+    pt.unmap_4k(VirtAddr::new((stack_base - 4096) as usize));
+
     // Unmap page 0 to catch NULL dereferences
     pt.unmap_4k(VirtAddr::new(0));
 
