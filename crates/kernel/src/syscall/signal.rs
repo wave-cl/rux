@@ -15,7 +15,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     if sig == Signal::Kill || sig == Signal::Stop { return -22; }
 
     unsafe {
-        let cold = &mut super::PROCESS.signal_cold;
+        let cold = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX);
 
         // Write old action to user oldact
         if oldact_ptr != 0 {
@@ -177,7 +177,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         // Send signal to current process.
         unsafe {
             let hot = &mut super::PROCESS.signal_hot;
-            let cold = &mut super::PROCESS.signal_cold;
+            let cold = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX);
             let action = *cold.get_action(sig);
 
             // SIGKILL always terminates

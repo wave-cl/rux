@@ -112,6 +112,17 @@ pub const KSTACK_SIZE: usize = 16384; // 16KB per task
 /// Per-task kernel stacks.
 pub static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_PROCS] = [[0; KSTACK_SIZE]; MAX_PROCS];
 
+/// Per-task signal handler tables. Raw bytes to avoid linker alignment shifts.
+const SIGNAL_COLD_SIZE: usize = core::mem::size_of::<rux_proc::signal::SignalCold>();
+static mut SIGNAL_COLD_BYTES: [u8; SIGNAL_COLD_SIZE * MAX_PROCS] = [0; SIGNAL_COLD_SIZE * MAX_PROCS];
+
+#[inline(always)]
+pub unsafe fn signal_cold_mut(idx: usize) -> &'static mut rux_proc::signal::SignalCold {
+    &mut *(SIGNAL_COLD_BYTES.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE) as *mut rux_proc::signal::SignalCold)
+}
+
+
+
 
 
 

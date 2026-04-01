@@ -23,8 +23,7 @@ _start:
     add     x0, x0, :lo12:boot_stack_top
     mov     sp, x0
 
-    /* Zero BSS — required for correct static initialization.
-       Uses stp to zero 16 bytes per iteration for speed. */
+    /* Zero BSS — required for correct static initialization. */
     adrp    x1, __bss_start
     add     x1, x1, :lo12:__bss_start
     adrp    x2, __bss_end

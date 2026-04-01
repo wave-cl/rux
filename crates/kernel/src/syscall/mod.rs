@@ -338,7 +338,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 
     // Reset signal state on exec (POSIX: caught signals revert to default)
     PROCESS.signal_hot = rux_proc::signal::SignalHot::new();
-    PROCESS.signal_cold = rux_proc::signal::SignalCold::new();
+    *crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX) = rux_proc::signal::SignalCold::new();
     PROCESS.signal_restorer = [0; 32];
 
     // Reset arch-specific signal trampoline state

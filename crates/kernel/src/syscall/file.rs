@@ -68,7 +68,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         // SIGPIPE: writing to a pipe with no readers
         if result == -32 {
             use rux_proc::signal::*;
-            let cold = &super::PROCESS.signal_cold;
+            let cold: &rux_proc::signal::SignalCold = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX);
             let action = *cold.get_action(Signal::Pipe);
             if action.handler_type == SignalHandler::Default {
                 super::posix::exit(128 + 13);
