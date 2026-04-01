@@ -338,6 +338,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 
     // Reset signal state on exec (POSIX: caught signals revert to default)
     PROCESS.signal_hot = rux_proc::signal::SignalHot::new();
+    PROCESS.signal_cold = rux_proc::signal::SignalCold::new();
     *crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX) = rux_proc::signal::SignalCold::new();
     PROCESS.signal_restorer = [0; 32];
 
@@ -353,6 +354,11 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 /// Deliver a pending signal to the user-space handler.
 /// Thin wrapper around `rux_proc::signal::deliver_signal` that supplies kernel state.
 pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64) -> i64 {
+    // Signal delivery uses PROCESS.signal_cold (global) rather than the
+    // per-task SIGNAL_COLD_BYTES slot. Copying >512 bytes on the aarch64
+    // syscall return path corrupts state. Since sigaction writes to both
+    // the per-task slot and PROCESS.signal_cold, and exec resets both,
+    // the global is correct for the current task during delivery.
     rux_proc::signal::deliver_signal::<S>(
         &mut PROCESS.signal_hot,
         &mut PROCESS.signal_cold,

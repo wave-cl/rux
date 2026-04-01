@@ -121,6 +121,14 @@ pub unsafe fn signal_cold_mut(idx: usize) -> &'static mut rux_proc::signal::Sign
     &mut *(SIGNAL_COLD_BYTES.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE) as *mut rux_proc::signal::SignalCold)
 }
 
+/// Raw byte pointer to a task's signal_cold slot. Avoids creating a
+/// &mut SignalCold reference (which triggers aarch64 codegen issues
+/// in the signal delivery hot path).
+#[inline(always)]
+pub unsafe fn signal_cold_raw_ptr(idx: usize) -> *mut u8 {
+    SIGNAL_COLD_BYTES.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE)
+}
+
 
 
 

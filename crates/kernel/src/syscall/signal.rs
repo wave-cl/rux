@@ -15,7 +15,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     if sig == Signal::Kill || sig == Signal::Stop { return -22; }
 
     unsafe {
-        let cold = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX);
+        let cold = &mut super::PROCESS.signal_cold;
 
         // Write old action to user oldact
         if oldact_ptr != 0 {
@@ -49,6 +49,8 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
                 _pad1: [0; 4],
             };
             let _ = cold.set_action(sig, action);
+            // Also write to per-task slot for fork inheritance
+            let _ = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX).set_action(sig, action);
             if Arch::HAS_RESTORER {
                 super::PROCESS.signal_restorer[signum] = restorer;
             }
