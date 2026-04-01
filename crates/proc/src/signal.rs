@@ -268,7 +268,7 @@ const _: () = assert!(core::mem::size_of::<SigInfo>() == 32);
 impl SigInfo {
     pub const EMPTY: Self = Self {
         signo: 0,
-        code: SigCode::Kernel,
+        code: SigCode::User, // zero-valued for BSS-friendly initialization
         _pad0: [0; 2],
         pid: Pid(0),
         uid: Uid(0),
@@ -435,7 +435,7 @@ impl SignalCold {
             rt_queue: SigQueue::new(),
             alt_stack_base: 0,
             alt_stack_size: 0,
-            alt_stack_flags: SS_DISABLE,
+            alt_stack_flags: 0, // SS_DISABLE checked by alt_stack_size == 0
             _pad: [0; 4],
         }
     }

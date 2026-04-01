@@ -51,8 +51,6 @@ pub struct TaskSlot {
     pub mmap_base: usize,
     pub fs_ctx: FsContext,
     pub signal_hot: SignalHot,
-    // Per-process signal_cold deferred: adding 1.3KB × 16 to TASK_TABLE
-    // breaks aarch64 (likely BSS zeroing or alignment issue). Needs investigation.
     pub signal_restorer: [usize; 32],
 
     // ── File descriptors (mirrors FD_TABLE global) ────────────────────
@@ -113,6 +111,8 @@ pub const KSTACK_SIZE: usize = 16384; // 16KB per task
 
 /// Per-task kernel stacks.
 pub static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_PROCS] = [[0; KSTACK_SIZE]; MAX_PROCS];
+
+
 
 
 /// Index of the currently running task in TASK_TABLE.
