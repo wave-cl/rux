@@ -51,8 +51,8 @@ pub struct TaskSlot {
     pub mmap_base: usize,
     pub fs_ctx: FsContext,
     pub signal_hot: SignalHot,
-    // TODO: per-process signal_cold. Currently all processes share PROCESS.signal_cold.
-    // 3KB per slot (16 × 3KB = 48KB BSS) overflows aarch64 memory layout.
+    // Per-process signal_cold deferred: adding 1.3KB × 16 to TASK_TABLE
+    // breaks aarch64 (likely BSS zeroing or alignment issue). Needs investigation.
     pub signal_restorer: [usize; 32],
 
     // ── File descriptors (mirrors FD_TABLE global) ────────────────────

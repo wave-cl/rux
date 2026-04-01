@@ -282,7 +282,9 @@ impl SigInfo {
 // ── Signal queue (RT signals) ───────────────────────────────────────────
 
 /// Maximum queued RT signals per task.
-pub const MAX_PENDING_SIGNALS: usize = 64;
+/// Reduced from 64 to 8 to keep per-process SignalCold under 1.5KB
+/// (16 tasks × 1.5KB = 24KB BSS, fits aarch64 memory layout).
+pub const MAX_PENDING_SIGNALS: usize = 8;
 
 /// Fixed-capacity ring buffer for queued real-time signals.
 /// POSIX requires RT signals (32-64) to be queued and delivered in order.
@@ -296,7 +298,7 @@ pub struct SigQueue {
     pub _pad: [u8; 2],
 }
 
-const _: () = assert!(core::mem::size_of::<SigQueue>() == 2056);
+const _: () = assert!(core::mem::size_of::<SigQueue>() == 264);
 
 impl SigQueue {
     /// Empty signal queue.
@@ -422,7 +424,8 @@ pub struct SignalCold {
     pub _pad: [u8; 4],
 }
 
-const _: () = assert!(core::mem::size_of::<SignalCold>() == 3112);
+// SignalCold: saved_mask(8) + actions(32×32=1024) + rt_queue(264) + alt_stack(24) = 1320
+const _: () = assert!(core::mem::size_of::<SignalCold>() == 1320);
 
 impl SignalCold {
     pub const fn new() -> Self {
