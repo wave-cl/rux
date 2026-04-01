@@ -4,6 +4,29 @@ use super::console;
 use super::exit;
 use crate::{scheduler, pgtrack};
 
+/// AP (Application Processor) Rust entry point. Called from ap_entry.S
+/// after the AP has configured MMU, FP/NEON, and stack.
+#[no_mangle]
+pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
+    unsafe {
+        let pc = crate::percpu::cpu(cpu_id as usize);
+        pc.cpu_id = cpu_id as u32;
+        pc.online = true;
+        pc.idle = true;
+        pc.current_task_idx = usize::MAX; // no task assigned
+
+        console::write_str("rux: AP ");
+        let mut buf = [0u8; 10];
+        console::write_str(rux_klib::fmt::u32_to_str(&mut buf, cpu_id as u32));
+        console::write_str(" online\n");
+
+        // Idle loop — AP waits for work (future: scheduler assigns tasks)
+        loop {
+            core::arch::asm!("wfi", options(nostack, nomem));
+        }
+    }
+}
+
 pub fn aarch64_init(dtb_addr: usize) {
     // Initialize BSP per-CPU data
     unsafe { crate::percpu::init_bsp(); }
@@ -72,6 +95,55 @@ pub fn aarch64_init(dtb_addr: usize) {
 
     // ── Init scheduler (needed for vfork/exec) ──────────────────────
     unsafe { scheduler::init_context_fns(); }
+
+    // ── Start APs via PSCI ──────────────────────────────────────────
+    unsafe {
+        // Read BSP system registers to pass to AP
+        let ttbr0: u64;
+        let tcr: u64;
+        let mair: u64;
+        let vbar: u64;
+        let sctlr: u64;
+        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nostack));
+        core::arch::asm!("mrs {}, tcr_el1", out(reg) tcr, options(nostack));
+        core::arch::asm!("mrs {}, mair_el1", out(reg) mair, options(nostack));
+        core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar, options(nostack));
+        core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr, options(nostack));
+
+        // Per-AP kernel stack
+        let ap_stack_top = crate::task_table::KSTACKS[1].as_ptr() as u64
+            + crate::task_table::KSTACK_SIZE as u64;
+
+        // Fill AP_BOOT_DATA (defined in ap_entry.S)
+        extern "C" { static mut AP_BOOT_DATA: [u64; 7]; }
+        AP_BOOT_DATA[0] = ttbr0;                              // TTBR0_EL1
+        AP_BOOT_DATA[1] = tcr;                                // TCR_EL1
+        AP_BOOT_DATA[2] = mair;                               // MAIR_EL1
+        AP_BOOT_DATA[3] = vbar;                               // VBAR_EL1
+        AP_BOOT_DATA[4] = sctlr;                              // SCTLR_EL1
+        AP_BOOT_DATA[5] = ap_stack_top;                       // stack_top
+        AP_BOOT_DATA[6] = ap_entry_rust as *const () as u64;  // entry_fn
+
+        // Start AP 1 via PSCI CPU_ON
+        extern "C" { fn ap_entry_asm(); }
+        let ret = super::psci::cpu_on(1, ap_entry_asm as *const () as u64, 1);
+        if ret == 0 {
+            // Wait for AP to come online (up to ~100ms worth of spinning)
+            let mut waited = 0u64;
+            while waited < 10_000_000 {
+                if crate::percpu::cpu(1).online { break; }
+                core::hint::spin_loop();
+                waited += 1;
+            }
+            if crate::percpu::cpu(1).online {
+                console::write_str("rux: SMP: 2 CPUs online\n");
+            } else {
+                console::write_str("rux: AP 1 started but not responding\n");
+            }
+        } else {
+            console::write_str("rux: PSCI CPU_ON failed (single-CPU)\n");
+        }
+    }
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
     unsafe {

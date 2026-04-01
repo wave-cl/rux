@@ -12,6 +12,7 @@ pub mod psci;
 
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("exception.S"));
+core::arch::global_asm!(include_str!("ap_entry.S"));
 
 /// Zero-sized marker type for aarch64 architecture trait implementations.
 pub struct Aarch64;

@@ -279,7 +279,7 @@ OUTPUT=$( { sleep 8; \
     printf 'cat /proc/$$/stat | cut -d" " -f5\n'; sleep 3; \
     printf 'exit\n'; sleep 2; \
     } | \
-    "$QEMU_AA64" -machine virt -cpu cortex-a72 \
+    "$QEMU_AA64" -machine virt -cpu cortex-a72 -smp 2 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -device loader,file=initramfs/initramfs_aarch64.cpio,addr=0x45000000,force-raw=on \
     -serial mon:stdio -display none \
@@ -288,6 +288,7 @@ OUTPUT=$( { sleep 8; \
 # Boot
 check "boot banner"             "rux 0.4.0 (aarch64)"
 check "MMU enabled"             "MMU enabled"
+check "SMP 2 CPUs"              "SMP: 2 CPUs"
 check "cpio unpacked"           "cpio: unpacked"
 check "procfs mounted"          "procfs mounted at /proc"
 check "exec init"               "exec /sbin/init"

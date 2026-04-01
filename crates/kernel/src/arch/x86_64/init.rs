@@ -27,6 +27,7 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         pc.cpu_id = cpu_id;
         pc.online = true;
         pc.idle = true;
+        pc.current_task_idx = usize::MAX; // no task assigned
 
         console::write_str("rux: AP ");
         let mut buf = [0u8; 10];
@@ -225,10 +226,28 @@ pub fn x86_64_init(multiboot_info: usize) {
         }
     }
 
-    // ── ACPI / NUMA topology (informational) ────────────────────────────
-    // Scan for RSDP after identity map is active (0xE0000 region accessible).
-    // Disabled on QEMU Multiboot1 — RSDP region may not be mapped correctly.
-    // TODO: re-enable once RSDP scan is validated on real hardware.
+    // ── ACPI / NUMA topology ─────────────────────────────────────────────
+    // Identity map is active (0-128MB + LAPIC). RSDP at 0xE0000 is accessible.
+    unsafe {
+        if let Some(rsdp) = super::acpi::find_rsdp() {
+            console::write_str("rux: ACPI RSDP found\n");
+            if let Some(srat) = super::acpi::find_srat(rsdp) {
+                let topo = super::acpi::parse_srat(srat);
+                if topo.count > 0 {
+                    console::write_str("rux: NUMA: ");
+                    let mut buf3 = [0u8; 10];
+                    console::write_str(rux_klib::fmt::u32_to_str(&mut buf3, topo.count as u32));
+                    console::write_str(" memory regions\n");
+                } else {
+                    console::write_str("rux: UMA system (no SRAT entries)\n");
+                }
+            } else {
+                console::write_str("rux: no SRAT (UMA)\n");
+            }
+        } else {
+            console::write_str("rux: no ACPI RSDP\n");
+        }
+    }
 
     // ── Init scheduler (needed for vfork/exec) ──────────────────────────
     unsafe { scheduler::init_context_fns(); }
