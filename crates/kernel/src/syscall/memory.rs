@@ -2,29 +2,58 @@
 
 use rux_fs::fdtable as fdt;
 
-pub fn mmap(addr: usize, len: usize, _prot: usize, mmap_flags: usize, _fd: usize) -> isize {
-    unsafe {
-        if mmap_flags & 0x20 == 0 { return -12; } // MAP_ANONYMOUS only
+/// mmap(addr, len, prot, flags, fd, offset) — POSIX.1
+///
+/// Supports MAP_ANONYMOUS (zeroed pages) and MAP_PRIVATE file-backed
+/// (reads file data into private pages). MAP_SHARED is not yet supported.
+pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize) -> isize {
+    const MAP_FIXED: usize = 0x10;
+    const MAP_ANONYMOUS: usize = 0x20;
+    const PROT_READ: usize = 1;
+    const PROT_WRITE: usize = 2;
+    const PROT_EXEC: usize = 4;
 
+    if len == 0 { return -22; }
+
+    unsafe {
         let aligned_len = (len + 0xFFF) & !0xFFF;
-        let result = if mmap_flags & 0x10 != 0 && addr != 0 {
-            addr & !0xFFF // MAP_FIXED
+        let result = if mmap_flags & MAP_FIXED != 0 && addr != 0 {
+            addr & !0xFFF
         } else {
             let r = super::PROCESS.mmap_base;
             super::PROCESS.mmap_base += aligned_len;
             r
         };
 
-        let pg_flags = rux_mm::MappingFlags::READ
-            .or(rux_mm::MappingFlags::WRITE)
-            .or(rux_mm::MappingFlags::USER);
+        // Build page flags from prot
+        let mut pg_flags = rux_mm::MappingFlags::USER;
+        if prot & PROT_READ != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
+        if prot & PROT_WRITE != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::WRITE); }
+        if prot & PROT_EXEC != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::EXECUTE); }
+        // Default: at least readable
+        if prot == 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
+
+        // Allocate zeroed pages
         super::map_user_pages(result, result + aligned_len, pg_flags);
+
+        // File-backed MAP_PRIVATE: read file data into the freshly mapped pages
+        if mmap_flags & MAP_ANONYMOUS == 0 && fd < 64 {
+            use rux_fs::FileSystem;
+            let fs = crate::kstate::fs();
+            let ino = (*rux_fs::fdtable::FD_TABLE)[fd].ino;
+            if (*rux_fs::fdtable::FD_TABLE)[fd].active && ino != 0 {
+                let offset = (*rux_fs::fdtable::FD_TABLE)[fd].offset as u64;
+                let dst = core::slice::from_raw_parts_mut(result as *mut u8, len);
+                let _ = fs.read(ino, offset, dst);
+            }
+        }
 
         result as isize
     }
 }
 
 /// munmap(addr, length) — POSIX.1: unmap pages from address space.
+/// COW-aware: only frees frames whose refcount reaches zero.
 pub fn munmap(addr: usize, len: usize) -> isize {
     if addr & 0xFFF != 0 { return -22; } // must be page-aligned
     unsafe {
@@ -36,10 +65,13 @@ pub fn munmap(addr: usize, len: usize) -> isize {
         while va < addr + aligned_len {
             if let Ok(pa) = upt.translate(rux_klib::VirtAddr::new(va)) {
                 let _ = upt.unmap_4k(rux_klib::VirtAddr::new(va));
-                let page_pa = pa.as_usize() & !0xFFF;
+                let page_pa = rux_klib::PhysAddr::new(pa.as_usize() & !0xFFF);
                 use rux_mm::FrameAllocator;
-                if page_pa >= alloc.alloc_base().as_usize() {
-                    alloc.dealloc(rux_klib::PhysAddr::new(page_pa), rux_mm::PageSize::FourK);
+                // COW-aware: only free if refcount drops to zero
+                if page_pa.as_usize() >= alloc.alloc_base().as_usize() {
+                    if crate::cow::dec_ref(page_pa) {
+                        alloc.dealloc(page_pa, rux_mm::PageSize::FourK);
+                    }
                 }
             }
             va += 4096;
