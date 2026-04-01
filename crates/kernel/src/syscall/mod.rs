@@ -117,7 +117,7 @@ pub enum Syscall {
     // Permissions
     Chmod, Fchmod, Fchmodat, Chown, Fchown, Fchownat, Utimensat,
     // Memory
-    Mmap, Munmap, Mprotect, Brk,
+    Mmap, Munmap, Mprotect, Brk, Pread64,
     // Process
     Getpid, Getppid, Exit, ExitGroup, Kill,
     Vfork, Execve, Wait4,
@@ -153,6 +153,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
     match sc {
         // ── POSIX.1 File I/O ───────────────────────────────────────
         Syscall::Read => posix::read(a0, a1, a2),
+        Syscall::Pread64 => posix::pread64(a0, a1, a2, a3),
         Syscall::Write => posix::write(a0, a1, a2),
         Syscall::Open => posix::open(a0, a1, a2),
         Syscall::OpenAt => posix::openat(a0, a1, a2, a3),

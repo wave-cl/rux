@@ -204,6 +204,7 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
         63 => Syscall::Read,
         64 => Syscall::Write,
         66 => Syscall::Writev,
+        67 => Syscall::Pread64,
         71 => Syscall::Sendfile,
         23 => Syscall::Dup,
         24 => Syscall::Dup2,

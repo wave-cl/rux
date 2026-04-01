@@ -304,6 +304,7 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
         14 => Syscall::Sigprocmask,
         15 => Syscall::Sigreturn,
         16 => Syscall::Ioctl,
+        17 => Syscall::Pread64,
         20 => Syscall::Writev,
         21 => Syscall::Access,
         22 | 293 => Syscall::Pipe2,

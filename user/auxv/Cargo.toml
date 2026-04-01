@@ -1,0 +1,11 @@
+[package]
+name = "rux-auxv"
+version = "0.3.0"
+edition = "2024"
+
+[[bin]]
+name = "auxv"
+path = "src/main.rs"
+
+[dependencies]
+rux-rt = { path = "../rustrt" }

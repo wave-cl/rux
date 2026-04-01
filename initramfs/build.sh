@@ -36,6 +36,13 @@ build_initramfs() {
     cp "$BUSYBOX" "$STAGING/bin/busybox"
     chmod 755 "$STAGING/bin/busybox"
 
+    # ── auxv verifier (test binary) ─────────────────────────────
+    local AUXV="$USER_DIR/auxv_${ARCH}.elf"
+    if [ -f "$AUXV" ]; then
+        cp "$AUXV" "$STAGING/bin/auxv"
+        chmod 755 "$STAGING/bin/auxv"
+    fi
+
     # ── /bin symlinks ────────────────────────────────────────────
     for cmd in sh ash cat cp date dd df dmesg hostname echo ed egrep false fgrep grep \
                gunzip gzip kill ln ls mkdir mknod mktemp more mount mv nice nohup \

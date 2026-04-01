@@ -18,7 +18,11 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
     unsafe {
         let aligned_len = (len + 0xFFF) & !0xFFF;
         let result = if mmap_flags & MAP_FIXED != 0 && addr != 0 {
-            addr & !0xFFF
+            let fixed_addr = addr & !0xFFF;
+            // Unmap existing pages to avoid double-mapping (ld.so uses MAP_FIXED
+            // to replace segments at exact addresses).
+            munmap(fixed_addr, aligned_len);
+            fixed_addr
         } else {
             let r = super::PROCESS.mmap_base;
             super::PROCESS.mmap_base += aligned_len;

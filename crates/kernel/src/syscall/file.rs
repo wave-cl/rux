@@ -162,6 +162,21 @@ pub fn lseek(fd: usize, offset: i64, whence: usize) -> isize {
     unsafe { fdt::sys_lseek(fd, offset, whence as u32, crate::kstate::fs()) }
 }
 
+/// pread64(fd, buf, count, offset) — POSIX.1: read at offset without seeking.
+pub fn pread64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return -9; }
+        if (*fdt::FD_TABLE)[fd].is_pipe { return -29; } // -ESPIPE
+        let ino = (*fdt::FD_TABLE)[fd].ino;
+        let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, len);
+        match crate::kstate::fs().read(ino, offset as u64, user_buf) {
+            Ok(n) => n as isize,
+            Err(_) => -5,
+        }
+    }
+}
+
 /// fcntl(fd, cmd, arg) — POSIX.1
 pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
     match cmd {
