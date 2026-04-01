@@ -49,7 +49,7 @@ pub fn aarch64_init(dtb_addr: usize) {
             .or(rux_mm::MappingFlags::WRITE)
             .or(rux_mm::MappingFlags::EXECUTE);
         let mut kpt = super::paging::PageTable4Level::new(alloc).expect("kpt");
-        kpt.identity_map_range(
+        kpt.identity_map_range_huge(
             rux_klib::PhysAddr::new(0x40000000), 128 * 1024 * 1024, rwx, alloc,
         ).expect("identity map");
         let dev_flags = rux_mm::MappingFlags::READ

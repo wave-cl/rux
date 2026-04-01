@@ -205,6 +205,79 @@ impl<A: ArchPaging> PageTable4Level<A> {
         }
     }
 
+    /// Map a single 2MB huge page: virt → phys.
+    ///
+    /// Writes a huge PTE at L1 (PD level). Both addresses must be 2MB-aligned.
+    pub fn map_2m(
+        &mut self,
+        virt: VirtAddr,
+        phys: PhysAddr,
+        flags: MappingFlags,
+        alloc: &mut dyn FrameAllocator,
+    ) -> Result<(), MemoryError> {
+        if virt.as_usize() & 0x1FFFFF != 0 || phys.as_usize() & 0x1FFFFF != 0 {
+            return Err(MemoryError::MisalignedAddress);
+        }
+        let pte_flags = A::mapping_to_pte_flags(flags);
+
+        let l3_entry = self.ensure_table(self.root, virt, PageLevel::L3, alloc)?;
+        let l2_entry = self.ensure_table(A::Pte::phys_addr(l3_entry), virt, PageLevel::L2, alloc)?;
+        let l1_phys = A::Pte::phys_addr(l2_entry);
+
+        let idx = pt_index(virt, PageLevel::L1);
+        unsafe {
+            let page = l1_phys.as_usize() as *mut PageTablePage;
+            let existing = (*page).entries[idx];
+            if A::Pte::is_present(existing) {
+                return Err(MemoryError::AlreadyMapped);
+            }
+            (*page).entries[idx] = A::Pte::encode(phys, pte_flags | A::huge_page_flags());
+        }
+        Ok(())
+    }
+
+    /// Identity map a range using 2MB huge pages where possible, 4K for the rest.
+    pub fn identity_map_range_huge(
+        &mut self,
+        start: PhysAddr,
+        size: usize,
+        flags: MappingFlags,
+        alloc: &mut dyn FrameAllocator,
+    ) -> Result<(), MemoryError> {
+        let mut addr = start.as_usize() & !0xFFF;
+        let end = (start.as_usize() + size + 0xFFF) & !0xFFF;
+        const TWO_MB: usize = 2 * 1024 * 1024;
+
+        // Lead-in: 4K pages until 2MB-aligned
+        let aligned_start = (addr + TWO_MB - 1) & !( TWO_MB - 1);
+        while addr < aligned_start.min(end) {
+            let virt = VirtAddr::new(addr);
+            if self.translate(virt).is_err() {
+                let _ = self.map_4k(virt, PhysAddr::new(addr), flags, alloc);
+            }
+            addr += 4096;
+        }
+
+        // Core: 2MB huge pages
+        while addr + TWO_MB <= end {
+            let virt = VirtAddr::new(addr);
+            if self.translate(virt).is_err() {
+                let _ = self.map_2m(virt, PhysAddr::new(addr), flags, alloc);
+            }
+            addr += TWO_MB;
+        }
+
+        // Tail: remaining 4K pages
+        while addr < end {
+            let virt = VirtAddr::new(addr);
+            if self.translate(virt).is_err() {
+                let _ = self.map_4k(virt, PhysAddr::new(addr), flags, alloc);
+            }
+            addr += 4096;
+        }
+        Ok(())
+    }
+
     /// Map a contiguous range of 4K pages: identity map phys → phys.
     pub fn identity_map_range(
         &mut self,

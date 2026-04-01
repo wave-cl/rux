@@ -148,6 +148,11 @@ pub trait ArchPaging {
     /// (e.g., COW fork marks N pages then flushes once).
     unsafe fn flush_tlb_all();
 
+    /// Extra flags for 2MB huge page PTEs at L1 level.
+    /// x86_64: HUGE (PS bit 7) + GLOBAL (bit 8).
+    /// aarch64: block descriptor flags (AF, shareability, memory type).
+    fn huge_page_flags() -> u64;
+
     /// Software-defined COW bit in the PTE (arch-specific location).
     fn cow_bit() -> u64;
 }

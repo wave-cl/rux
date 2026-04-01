@@ -76,6 +76,12 @@ impl ArchPaging for Aarch64Paging {
         );
     }
 
+    fn huge_page_flags() -> u64 {
+        // Block descriptor: VALID set, TABLE NOT set (is_huge checks this).
+        // Need AF (access flag), shareability, and normal memory attribute.
+        pte::AF | pte::SH_INNER | pte::ATTR_NORMAL
+    }
+
     fn cow_bit() -> u64 { pte::COW }
 }
 

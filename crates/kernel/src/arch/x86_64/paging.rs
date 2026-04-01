@@ -60,6 +60,8 @@ impl ArchPaging for X86Paging {
         core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
     }
 
+    fn huge_page_flags() -> u64 { pte::HUGE | pte::GLOBAL }
+
     fn cow_bit() -> u64 { pte::COW }
 }
 

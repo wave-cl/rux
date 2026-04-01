@@ -74,7 +74,7 @@ unsafe impl super::KernelMapOps for Aarch64 {
         use rux_klib::PhysAddr;
         use rux_mm::MappingFlags;
         let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
-        pt.identity_map_range(PhysAddr::new(0x40000000), 128 * 1024 * 1024, kflags, alloc)
+        pt.identity_map_range_huge(PhysAddr::new(0x40000000), 128 * 1024 * 1024, kflags, alloc)
             .expect("kernel map");
         let dev_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::NO_CACHE);
         pt.identity_map_range(PhysAddr::new(0x08000000), 0x20000, dev_flags, alloc)
