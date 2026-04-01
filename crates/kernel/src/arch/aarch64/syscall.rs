@@ -18,6 +18,8 @@ const SIGRETURN_TRAMPOLINE_VA: usize = 0x7FFD_F000;
 
 /// Whether the trampoline page has been mapped in the current page table.
 static mut TRAMPOLINE_MAPPED: bool = false;
+/// 6th syscall argument (x5) — saved for mmap offset.
+pub static mut SAVED_SYSCALL_A5: u64 = 0;
 
 /// Reset trampoline state on exec (new page table invalidates old mapping).
 pub fn reset_trampoline() { unsafe { TRAMPOLINE_MAPPED = false; } }
@@ -35,6 +37,9 @@ pub fn handle_syscall(frame: *mut u8) {
         let a2 = *regs.add(2);   // x2
         let a3 = *regs.add(3);   // x3
         let a4 = *regs.add(4);   // x4
+        let a5 = *regs.add(5);   // x5 (6th arg, used by mmap for offset)
+        // Save a5 for mmap dispatch (generic dispatch only passes 5 args)
+        SAVED_SYSCALL_A5 = a5;
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {

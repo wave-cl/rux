@@ -18,8 +18,10 @@ const ELFCLASS64: u8 = 2;
 /// ELF data: little-endian.
 const ELFDATA2LSB: u8 = 1;
 
-/// Program header type: loadable segment.
+/// Program header types.
 const PT_LOAD: u32 = 1;
+const PT_INTERP: u32 = 3;
+const PT_PHDR: u32 = 6;
 
 /// Segment permission flags.
 pub const PF_X: u32 = 1;
@@ -49,6 +51,22 @@ pub struct ElfInfo {
     pub segments: [LoadSegment; 8],
     /// Number of valid segments.
     pub num_segments: usize,
+    /// Dynamic linking: true if PT_INTERP found.
+    pub is_dynamic: bool,
+    /// File offset of the PT_INTERP string (interpreter path).
+    pub interp_offset: u64,
+    /// Length of the interpreter path.
+    pub interp_len: usize,
+    /// Virtual address where program headers are mapped (from PT_PHDR).
+    pub phdr_vaddr: u64,
+    /// File offset of the program header table.
+    pub e_phoff: u64,
+    /// Size of one program header entry.
+    pub e_phentsize: u16,
+    /// Number of program headers.
+    pub e_phnum: u16,
+    /// ELF type (ET_EXEC=2, ET_DYN=3).
+    pub e_type: u16,
 }
 
 /// Parse an ELF64 binary from a byte slice.
@@ -82,12 +100,22 @@ pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
     let e_phentsize = u16::from_le_bytes([data[54], data[55]]);
     let e_phnum = u16::from_le_bytes([data[56], data[57]]);
 
+    let e_type = u16::from_le_bytes([data[16], data[17]]);
+
     let mut info = ElfInfo {
         entry: e_entry,
         segments: [LoadSegment {
             vaddr: 0, memsz: 0, file_offset: 0, filesz: 0, flags: 0,
         }; 8],
         num_segments: 0,
+        is_dynamic: false,
+        interp_offset: 0,
+        interp_len: 0,
+        phdr_vaddr: 0,
+        e_phoff,
+        e_phentsize,
+        e_phnum,
+        e_type,
     };
 
     let ph_off = e_phoff as usize;
@@ -119,18 +147,27 @@ pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
             data[off+44], data[off+45], data[off+46], data[off+47],
         ]);
 
-        if p_type == PT_LOAD && p_memsz > 0 {
-            if info.num_segments >= 8 {
-                break;
+        match p_type {
+            PT_LOAD if p_memsz > 0 => {
+                if info.num_segments >= 8 { break; }
+                info.segments[info.num_segments] = LoadSegment {
+                    vaddr: p_vaddr,
+                    memsz: p_memsz,
+                    file_offset: p_offset,
+                    filesz: p_filesz,
+                    flags: p_flags,
+                };
+                info.num_segments += 1;
             }
-            info.segments[info.num_segments] = LoadSegment {
-                vaddr: p_vaddr,
-                memsz: p_memsz,
-                file_offset: p_offset,
-                filesz: p_filesz,
-                flags: p_flags,
-            };
-            info.num_segments += 1;
+            PT_INTERP => {
+                info.is_dynamic = true;
+                info.interp_offset = p_offset;
+                info.interp_len = p_filesz as usize;
+            }
+            PT_PHDR => {
+                info.phdr_vaddr = p_vaddr;
+            }
+            _ => {}
         }
     }
 

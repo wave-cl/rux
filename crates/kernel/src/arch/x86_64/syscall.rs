@@ -23,6 +23,8 @@ pub fn syscall_stack_top() -> u64 {
 /// Saved user RSP during syscall (single-process, no swapgs needed).
 #[no_mangle]
 pub static mut SAVED_USER_RSP: u64 = 0;
+/// 6th syscall argument (r9) — saved by syscall_entry for mmap offset.
+pub static mut SAVED_SYSCALL_A5: u64 = 0;
 
 
 /// Initialize the SYSCALL/SYSRET MSRs.
@@ -60,6 +62,7 @@ unsafe extern "C" fn syscall_entry() {
         // CURRENT_KSTACK_TOP is updated by swap_process_state on every context switch
         // so each task uses its own kstack, preventing cross-task stack corruption.
         "mov [rip + {saved_user_rsp}], rsp",
+        "mov [rip + {saved_a5}], r9",
         "mov rsp, [rip + {current_kstack_top}]",
 
         // Save callee-saved + syscall-specific regs
@@ -124,6 +127,7 @@ unsafe extern "C" fn syscall_entry() {
         "sysretq",
 
         saved_user_rsp = sym SAVED_USER_RSP,
+        saved_a5 = sym SAVED_SYSCALL_A5,
         current_kstack_top = sym CURRENT_KSTACK_TOP,
         handler = sym syscall_dispatch_linux,
     );

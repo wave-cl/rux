@@ -201,7 +201,14 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Utimensat => posix::utimensat(a0, a1, a2, a3),
 
         // ── Memory ─────────────────────────────────────────────────
-        Syscall::Mmap => posix::mmap(a0, a1, a2, a3, a4),
+        Syscall::Mmap => {
+            // mmap has 6 args. The 6th (offset) is saved arch-specifically.
+            #[cfg(target_arch = "x86_64")]
+            let a5 = unsafe { crate::arch::x86_64::syscall::SAVED_SYSCALL_A5 as usize };
+            #[cfg(target_arch = "aarch64")]
+            let a5 = unsafe { crate::arch::aarch64::syscall::SAVED_SYSCALL_A5 as usize };
+            posix::mmap(a0, a1, a2, a3, a4, a5)
+        }
         Syscall::Munmap => posix::munmap(a0, a1),
         Syscall::Brk => linux::brk(a0),
 
@@ -243,7 +250,8 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
         Syscall::Prlimit64 => posix::prlimit64(a0, a1, a2, a3),
 
         // ── Stubs: accepted but no-op ─────────────────────────────
-        Syscall::Mprotect | Syscall::Faccessat | Syscall::Access |
+        Syscall::Mprotect => posix::mprotect(a0, a1, a2),
+        Syscall::Faccessat | Syscall::Access |
         Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
         Syscall::Getgroups | Syscall::Getrlimit |
         Syscall::Futex => posix::futex(a0, a1, a2),

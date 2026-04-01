@@ -13,6 +13,31 @@ static mut ARGV_LENS: [usize; MAX_ARGS] = [0; MAX_ARGS];
 /// Number of argv entries
 static mut ARGC: usize = 0;
 
+/// Dynamic linking auxv entries (set by exec, cleared for static binaries).
+static mut AUXV_PHDR: usize = 0;   // AT_PHDR: address of program headers
+static mut AUXV_PHENT: usize = 0;  // AT_PHENT: size of one program header entry
+static mut AUXV_PHNUM: usize = 0;  // AT_PHNUM: number of program headers
+static mut AUXV_ENTRY: usize = 0;  // AT_ENTRY: binary's original entry point
+static mut AUXV_BASE: usize = 0;   // AT_BASE: base address of dynamic linker
+
+/// Set dynamic linking auxv values (called before write_to_stack for dynamic binaries).
+pub unsafe fn set_dynamic_auxv(phdr: usize, phent: usize, phnum: usize, entry: usize, base: usize) {
+    AUXV_PHDR = phdr;
+    AUXV_PHENT = phent;
+    AUXV_PHNUM = phnum;
+    AUXV_ENTRY = entry;
+    AUXV_BASE = base;
+}
+
+/// Clear dynamic linking auxv (called for static binaries).
+pub unsafe fn clear_dynamic_auxv() {
+    AUXV_PHDR = 0;
+    AUXV_PHENT = 0;
+    AUXV_PHNUM = 0;
+    AUXV_ENTRY = 0;
+    AUXV_BASE = 0;
+}
+
 /// Read argv from user memory (pointer to NULL-terminated array of char*).
 /// If argv_ptr is NULL or 0, uses path as argv[0].
 pub unsafe fn set_from_user(path: &[u8], argv_ptr: usize, _envp_ptr: usize) {
@@ -107,8 +132,9 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
 
     let word = core::mem::size_of::<usize>(); // 8 on 64-bit, 4 on 32-bit
 
-    // Auxv: 6 pairs × 2 words each
-    let auxv_size = 6 * 2 * word;
+    // Auxv: 6 base pairs + up to 5 dynamic pairs, × 2 words each
+    let dyn_auxv_count = if AUXV_PHDR != 0 { 5 } else { 0 };
+    let auxv_size = (6 + dyn_auxv_count) * 2 * word;
 
     // Header: argc + argv[0..argc] + NULL + envp[0..3] + NULL
     let header_slots = 1 + argc + 1 + env_strs.len() + 1;
@@ -159,12 +185,23 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
 
     // Auxiliary vector (pointer-width pairs)
     let auxv = hdr.add(slot) as *mut [usize; 2];
-    (*auxv.add(0)) = [6, 4096];   // AT_PAGESZ
-    (*auxv.add(1)) = [11, 0];     // AT_UID
-    (*auxv.add(2)) = [23, 0];     // AT_EUID
-    (*auxv.add(3)) = [13, 0];     // AT_GID
-    (*auxv.add(4)) = [14, 0];     // AT_EGID
-    (*auxv.add(5)) = [0, 0];      // AT_NULL
+    let mut ai = 0;
+    (*auxv.add(ai)) = [6, 4096];   ai += 1; // AT_PAGESZ
+    (*auxv.add(ai)) = [11, 0];     ai += 1; // AT_UID
+    (*auxv.add(ai)) = [23, 0];     ai += 1; // AT_EUID
+    (*auxv.add(ai)) = [13, 0];     ai += 1; // AT_GID
+    (*auxv.add(ai)) = [14, 0];     ai += 1; // AT_EGID
+
+    // Dynamic linking entries (only if set)
+    if AUXV_PHDR != 0 {
+        (*auxv.add(ai)) = [3, AUXV_PHDR];   ai += 1; // AT_PHDR
+        (*auxv.add(ai)) = [4, AUXV_PHENT];  ai += 1; // AT_PHENT
+        (*auxv.add(ai)) = [5, AUXV_PHNUM];  ai += 1; // AT_PHNUM
+        (*auxv.add(ai)) = [9, AUXV_ENTRY];  ai += 1; // AT_ENTRY
+        (*auxv.add(ai)) = [7, AUXV_BASE];   ai += 1; // AT_BASE
+    }
+
+    (*auxv.add(ai)) = [0, 0]; // AT_NULL
 
     sp
 }

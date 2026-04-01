@@ -6,7 +6,7 @@ use rux_fs::fdtable as fdt;
 ///
 /// Supports MAP_ANONYMOUS (zeroed pages) and MAP_PRIVATE file-backed
 /// (reads file data into private pages). MAP_SHARED is not yet supported.
-pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize) -> isize {
+pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, offset: usize) -> isize {
     const MAP_FIXED: usize = 0x10;
     const MAP_ANONYMOUS: usize = 0x20;
     const PROT_READ: usize = 1;
@@ -30,21 +30,20 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize) 
         if prot & PROT_READ != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
         if prot & PROT_WRITE != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::WRITE); }
         if prot & PROT_EXEC != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::EXECUTE); }
-        // Default: at least readable
         if prot == 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
 
         // Allocate zeroed pages
         super::map_user_pages(result, result + aligned_len, pg_flags);
 
-        // File-backed MAP_PRIVATE: read file data into the freshly mapped pages
+        // File-backed MAP_PRIVATE: read file data at the specified offset
         if mmap_flags & MAP_ANONYMOUS == 0 && fd < 64 {
             use rux_fs::FileSystem;
             let fs = crate::kstate::fs();
             let ino = (*rux_fs::fdtable::FD_TABLE)[fd].ino;
             if (*rux_fs::fdtable::FD_TABLE)[fd].active && ino != 0 {
-                let offset = (*rux_fs::fdtable::FD_TABLE)[fd].offset as u64;
+                let file_offset = offset as u64;
                 let dst = core::slice::from_raw_parts_mut(result as *mut u8, len);
-                let _ = fs.read(ino, offset, dst);
+                let _ = fs.read(ino, file_offset, dst);
             }
         }
 
@@ -139,6 +138,32 @@ pub fn futex_wake(uaddr: usize, max_wake: usize) -> isize {
         }
         woken as isize
     }
+}
+
+/// mprotect(addr, len, prot) — POSIX.1: change page protection.
+pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
+    if addr & 0xFFF != 0 { return -22; }
+    unsafe {
+        let mut upt = super::current_user_page_table();
+        let aligned_len = (len + 0xFFF) & !0xFFF;
+
+        let mut flags = rux_mm::MappingFlags::USER.or(rux_mm::MappingFlags::READ);
+        if prot & 2 != 0 { flags = flags.or(rux_mm::MappingFlags::WRITE); }
+        if prot & 4 != 0 { flags = flags.or(rux_mm::MappingFlags::EXECUTE); }
+
+        let pte_flags = crate::arch::PageTable::pte_flags(flags);
+
+        let mut va = addr;
+        while va < addr + aligned_len {
+            let virt = rux_klib::VirtAddr::new(va);
+            if let Ok(pa) = upt.translate(virt) {
+                let pa_page = rux_klib::PhysAddr::new(pa.as_usize() & !0xFFF);
+                upt.remap(virt, pa_page, pte_flags);
+            }
+            va += 4096;
+        }
+    }
+    0
 }
 
 /// poll(fds, nfds, timeout) — POSIX.1: check fd readiness.
