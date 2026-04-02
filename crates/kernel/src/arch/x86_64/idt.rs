@@ -353,18 +353,16 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             panic!("page fault");
         }
         32 => {
-            // Timer tick (PIT on BSP, LAPIC timer on APs — both fire vector 32)
+            // BSP PIT timer tick
             super::pit::tick();
             unsafe { super::pit::ack(); }
-            {
-                unsafe {
-                    let sched = crate::scheduler::get();
-                    sched.tick(1_000_000);
-                }
+            unsafe {
+                let sched = crate::scheduler::get();
+                sched.tick(1_000_000);
             }
         }
         48 => {
-            // AP LAPIC timer — just ACK
+            // AP LAPIC timer — ACK only, no scheduler interaction
             unsafe { super::apic::eoi(); }
         }
         128 => {
