@@ -1659,8 +1659,8 @@ mod tests {
         let fname = FileName::new(b"bigfile").unwrap();
         let ino = fs.create(0, fname, 0o644 | 0o100000).unwrap();
 
-        // Write 200KB of patterned data (50 pages, well into indirect range)
-        let file_size = 200 * 1024;
+        // Write 800KB of patterned data (196 pages, matching ld.so size)
+        let file_size = 800 * 1024;
         let mut write_buf = [0u8; 4096];
         for offset in (0..file_size).step_by(4096) {
             let page_num = (offset / 4096) as u8;
@@ -1681,6 +1681,50 @@ mod tests {
             for (i, &b) in read_buf[..chunk].iter().enumerate() {
                 assert_eq!(b, expected,
                     "data mismatch at offset {offset}+{i} (page {page_num}): got {b:#x}, expected {expected:#x}");
+            }
+        }
+    }
+
+    /// Test: write TWO large files (simulating busybox 1.1MB + ld.so 800KB)
+    /// then read back the second file. Reproduces the QEMU dynlink bug scenario.
+    #[test]
+    fn two_large_files_read_second() {
+        let (_alloc, mut fs) = new_fs();
+
+        // First file: 1.1MB (like busybox)
+        let f1 = FileName::new(b"busybox").unwrap();
+        let ino1 = fs.create(0, f1, 0o755 | 0o100000).unwrap();
+        let buf1 = [0xBBu8; 4096];
+        for offset in (0..1_100_000usize).step_by(4096) {
+            let chunk = 4096usize.min(1_100_000 - offset);
+            fs.write(ino1, offset as u64, &buf1[..chunk]).unwrap();
+        }
+
+        // Second file: 800KB (like ld.so)
+        let f2 = FileName::new(b"ld.so").unwrap();
+        let ino2 = fs.create(0, f2, 0o755 | 0o100000).unwrap();
+        let mut write_buf = [0u8; 4096];
+        for offset in (0..800_000usize).step_by(4096) {
+            let page_num = (offset / 4096) as u8;
+            for b in write_buf.iter_mut() { *b = page_num.wrapping_add(0x42); }
+            let chunk = 4096usize.min(800_000 - offset);
+            fs.write(ino2, offset as u64, &write_buf[..chunk]).unwrap();
+        }
+
+        // Read back the second file at the problematic offsets
+        let mut read_buf = [0u8; 4];
+        for &off in &[0u64, 0xC000, 0x30000, 0x6A000, 0x6A731] {
+            let n = fs.read(ino2, off, &mut read_buf).unwrap();
+            assert!(n > 0, "read returned 0 at offset {off:#x}");
+            let page_num = (off / 4096) as u8;
+            let expected = page_num.wrapping_add(0x42);
+            assert_ne!(read_buf[0], 0xFF,
+                "got 0xFF at offset {off:#x} (page {}) — indirect block corruption",
+                off / 4096);
+            if off % 4096 == 0 {
+                assert_eq!(read_buf[0], expected,
+                    "wrong data at offset {off:#x}: got {:#x}, expected {:#x}",
+                    read_buf[0], expected);
             }
         }
     }

@@ -9,3 +9,4 @@ crates/mm/fuzz/corpus/
 crates/mm/fuzz/artifacts/
 crates/vfs/fuzz/corpus/
 crates/vfs/fuzz/artifacts/
+user/ld-musl-*-stripped*
