@@ -85,6 +85,22 @@ pub unsafe fn send_sipi(target_apic_id: u32, vector_page: u8) {
     }
 }
 
+/// Configure the LAPIC timer in periodic mode.
+///
+/// `vector`: interrupt vector to fire (e.g., 32 for timer)
+/// `initial_count`: timer countdown value (determines frequency)
+///
+/// # Safety
+/// Must be called after `init_bsp()`.
+pub unsafe fn init_timer(vector: u8, initial_count: u32) {
+    // Divide configuration: divide by 16
+    lapic_write(LAPIC_TIMER_DCR, 0x03);
+    // LVT Timer: vector + periodic mode (bit 17)
+    lapic_write(LAPIC_TIMER_LVT, vector as u32 | (1 << 17));
+    // Initial count — starts the timer
+    lapic_write(LAPIC_TIMER_ICR, initial_count);
+}
+
 /// Number of CPUs detected (from ACPI MADT or CPUID, simplified for now).
 /// Returns 1 for single-CPU QEMU, will be extended with MADT parsing.
 pub fn cpu_count() -> usize {
