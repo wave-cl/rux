@@ -35,8 +35,13 @@ unsafe impl rux_arch::PerCpuOps for X86_64 {
 
     #[inline(always)]
     unsafe fn percpu_base() -> *mut u8 {
-        // GS-relative access deferred for QEMU TCG compatibility.
-        // Fall through to null — caller uses array fallback.
+        if syscall::GS_PERCPU_ACTIVE {
+            // Read GS-base via rdgsbase (FSGSBASE enabled in init)
+            let base: u64;
+            core::arch::asm!("rdgsbase {}", out(reg) base, options(nostack));
+            return base as *mut u8;
+        }
+        // QEMU TCG: fall through to null — caller uses array fallback.
         core::ptr::null_mut()
     }
 }

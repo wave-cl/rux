@@ -96,6 +96,33 @@ unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
     f1.or(f7).or(fe1).or(fe7)
 }
 
+/// Detect if running on KVM via CPUID hypervisor leaf.
+/// Returns true if CPUID(0x40000000) signature is "KVMKVMKVM\0\0\0".
+unsafe fn detect_kvm() -> bool {
+    let max_leaf: u32;
+    let ebx: u32;
+    let ecx: u32;
+    let edx: u32;
+    // CPUID clobbers ebx which LLVM reserves; save/restore manually
+    core::arch::asm!(
+        "push rbx",
+        "cpuid",
+        "mov {ebx:e}, ebx",
+        "pop rbx",
+        inout("eax") 0x40000000u32 => max_leaf,
+        ebx = lateout(reg) ebx,
+        lateout("ecx") ecx,
+        lateout("edx") edx,
+        options(nostack),
+    );
+    // KVM signature: EBX="KVMK", ECX="VMKV", EDX="M\0\0\0"
+    if max_leaf >= 0x40000000 {
+        ebx == 0x4b564d4b && ecx == 0x564b4d56 && edx == 0x0000004d
+    } else {
+        false
+    }
+}
+
 pub fn x86_64_init(multiboot_info: usize) {
     // Initialize BSP per-CPU data
     unsafe { crate::percpu::init_bsp(); }
@@ -142,11 +169,30 @@ pub fn x86_64_init(multiboot_info: usize) {
         }
     }
 
+    // Detect KVM and enable per-CPU GS-based syscall entry
+    unsafe {
+        if detect_kvm() {
+            super::syscall::GS_PERCPU_ACTIVE = true;
+            console::write_str("rux: KVM detected, using gs-based syscall entry\n");
+            // Enable SMAP on KVM (hardware supports stac/clac)
+            if rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::SMAP) {
+                let mut cr4: u64;
+                core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
+                cr4 |= 1 << 21;
+                core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
+                console::write_str("rux: SMAP enabled (KVM)\n");
+            }
+        } else {
+            console::write_str("rux: TCG mode, using RIP-relative syscall entry\n");
+        }
+    }
+
     // Initialize IDT with all exception/IRQ handlers
     unsafe { super::idt::init(); }
     console::write_str("rux: IDT loaded\n");
 
     // Initialize SYSCALL/SYSRET MSRs for Linux ABI
+    // (selects syscall_entry vs syscall_entry_gs based on GS_PERCPU_ACTIVE)
     unsafe { super::syscall::init_syscall_msrs(); }
 
     // Initialize PIT timer at 1000 Hz

@@ -49,8 +49,14 @@ unsafe impl rux_arch::ForkOps for super::X86_64 {
         }
 
         // Push context_switch frame: r15, r14, r13, r12, rbx, rbp, rip
+        // Select gs-based trampoline on KVM for correct swapgs sequencing
         sp -= w;
-        *(sp as *mut usize) = super::syscall::fork_child_sysret as *const () as usize; // rip
+        let sysret_fn = if super::syscall::GS_PERCPU_ACTIVE {
+            super::syscall::fork_child_sysret_gs as *const () as usize
+        } else {
+            super::syscall::fork_child_sysret as *const () as usize
+        };
+        *(sp as *mut usize) = sysret_fn; // rip
         sp -= w; *(sp as *mut usize) = 0; // rbp
         sp -= w; *(sp as *mut usize) = 0; // rbx
         sp -= w; *(sp as *mut usize) = 0; // r12
