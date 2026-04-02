@@ -15,14 +15,26 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
         pc.idle = true;
         pc.current_task_idx = usize::MAX; // no task assigned
 
+        // Initialize GIC CPU interface for this AP
+        super::gic::init_cpu();
+
+        // Start per-CPU timer (aarch64 generic timer is per-CPU)
+        super::timer::init(1000);
+
         console::write_str("rux: AP ");
         let mut buf = [0u8; 10];
         console::write_str(rux_klib::fmt::u32_to_str(&mut buf, cpu_id as u32));
         console::write_str(" online\n");
 
-        // Idle loop — AP waits for work (future: scheduler assigns tasks)
+        // Enable interrupts and enter scheduler loop
+        core::arch::asm!("msr daifclr, #0xF", options(nostack));
         loop {
             core::arch::asm!("wfi", options(nostack, nomem));
+            // After timer interrupt, check if scheduler wants to reschedule
+            let sched = crate::scheduler::get();
+            if sched.need_resched {
+                sched.schedule();
+            }
         }
     }
 }

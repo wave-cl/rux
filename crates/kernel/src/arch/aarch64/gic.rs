@@ -58,6 +58,14 @@ pub unsafe fn init() {
     mmio_write(GICD_ITARGETSR + tgt_reg * 4, tgt | (1 << tgt_shift));
 }
 
+/// Initialize the GIC CPU interface for an AP (secondary CPU).
+/// The distributor is already configured by the BSP's init().
+/// Each AP needs its own CPU interface enabled to receive interrupts.
+pub unsafe fn init_cpu() {
+    mmio_write(GICC_PMR, 0xFF);   // Accept all priorities
+    mmio_write(GICC_CTLR, 1);     // Enable CPU interface
+}
+
 /// Handle an IRQ: read GICC_IAR, dispatch, write GICC_EOIR.
 pub fn handle_irq() {
     unsafe {
