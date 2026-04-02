@@ -233,16 +233,19 @@ pub fn x86_64_init(multiboot_info: usize) {
         console::write_str(" KiB)\n");
     }
 
-    // ── Layout: compute addresses for BuddyAllocator + RamFs ─────────────
-    // These must be above the initrd to avoid overwriting cpio data.
-    let initrd_info = unsafe { super::multiboot::get_initrd(multiboot_info) };
-    let initrd_end = match initrd_info {
-        Some((start, size)) => ((start + size) + 0xFFF) & !0xFFF,
-        None => 0x200000,
-    };
-    let alloc_addr = initrd_end.max(0x300000);
+    // ── Static storage for allocator + ramfs ──────────────────────────
+    // Using static mut in BSS ensures the compiler accounts for these in
+    // the kernel binary size. QEMU places the initrd above the kernel
+    // (including BSS), avoiding the overlap that occurred with hardcoded
+    // addresses at 0x300000.
+    static mut BUDDY_ALLOC: core::mem::MaybeUninit<rux_mm::frame::BuddyAllocator> =
+        core::mem::MaybeUninit::uninit();
+    static mut RAMFS: core::mem::MaybeUninit<rux_fs::ramfs::RamFs> =
+        core::mem::MaybeUninit::uninit();
+
+    let alloc_addr = unsafe { (&raw mut BUDDY_ALLOC) as *mut u8 as usize };
+    let ramfs_addr = unsafe { (&raw mut RAMFS) as *mut u8 as usize };
     let alloc_size_bytes = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
-    let ramfs_addr = (alloc_addr + alloc_size_bytes + 0xFFF) & !0xFFF;
     let ramfs_end = (ramfs_addr + core::mem::size_of::<rux_fs::ramfs::RamFs>() + 0xFFF) & !0xFFF;
 
     // Log computed layout
@@ -264,9 +267,13 @@ pub fn x86_64_init(multiboot_info: usize) {
     }
     if memmap.count > 0 {
         let region = &memmap.regions[best];
-        // Frame allocation range must be above the kernel BSS, initrd,
-        // BuddyAllocator struct, and RamFs struct.
-        let min_alloc_base = 0x780000usize.max(ramfs_end);
+        // Frame allocation must be above kernel BSS (which includes
+        // BUDDY_ALLOC and RAMFS statics) and the initrd.
+        let initrd_end = match unsafe { super::multiboot::get_initrd(multiboot_info) } {
+            Some((start, size)) => ((start + size) + 0xFFF) & !0xFFF,
+            None => 0,
+        };
+        let min_alloc_base = 0x780000usize.max(ramfs_end).max(initrd_end);
         let alloc_base = if region.base.as_usize() < min_alloc_base {
             min_alloc_base
         } else {
@@ -428,7 +435,7 @@ pub fn x86_64_init(multiboot_info: usize) {
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr: alloc_addr as *mut rux_mm::frame::BuddyAllocator,
             ramfs_ptr: ramfs_addr as *mut rux_fs::ramfs::RamFs,
-            initrd: initrd_info,
+            initrd: super::multiboot::get_initrd(multiboot_info),
             procfs: &mut *(&raw mut PROCFS),
             log: console::write_str,
         });

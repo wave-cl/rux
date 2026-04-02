@@ -210,7 +210,7 @@ check "proc stat pgid"         "1"
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 12; \
+OUTPUT=$( { sleep 18; \
     printf 'uname -a\n'; sleep 2; \
     printf 'cat /etc/passwd\n'; sleep 2; \
     printf 'cat /etc/os-release\n'; sleep 2; \
