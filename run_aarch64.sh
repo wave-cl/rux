@@ -16,7 +16,7 @@ rustup run nightly cargo build -p rux-kernel --target ${TARGET}
 
 # Load initrd to a known physical address (0x45000000) using generic loader.
 # QEMU's -initrd doesn't work reliably with bare ELF kernels on aarch64.
-exec ${QEMU} -machine virt -cpu cortex-a72 \
+exec ${QEMU} -machine virt -cpu cortex-a72 -smp 2 \
   -kernel ${KERNEL} \
   -device loader,file=${INITRD},addr=0x45000000,force-raw=on \
   -serial mon:stdio -display none \

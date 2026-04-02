@@ -73,7 +73,10 @@ pub unsafe fn find_srat(rsdp_addr: usize) -> Option<usize> {
     if &rsdt.signature != b"RSDT" { return None; }
 
     let header_size = core::mem::size_of::<AcpiHeader>();
-    let entry_count = (rsdt.length as usize).saturating_sub(header_size) / 4;
+    let rsdt_len = rsdt.length as usize;
+    // Sanity check: RSDT length must be reasonable (header + at most 256 entries)
+    if rsdt_len < header_size || rsdt_len > header_size + 256 * 4 { return None; }
+    let entry_count = (rsdt_len - header_size) / 4;
     let entries = (rsdt_addr + header_size) as *const u32;
 
     for i in 0..entry_count {
