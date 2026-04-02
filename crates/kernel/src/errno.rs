@@ -24,3 +24,12 @@ pub const ENOSYS: isize = -38;     // Function not implemented
 
 pub const SIGKILL: u8 = 9;
 pub const SIGCHLD: u8 = 17;
+
+// ── Clone flags (Linux) ─────────────────────────────────────────────
+
+pub const CLONE_VM: usize = 0x100;
+pub const CLONE_FS: usize = 0x200;
+pub const CLONE_FILES: usize = 0x400;
+pub const CLONE_SIGHAND: usize = 0x800;
+pub const CLONE_THREAD: usize = 0x10000;
+pub const CLONE_CHILD_CLEARTID: usize = 0x200000;

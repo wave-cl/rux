@@ -118,7 +118,7 @@ static mut SIGNAL_COLD_BYTES: [u8; SIGNAL_COLD_SIZE * MAX_PROCS] = [0; SIGNAL_CO
 
 #[inline(always)]
 pub unsafe fn signal_cold_mut(idx: usize) -> &'static mut rux_proc::signal::SignalCold {
-    &mut *(SIGNAL_COLD_BYTES.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE) as *mut rux_proc::signal::SignalCold)
+    &mut *((*(&raw mut SIGNAL_COLD_BYTES)).as_mut_ptr().add(idx * SIGNAL_COLD_SIZE) as *mut rux_proc::signal::SignalCold)
 }
 
 /// Raw byte pointer to a task's signal_cold slot. Avoids creating a
@@ -126,7 +126,7 @@ pub unsafe fn signal_cold_mut(idx: usize) -> &'static mut rux_proc::signal::Sign
 /// in the signal delivery hot path).
 #[inline(always)]
 pub unsafe fn signal_cold_raw_ptr(idx: usize) -> *mut u8 {
-    SIGNAL_COLD_BYTES.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE)
+    (*(&raw mut SIGNAL_COLD_BYTES)).as_mut_ptr().add(idx * SIGNAL_COLD_SIZE)
 }
 
 
@@ -260,37 +260,38 @@ pub unsafe fn init_pid1() {
 /// Must be called with interrupts disabled (during schedule()).
 pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     use rux_arch::TaskSwitchOps;
-    use crate::syscall::PROCESS;
+    let proc_ptr = &raw mut crate::syscall::PROCESS;
+    let tt_ptr = &raw mut TASK_TABLE;
 
     // ── Save current globals → old slot ──────────────────────────────
     // Note: FD_TABLE is a pointer into old.fds — no FD copy needed.
-    let old = &mut TASK_TABLE[old_idx];
-    old.program_brk = PROCESS.program_brk;
-    old.mmap_base = PROCESS.mmap_base;
-    old.fs_ctx = PROCESS.fs_ctx;
-    old.signal_hot = PROCESS.signal_hot;
+    let old = &mut (*tt_ptr)[old_idx];
+    old.program_brk = (*proc_ptr).program_brk;
+    old.mmap_base = (*proc_ptr).mmap_base;
+    old.fs_ctx = (*proc_ptr).fs_ctx;
+    old.signal_hot = (*proc_ptr).signal_hot;
     core::ptr::copy_nonoverlapping(
-        PROCESS.signal_restorer.as_ptr(), old.signal_restorer.as_mut_ptr(), 32,
+        (*proc_ptr).signal_restorer.as_ptr(), old.signal_restorer.as_mut_ptr(), 32,
     );
-    old.last_child_exit = PROCESS.last_child_exit;
-    old.child_available = PROCESS.child_available;
+    old.last_child_exit = (*proc_ptr).last_child_exit;
+    old.child_available = (*proc_ptr).child_available;
 
     // Save hardware state (user SP, TLS)
     crate::arch::Arch::save_task_hw(&mut old.saved_user_sp, &mut old.tls);
 
     // ── Load new slot → globals ──────────────────────────────────────
-    let new = &TASK_TABLE[new_idx];
-    PROCESS.program_brk = new.program_brk;
-    PROCESS.mmap_base = new.mmap_base;
-    PROCESS.fs_ctx = new.fs_ctx;
-    PROCESS.signal_hot = new.signal_hot;
+    let new = &(*tt_ptr)[new_idx];
+    (*proc_ptr).program_brk = new.program_brk;
+    (*proc_ptr).mmap_base = new.mmap_base;
+    (*proc_ptr).fs_ctx = new.fs_ctx;
+    (*proc_ptr).signal_hot = new.signal_hot;
     core::ptr::copy_nonoverlapping(
-        new.signal_restorer.as_ptr(), PROCESS.signal_restorer.as_mut_ptr(), 32,
+        new.signal_restorer.as_ptr(), (*proc_ptr).signal_restorer.as_mut_ptr(), 32,
     );
-    PROCESS.last_child_exit = new.last_child_exit;
-    PROCESS.child_available = new.child_available;
+    (*proc_ptr).last_child_exit = new.last_child_exit;
+    (*proc_ptr).child_available = new.child_available;
     // Point FD_TABLE at the new task's fd array (pointer swap, not copy).
-    rux_fs::fdtable::set_active_fds(&mut TASK_TABLE[new_idx].fds);
+    rux_fs::fdtable::set_active_fds(&mut (*tt_ptr)[new_idx].fds);
 
     // Restore hardware state (user SP, TLS, kernel stack top)
     crate::arch::Arch::restore_task_hw(new.saved_user_sp, new.tls, new.kstack_top);

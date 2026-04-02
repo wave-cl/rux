@@ -15,7 +15,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     if sig == Signal::Kill || sig == Signal::Stop { return crate::errno::EINVAL; }
 
     unsafe {
-        let cold = &mut super::PROCESS.signal_cold;
+        let cold = &mut (*(&raw mut super::PROCESS)).signal_cold;
 
         // Write old action to user oldact
         if oldact_ptr != 0 {
@@ -64,7 +64,7 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
     use rux_proc::signal::*;
     if sigsetsize > 8 { return crate::errno::EINVAL; }
     unsafe {
-        let hot = &mut super::PROCESS.signal_hot;
+        let hot = &mut (*(&raw mut super::PROCESS)).signal_hot;
 
         // Write old mask
         if oldset_ptr != 0 {
@@ -178,7 +178,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
     if to_self {
         // Send signal to current process.
         unsafe {
-            let hot = &mut super::PROCESS.signal_hot;
+            let hot = &mut (*(&raw mut super::PROCESS)).signal_hot;
             let cold = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx());
             let action = *cold.get_action(sig);
 

@@ -26,7 +26,7 @@ pub fn exit(status: i32) -> ! {
             TASK_TABLE[idx].exit_code = status;
 
             // CLONE_THREAD: thread exit — write 0 to clear_child_tid, skip zombie.
-            let is_thread = TASK_TABLE[idx].clone_flags & 0x10000 != 0; // CLONE_THREAD
+            let is_thread = TASK_TABLE[idx].clone_flags as usize & crate::errno::CLONE_THREAD != 0;
             if is_thread {
                 // clear_child_tid: write 0 to user address (for pthread_join / futex)
                 let ctid = TASK_TABLE[idx].clear_child_tid;

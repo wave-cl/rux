@@ -8,14 +8,7 @@ use crate::task_table::*;
 use rux_fs::fdtable::{OpenFile, MAX_FDS};
 use rux_klib::PhysAddr;
 
-// ── Clone flags ──────────────────────────────────────────────────────
-
-const CLONE_VM: usize = 0x100;
-const CLONE_FS: usize = 0x200;
-const CLONE_FILES: usize = 0x400;
-const CLONE_SIGHAND: usize = 0x800;
-const CLONE_THREAD: usize = 0x10000;
-const CLONE_CHILD_CLEARTID: usize = 0x200000;
+use crate::errno::{CLONE_THREAD, CLONE_CHILD_CLEARTID};
 
 // ── Shared helpers ───────────────────────────────────────────────────
 

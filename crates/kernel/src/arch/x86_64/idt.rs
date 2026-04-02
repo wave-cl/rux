@@ -289,7 +289,7 @@ pub unsafe fn init() {
     // Load IDT
     let idt_ptr = IdtPtr {
         limit: (core::mem::size_of::<[IdtEntry; IDT_ENTRIES]>() - 1) as u16,
-        base: IDT.as_ptr() as u64,
+        base: (&raw const IDT) as *const u8 as u64,
     };
 
     core::arch::asm!(
@@ -303,7 +303,7 @@ pub unsafe fn init() {
 pub unsafe fn load() {
     let idt_ptr = IdtPtr {
         limit: (core::mem::size_of::<[IdtEntry; IDT_ENTRIES]>() - 1) as u16,
-        base: IDT.as_ptr() as u64,
+        base: (&raw const IDT) as *const u8 as u64,
     };
     core::arch::asm!("lidt [{}]", in(reg) &idt_ptr, options(nostack));
 }

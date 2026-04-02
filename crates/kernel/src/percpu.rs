@@ -110,5 +110,5 @@ pub unsafe fn init_bsp() {
 
 /// Number of online CPUs.
 pub fn online_cpus() -> usize {
-    unsafe { PERCPU.iter().filter(|c| c.online).count() }
+    unsafe { (*(&raw const PERCPU)).iter().filter(|c| c.online).count() }
 }

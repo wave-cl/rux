@@ -26,14 +26,15 @@ static mut FRAME_REFS: FrameRefTable = FrameRefTable {
 /// # Safety
 /// Must be called before any COW fork operations.
 pub unsafe fn init(alloc_base: PhysAddr) {
-    FRAME_REFS.counts = REF_COUNTS.as_mut_ptr();
-    FRAME_REFS.base = alloc_base;
-    FRAME_REFS.max_frames = MAX_FRAMES;
+    let refs = &raw mut FRAME_REFS;
+    (*refs).counts = (&raw mut REF_COUNTS) as *mut u32;
+    (*refs).base = alloc_base;
+    (*refs).max_frames = MAX_FRAMES;
 }
 
 /// Get a mutable reference to the global frame reference table.
 pub unsafe fn refs() -> &'static mut FrameRefTable {
-    &mut FRAME_REFS
+    &mut *(&raw mut FRAME_REFS)
 }
 
 /// Handle a COW page fault at `fault_addr`.
@@ -50,9 +51,10 @@ pub unsafe fn handle_cow_fault(fault_addr: usize) -> Result<(), ()> {
     let root = crate::arch::Arch::read();
     let pt = crate::arch::PageTable::from_root(PhysAddr::new(root as usize));
     let alloc = crate::kstate::alloc();
+    let refs = &mut *(&raw mut FRAME_REFS);
 
-    match pt.resolve_cow_fault(va, alloc, |pa| FRAME_REFS.count(pa))? {
-        Some(old_pa) => { FRAME_REFS.dec(old_pa); }
+    match pt.resolve_cow_fault(va, alloc, |pa| refs.count(pa))? {
+        Some(old_pa) => { refs.dec(old_pa); }
         None => {}
     }
 
@@ -61,11 +63,11 @@ pub unsafe fn handle_cow_fault(fault_addr: usize) -> Result<(), ()> {
 
 /// Increment refcount for a physical frame (called during COW fork).
 pub unsafe fn inc_ref(pa: PhysAddr) {
-    FRAME_REFS.inc(pa);
+    (*(&raw mut FRAME_REFS)).inc(pa);
 }
 
 /// Decrement refcount for a physical frame. Returns true if the
 /// frame can be freed (refcount reached 0).
 pub unsafe fn dec_ref(pa: PhysAddr) -> bool {
-    FRAME_REFS.dec(pa)
+    (*(&raw mut FRAME_REFS)).dec(pa)
 }

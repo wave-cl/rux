@@ -94,7 +94,7 @@ pub unsafe fn init(kernel_stack_top: u64) {
     TSS.iopb_offset = core::mem::size_of::<Tss>() as u16;
 
     // Encode TSS descriptor into GDT
-    let tss_addr = &TSS as *const Tss as u64;
+    let tss_addr = (&raw const TSS) as *const Tss as u64;
     let tss_size = (core::mem::size_of::<Tss>() - 1) as u64;
 
     let low: u64 = (tss_size & 0xFFFF)
@@ -110,7 +110,7 @@ pub unsafe fn init(kernel_stack_top: u64) {
     // Load GDT
     let gdt_ptr = GdtPtr {
         limit: (core::mem::size_of::<Gdt>() - 1) as u16,
-        base: &GDT as *const Gdt as u64,
+        base: (&raw const GDT) as *const Gdt as u64,
     };
 
     core::arch::asm!(

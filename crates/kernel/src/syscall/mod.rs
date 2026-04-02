@@ -377,9 +377,9 @@ pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64
     // the per-task slot and PROCESS.signal_cold, and exec resets both,
     // the global is correct for the current task during delivery.
     rux_proc::signal::deliver_signal::<S>(
-        &mut PROCESS.signal_hot,
-        &mut PROCESS.signal_cold,
-        &PROCESS.signal_restorer,
+        &mut (*(&raw mut PROCESS)).signal_hot,
+        &mut (*(&raw mut PROCESS)).signal_cold,
+        &(*(&raw const PROCESS)).signal_restorer,
         syscall_result,
         |status| { posix::exit(status); loop {} },
     )
@@ -388,5 +388,5 @@ pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64
 /// Restore pre-signal state from the signal frame on the user stack.
 /// Thin wrapper around `rux_proc::signal::sigreturn` that supplies kernel state.
 pub unsafe fn generic_sigreturn<S: rux_arch::SignalOps>() -> i64 {
-    rux_proc::signal::sigreturn::<S>(&mut PROCESS.signal_hot)
+    rux_proc::signal::sigreturn::<S>(&mut (*(&raw mut PROCESS)).signal_hot)
 }

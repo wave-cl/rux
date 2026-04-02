@@ -46,8 +46,7 @@ pub fn handle_syscall(frame: *mut u8) {
             // nr=220 is clone(flags, stack, ptid, tls, ctid)
             220 => {
                 let flags = a0 as usize;
-                const CLONE_VM: usize = 0x100;
-                if flags & CLONE_VM != 0 {
+                if flags & crate::errno::CLONE_VM != 0 {
                     crate::fork::sys_clone(flags, a1 as usize, a4 as usize) as i64
                 } else {
                     crate::fork::sys_fork() as i64

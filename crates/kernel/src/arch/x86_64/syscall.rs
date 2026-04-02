@@ -17,7 +17,7 @@ pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
 /// Get the top address of the default SYSCALL_STACK.
 pub fn syscall_stack_top() -> u64 {
-    unsafe { SYSCALL_STACK.as_ptr() as u64 + 65536 }
+    unsafe { (&raw const SYSCALL_STACK) as *const u8 as u64 + 65536 }
 }
 
 /// Saved user RSP during syscall (single-process, no swapgs needed).
@@ -183,8 +183,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         // 56=clone(flags, stack, ptid, ctid, tls), 57=fork, 58=vfork
         56 => {
             let flags = a0 as usize;
-            const CLONE_VM: usize = 0x100;
-            if flags & CLONE_VM != 0 {
+            if flags & crate::errno::CLONE_VM != 0 {
                 // Thread: shared address space
                 return unsafe { crate::fork::sys_clone(flags, a1 as usize, a3 as usize) } as i64;
             }
@@ -206,7 +205,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
 
     // Check for pending signals before returning to userspace
     unsafe {
-        if crate::syscall::PROCESS.signal_hot.has_deliverable() {
+        if (*(&raw const crate::syscall::PROCESS)).signal_hot.has_deliverable() {
             crate::uaccess::stac(); // signal frame is on user stack
             let sig_result = crate::syscall::generic_deliver_signal::<super::X86_64>(result);
             crate::uaccess::clac();

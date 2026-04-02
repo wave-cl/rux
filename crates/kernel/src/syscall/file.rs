@@ -8,7 +8,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
     if fd == 0 && fdt::is_console_fd(0) {
         // stdin from console — route through TTY line discipline
         unsafe {
-            let tty = &mut crate::tty::TTY;
+            let tty = &mut *(&raw mut crate::tty::TTY);
             let ptr = buf as *mut u8;
             return if tty.cooked {
                 tty.read_canonical::<Arch>(ptr, len)
@@ -230,7 +230,7 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
         TCGETS => {
             if arg != 0 {
                 unsafe {
-                    let tty = &crate::tty::TTY;
+                    let tty = &*(&raw const crate::tty::TTY);
                     let ptr = arg as *mut u8;
                     for i in 0..60 { *ptr.add(i) = 0; }
                     *(arg as *mut u32) = 0x500; // c_iflag
@@ -251,7 +251,7 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
         0x5402 | 0x5403 | 0x5404 => {
             if arg != 0 {
                 unsafe {
-                    let tty = &mut crate::tty::TTY;
+                    let tty = &mut *(&raw mut crate::tty::TTY);
                     let lflag = *((arg + 12) as *const u32);
                     tty.cooked = lflag & 0x2 != 0; // ICANON
                     tty.echo   = lflag & 0x8 != 0; // ECHO
