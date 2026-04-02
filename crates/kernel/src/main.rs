@@ -16,6 +16,7 @@ pub mod uaccess;
 pub mod task_table;
 pub mod percpu;
 pub mod fork;
+pub mod errno;
 
 #[cfg(feature = "native")]
 mod tests;

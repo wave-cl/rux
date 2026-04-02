@@ -56,24 +56,24 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
                     if r > 0 { crate::pipe::wake_pipe_waiters(pipe_id); }
                     break r;
                 }
-                if !can_pipe_block() { break -32; }
+                if !can_pipe_block() { break crate::errno::EPIPE; }
                 pipe_block(pipe_id);
                 if fd >= 64 || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
-                    break -32;
+                    break crate::errno::EPIPE;
                 }
             }
         } else {
             fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
         };
         // SIGPIPE: writing to a pipe with no readers
-        if result == -32 {
+        if result == crate::errno::EPIPE {
             use rux_proc::signal::*;
             let cold: &rux_proc::signal::SignalCold = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx());
             let action = *cold.get_action(Signal::Pipe);
             if action.handler_type == SignalHandler::Default {
                 super::posix::exit(128 + 13);
             }
-            return -32;
+            return crate::errno::EPIPE;
         }
         // Update mtime on successful file write (skip pipes/console)
         if result > 0 && fd < 64 {
@@ -92,7 +92,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
 pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
     unsafe {
         let path = crate::uaccess::read_user_cstr(path_ptr);
-        if path.is_empty() { return -2; }
+        if path.is_empty() { return crate::errno::ENOENT; }
 
         let o_creat = flags & 0x40 != 0;
 
@@ -107,7 +107,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                 let fs = crate::kstate::fs();
                 let fname = match FileName::new(name) {
                     Ok(f) => f,
-                    Err(_) => return -22,
+                    Err(_) => return crate::errno::EINVAL,
                 };
                 match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
                     Ok(ino) => {
@@ -166,8 +166,8 @@ pub fn lseek(fd: usize, offset: i64, whence: usize) -> isize {
 pub fn pread64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return -9; }
-        if (*fdt::FD_TABLE)[fd].is_pipe { return -29; } // -ESPIPE
+        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return crate::errno::EBADF; }
+        if (*fdt::FD_TABLE)[fd].is_pipe { return crate::errno::ESPIPE; }
         let ino = (*fdt::FD_TABLE)[fd].ino;
         let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, len);
         match crate::kstate::fs().read(ino, offset as u64, user_buf) {

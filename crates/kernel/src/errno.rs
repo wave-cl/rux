@@ -1,0 +1,26 @@
+//! POSIX error codes (negated) and signal constants.
+//!
+//! Syscall handlers return negative errno values on failure.
+//! Using named constants instead of magic numbers improves readability.
+
+// ── Error codes (negated POSIX errno) ───────────────────────────────
+
+pub const EPERM: isize = -1;       // Operation not permitted
+pub const ENOENT: isize = -2;      // No such file or directory
+pub const ESRCH: isize = -3;       // No such process
+pub const EINTR: isize = -4;       // Interrupted system call
+pub const EBADF: isize = -9;       // Bad file descriptor
+pub const ECHILD: isize = -10;     // No child processes
+pub const EAGAIN: isize = -11;     // Resource temporarily unavailable
+pub const EFAULT: isize = -14;     // Bad address
+pub const ENOTDIR: isize = -20;    // Not a directory
+pub const EINVAL: isize = -22;     // Invalid argument
+pub const ESPIPE: isize = -29;     // Illegal seek (pipe)
+pub const EPIPE: isize = -32;      // Broken pipe
+pub const ERANGE: isize = -34;     // Numerical result out of range
+pub const ENOSYS: isize = -38;     // Function not implemented
+
+// ── Signal numbers (POSIX) ──────────────────────────────────────────
+
+pub const SIGKILL: u8 = 9;
+pub const SIGCHLD: u8 = 17;

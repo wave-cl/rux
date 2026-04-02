@@ -109,7 +109,7 @@ unsafe fn enqueue_child(child_idx: usize) {
 pub unsafe fn sys_fork() -> isize {
     let child_idx = match alloc_task_slot() {
         Some(idx) => idx,
-        None => return -11, // -EAGAIN
+        None => return crate::errno::EAGAIN,
     };
     let child_pid = alloc_pid();
     let parent_idx = current_task_idx();
@@ -146,7 +146,7 @@ pub unsafe fn sys_fork() -> isize {
 pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) -> isize {
     let child_idx = match alloc_task_slot() {
         Some(idx) => idx,
-        None => return -11,
+        None => return crate::errno::EAGAIN,
     };
     let child_pid = alloc_pid();
     let parent_idx = current_task_idx();

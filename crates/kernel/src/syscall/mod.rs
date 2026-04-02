@@ -274,17 +274,17 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // Dispatched by arch entry point, never reaches generic dispatch
         Syscall::Vfork | Syscall::Execve | Syscall::Sigreturn => 0,
 
-        Syscall::Rseq => -38, // -ENOSYS
+        Syscall::Rseq => crate::errno::ENOSYS,
 
         // ── Architecture-specific ──────────────────────────────────
         Syscall::ArchSpecific(nr) => {
             use rux_arch::ArchSpecificOps;
             crate::arch::Arch::arch_syscall(nr as usize, a0, a1)
-                .unwrap_or(-38)
+                .unwrap_or(crate::errno::ENOSYS)
         }
 
         // ── Unknown ────────────────────────────────────────────────
-        Syscall::Unknown(_) => -38, // -ENOSYS
+        Syscall::Unknown(_) => crate::errno::ENOSYS,
     }
 }
 

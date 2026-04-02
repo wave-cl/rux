@@ -7,12 +7,12 @@ type Arch = crate::arch::Arch;
 pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     use rux_proc::signal::*;
     use rux_arch::SigactionLayout;
-    if signum < 1 || signum > 31 { return -22; }
+    if signum < 1 || signum > 31 { return crate::errno::EINVAL; }
     let sig = match Signal::from_raw(signum as u8) {
         Some(s) => s,
-        None => return -22,
+        None => return crate::errno::EINVAL,
     };
-    if sig == Signal::Kill || sig == Signal::Stop { return -22; }
+    if sig == Signal::Kill || sig == Signal::Stop { return crate::errno::EINVAL; }
 
     unsafe {
         let cold = &mut super::PROCESS.signal_cold;
@@ -62,7 +62,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
 /// sigprocmask(how, set, oldset, sigsetsize) — POSIX.1
 pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: usize) -> isize {
     use rux_proc::signal::*;
-    if sigsetsize > 8 { return -22; }
+    if sigsetsize > 8 { return crate::errno::EINVAL; }
     unsafe {
         let hot = &mut super::PROCESS.signal_hot;
 
@@ -91,7 +91,7 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
                 SIG_SETMASK => {
                     hot.blocked = SignalSet(new_set.0 & !unblockable);
                 }
-                _ => return -22,
+                _ => return crate::errno::EINVAL,
             }
         }
     }
@@ -102,7 +102,7 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
 pub fn kill(pid: isize, signum: usize) -> isize {
     use rux_proc::signal::*;
 
-    if signum > 31 { return -22; }
+    if signum > 31 { return crate::errno::EINVAL; }
 
     let my_pid = crate::task_table::current_pid() as isize;
 
@@ -120,13 +120,13 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             let found = (0..MAX_PROCS).any(|i| {
                 TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32
             });
-            return if found { 0 } else { -3 }; // -ESRCH
+            return if found { 0 } else { crate::errno::ESRCH };
         }
     }
 
     let sig = match Signal::from_raw(signum as u8) {
         Some(s) => s,
-        None => return -22,
+        None => return crate::errno::EINVAL,
     };
 
     // Send to process group: pid==0 (own group) or pid<-1 (group -pid)
@@ -155,7 +155,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                     }
                 }
             }
-            return if found { 0 } else { -3 }; // -ESRCH
+            return if found { 0 } else { crate::errno::ESRCH };
         }
     }
 
@@ -184,7 +184,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
 
             // SIGKILL always terminates
             if sig == Signal::Kill {
-                posix_exit(128 + 9);
+                posix_exit(128 + crate::errno::SIGKILL as i32);
             }
 
             // If default action is Terminate/CoreDump and handler is Default, exit now
@@ -226,15 +226,15 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             // Find target process in TASK_TABLE.
             let target_idx = match find_task_by_pid(pid as u32) {
                 Some(i) => i,
-                None => return -3, // -ESRCH
+                None => return crate::errno::ESRCH,
             };
 
             // SIGKILL: mark target as zombie (no handler check needed)
             if sig == Signal::Kill {
                 // Force-kill the target: mark zombie, wake parent
                 TASK_TABLE[target_idx].state = TaskState::Zombie;
-                TASK_TABLE[target_idx].exit_code = 128 + 9;
-                notify_parent_child_exit(TASK_TABLE[target_idx].ppid, 128 + 9);
+                TASK_TABLE[target_idx].exit_code = 128 + crate::errno::SIGKILL as i32;
+                notify_parent_child_exit(TASK_TABLE[target_idx].ppid, 128 + crate::errno::SIGKILL as i32);
                 let sched = crate::scheduler::get();
                 sched.tasks[target_idx].entity.state = rux_sched::TaskState::Dead;
                 sched.tasks[target_idx].active = false;

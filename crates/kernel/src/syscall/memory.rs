@@ -13,7 +13,7 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
     const PROT_WRITE: usize = 2;
     const PROT_EXEC: usize = 4;
 
-    if len == 0 { return -22; }
+    if len == 0 { return crate::errno::EINVAL; }
 
     unsafe {
         let aligned_len = (len + 0xFFF) & !0xFFF;
@@ -58,7 +58,7 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
 /// munmap(addr, length) — POSIX.1: unmap pages from address space.
 /// COW-aware: only frees frames whose refcount reaches zero.
 pub fn munmap(addr: usize, len: usize) -> isize {
-    if addr & 0xFFF != 0 { return -22; } // must be page-aligned
+    if addr & 0xFFF != 0 { return crate::errno::EINVAL; } // must be page-aligned
     unsafe {
         let alloc = crate::kstate::alloc();
         let mut upt = super::current_user_page_table();
@@ -104,7 +104,7 @@ fn futex_wait(uaddr: usize, expected: u32) -> isize {
 
         // Atomic check: if value changed since caller checked, return EAGAIN
         if uaddr == 0 || *(uaddr as *const u32) != expected {
-            return -11; // -EAGAIN
+            return crate::errno::EAGAIN;
         }
 
         // Block until woken by FUTEX_WAKE
@@ -144,7 +144,7 @@ pub fn futex_wake(uaddr: usize, max_wake: usize) -> isize {
 
 /// mprotect(addr, len, prot) — POSIX.1: change page protection.
 pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
-    if addr & 0xFFF != 0 { return -22; }
+    if addr & 0xFFF != 0 { return crate::errno::EINVAL; }
     unsafe {
         let mut upt = super::current_user_page_table();
         let aligned_len = (len + 0xFFF) & !0xFFF;

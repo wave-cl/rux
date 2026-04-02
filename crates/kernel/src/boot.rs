@@ -35,10 +35,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
 
     // Zero and init RamFs
     let fs_bytes = core::mem::size_of::<rux_fs::ramfs::RamFs>();
-    let fs_qwords = (fs_bytes + 7) / 8;
-    for i in 0..fs_qwords {
-        core::ptr::write_volatile((ramfs_ptr as *mut u64).add(i), 0u64);
-    }
+    core::ptr::write_bytes(ramfs_ptr as *mut u8, 0, fs_bytes);
     log("rux: zeroing done\n");
 
     let alloc_dyn: *mut dyn rux_mm::FrameAllocator =

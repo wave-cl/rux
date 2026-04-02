@@ -136,7 +136,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                     }
                     return 42; // fake child PID for vfork path
                 }
-                return -10; // -ECHILD
+                return crate::errno::ECHILD;
             }
 
             // Block until a child exits.
@@ -156,7 +156,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
 pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
         let len = super::PROCESS.fs_ctx.cwd_path_len;
-        if buf == 0 || size < len + 1 { return -34; } // -ERANGE
+        if buf == 0 || size < len + 1 { return crate::errno::ERANGE; }
         crate::uaccess::stac();
         let ptr = buf as *mut u8;
         for i in 0..len {
@@ -170,7 +170,7 @@ pub fn getcwd(buf: usize, size: usize) -> isize {
 
 /// uname(buf) — POSIX.1
 pub fn uname(buf: usize) -> isize {
-    if buf == 0 { return -14; }
+    if buf == 0 { return crate::errno::EFAULT; }
     unsafe {
         crate::uaccess::stac();
         let ptr = buf as *mut u8;
@@ -210,7 +210,7 @@ pub fn uname(buf: usize) -> isize {
     0
 }
 pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
-    if tp == 0 { return -14; }
+    if tp == 0 { return crate::errno::EFAULT; }
     let ticks = Arch::ticks();
     unsafe {
         crate::uaccess::put_user(tp, ticks / 1000);
@@ -220,7 +220,7 @@ pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
 }
 
 pub fn nanosleep(req_ptr: usize) -> isize {
-    if req_ptr == 0 { return -14; }
+    if req_ptr == 0 { return crate::errno::EFAULT; }
     unsafe {
         use rux_arch::HaltOps;
         let tv_sec: u64 = crate::uaccess::get_user(req_ptr);
@@ -267,12 +267,12 @@ pub fn setpgid(pid: usize, pgid: usize) -> isize {
             Some(i) => {
                 let t = &mut TASK_TABLE[i];
                 if target_pid != my_pid && t.ppid != my_pid {
-                    return -1; // -EPERM: can only set pgid for self or child
+                    return crate::errno::EPERM;
                 }
                 t.pgid = new_pgid;
                 0
             }
-            None => -3, // -ESRCH
+            None => crate::errno::ESRCH,
         }
     }
 }
@@ -287,7 +287,7 @@ pub fn getpgid(pid: usize) -> isize {
         }
         match find_task_by_pid(pid as u32) {
             Some(i) => TASK_TABLE[i].pgid as isize,
-            None => -3, // -ESRCH
+            None => crate::errno::ESRCH,
         }
     }
 }

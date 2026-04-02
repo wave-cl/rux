@@ -25,7 +25,7 @@ unsafe fn synthetic_stat(buf: usize, mode: u32) {
 
 /// fstat(fd, statbuf) — POSIX.1
 pub fn fstat(fd: usize, buf: usize) -> isize {
-    if buf == 0 { return -14; }
+    if buf == 0 { return crate::errno::EFAULT; }
     if fd <= 2 && fdt::is_console_fd(fd) {
         unsafe { synthetic_stat(buf, 0o20666); } // S_IFCHR | 0666
         return 0;
@@ -41,7 +41,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
         let f = &(*fdt::FD_TABLE)[fd];
-        if !f.active { return -9; }
+        if !f.active { return crate::errno::EBADF; }
         let fs = crate::kstate::fs();
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(f.ino, &mut vfs_stat).is_err() {
@@ -56,7 +56,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
 /// fstatat(dirfd, pathname, statbuf, flags) — POSIX.1-2008
 /// flags=0x100 (AT_SYMLINK_NOFOLLOW): stat the symlink itself, not its target.
 pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize {
-    if buf == 0 { return -14; }
+    if buf == 0 { return crate::errno::EFAULT; }
     const AT_SYMLINK_NOFOLLOW: usize = 0x100;
     unsafe {
         use rux_fs::FileSystem;
@@ -74,7 +74,7 @@ pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isiz
             }
         };
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
-        if fs.stat(ino, &mut vfs_stat).is_err() { return -2; }
+        if fs.stat(ino, &mut vfs_stat).is_err() { return crate::errno::ENOENT; }
         crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, &vfs_stat);
         0
     }
@@ -86,7 +86,7 @@ pub fn chdir(path_ptr: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
         let path = crate::uaccess::read_user_cstr(path_ptr);
-        if path.is_empty() { return -2; }
+        if path.is_empty() { return crate::errno::ENOENT; }
 
         let fs = crate::kstate::fs();
         let ino = match super::resolve_with_cwd(path) {
@@ -95,9 +95,9 @@ pub fn chdir(path_ptr: usize) -> isize {
         };
 
         let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
-        if fs.stat(ino, &mut stat).is_err() { return -2; }
+        if fs.stat(ino, &mut stat).is_err() { return crate::errno::ENOENT; }
         if stat.mode & rux_fs::S_IFMT != rux_fs::S_IFDIR {
-            return -20; // -ENOTDIR
+            return crate::errno::ENOTDIR;
         }
 
         super::PROCESS.fs_ctx.cwd = ino;
@@ -135,7 +135,7 @@ pub fn mkdir(path_ptr: usize) -> isize {
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
             Ok(f) => f,
-            Err(_) => return -22,
+            Err(_) => return crate::errno::EINVAL,
         };
         match fs.mkdir(dir_ino, fname, 0o755) {
             Ok(ino) => {
@@ -159,11 +159,11 @@ pub fn unlink(path_ptr: usize) -> isize {
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
             Ok(f) => f,
-            Err(_) => return -22,
+            Err(_) => return crate::errno::EINVAL,
         };
         match fs.unlink(dir_ino, fname) {
             Ok(()) => 0,
-            Err(_) => -2,
+            Err(_) => crate::errno::ENOENT,
         }
     }
 }
@@ -179,7 +179,7 @@ pub fn creat(path_ptr: usize) -> isize {
         let fs = crate::kstate::fs();
         let fname = match FileName::new(name) {
             Ok(f) => f,
-            Err(_) => return -22,
+            Err(_) => return crate::errno::EINVAL,
         };
         match fs.create(dir_ino, fname, 0o644) {
             Ok(ino) => {
@@ -210,11 +210,11 @@ pub fn rename(old_ptr: usize, new_ptr: usize) -> isize {
             Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let old_fname = match FileName::new(old_name) { Ok(f) => f, Err(_) => return -22 };
-        let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return -22 };
+        let old_fname = match FileName::new(old_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         match fs.rename(old_dir, old_fname, new_dir, new_fname) {
             Ok(()) => 0,
-            Err(_) => -2,
+            Err(_) => crate::errno::ENOENT,
         }
     }
 }
@@ -229,7 +229,7 @@ pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
             Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return -22 };
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         match fs.symlink(dir_ino, fname, target) {
             Ok(_) => 0,
             Err(_) => -17,
@@ -251,7 +251,7 @@ pub fn link(old_ptr: usize, new_ptr: usize) -> isize {
             Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return -22 };
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         match fs.link(dir_ino, fname, old_ino) {
             Ok(()) => 0,
             Err(_) => -17,
@@ -271,7 +271,7 @@ pub fn chmod(path_ptr: usize, mode: usize) -> isize {
         let fs = crate::kstate::fs();
         match fs.chmod(ino, mode as u32) {
             Ok(()) => 0,
-            Err(_) => -2,
+            Err(_) => crate::errno::ENOENT,
         }
     }
 }
@@ -280,13 +280,13 @@ pub fn chmod(path_ptr: usize, mode: usize) -> isize {
 pub fn fchmod(fd: usize, mode: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 { return -9; }
+        if fd >= 64 { return crate::errno::EBADF; }
         let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
-        if !f.active { return -9; }
+        if !f.active { return crate::errno::EBADF; }
         let fs = crate::kstate::fs();
         match fs.chmod(f.ino, mode as u32) {
             Ok(()) => 0,
-            Err(_) => -2,
+            Err(_) => crate::errno::ENOENT,
         }
     }
 }
@@ -303,7 +303,7 @@ pub fn chown(path_ptr: usize, uid: usize, gid: usize) -> isize {
         let fs = crate::kstate::fs();
         match fs.chown(ino, uid as u32, gid as u32) {
             Ok(()) => 0,
-            Err(_) => -2,
+            Err(_) => crate::errno::ENOENT,
         }
     }
 }
@@ -312,13 +312,13 @@ pub fn chown(path_ptr: usize, uid: usize, gid: usize) -> isize {
 pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 { return -9; }
+        if fd >= 64 { return crate::errno::EBADF; }
         let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
-        if !f.active { return -9; }
+        if !f.active { return crate::errno::EBADF; }
         let fs = crate::kstate::fs();
         match fs.chown(f.ino, uid as u32, gid as u32) {
             Ok(()) => 0,
-            Err(_) => -2,
+            Err(_) => crate::errno::ENOENT,
         }
     }
 }
@@ -351,7 +351,7 @@ pub fn utimensat(_dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize
         let fs = crate::kstate::fs();
         match fs.utimes(ino, atime, mtime) {
             Ok(()) => 0,
-            Err(_) => -2,
+            Err(_) => crate::errno::ENOENT,
         }
     }
 }
@@ -373,16 +373,16 @@ pub fn readlink(path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
             Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return -22 };
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         // Lookup the name in the parent — this gives us the symlink inode
         let ino = match fs.lookup(dir_ino, fname) {
             Ok(ino) => ino,
-            Err(_) => return -2,
+            Err(_) => return crate::errno::ENOENT,
         };
         let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, bufsiz);
         match fs.readlink(ino, user_buf) {
             Ok(n) => n as isize,
-            Err(_) => -22, // -EINVAL (not a symlink)
+            Err(_) => crate::errno::EINVAL,
         }
     }
 }

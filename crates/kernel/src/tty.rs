@@ -54,7 +54,7 @@ impl Tty {
                         crate::syscall::posix::kill(
                             -(self.foreground_pgid as isize), 2,
                         );
-                        return -4; // -EINTR
+                        return crate::errno::EINTR;
                     }
                 }
                 // Ctrl-D: EOF — return buffered data or 0

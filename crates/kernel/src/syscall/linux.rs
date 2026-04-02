@@ -7,7 +7,7 @@
 
 /// pipe2(pipefd, flags) — create a pipe.
 pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
-    if pipefd_ptr == 0 { return -14; } // -EFAULT
+    if pipefd_ptr == 0 { return crate::errno::EFAULT; }
     match crate::pipe::create() {
         Ok((_pipe_id, read_fd, write_fd)) => {
             unsafe {
@@ -48,7 +48,7 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
         let dir_ino = if fd >= 3 {
             match rux_fs::fdtable::get_fd_inode(fd) {
                 Some(ino) => ino,
-                None => return -9,
+                None => return crate::errno::EBADF,
             }
         } else {
             0 // root
@@ -77,7 +77,7 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> 
 /// statfs(path, buf) — Linux filesystem stats.
 /// Used by `df` to show disk space.
 pub fn statfs(_path_ptr: usize, buf_ptr: usize) -> isize {
-    if buf_ptr == 0 { return -14; }
+    if buf_ptr == 0 { return crate::errno::EFAULT; }
     unsafe {
         use rux_mm::FrameAllocator;
         let total_frames = 16384usize;
@@ -114,7 +114,7 @@ pub fn set_tid_address(tidptr: usize) -> isize {
 /// sysinfo(info) — Linux-specific system information.
 /// Used by `free`, `uptime`, and other utilities.
 pub fn sysinfo(info_ptr: usize) -> isize {
-    if info_ptr == 0 { return -14; }
+    if info_ptr == 0 { return crate::errno::EFAULT; }
     unsafe {
         use rux_arch::TimerOps;
         let ticks = crate::arch::Arch::ticks();

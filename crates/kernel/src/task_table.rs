@@ -201,7 +201,7 @@ pub unsafe fn notify_parent_child_exit(child_ppid: u32, exit_status: i32) {
         let t = &mut TASK_TABLE[pi];
         t.last_child_exit = exit_status;
         t.child_available = true;
-        t.signal_hot.pending = t.signal_hot.pending.add(17); // SIGCHLD
+        t.signal_hot.pending = t.signal_hot.pending.add(crate::errno::SIGCHLD);
         if t.state == TaskState::WaitingForChild {
             t.state = TaskState::Ready;
             crate::scheduler::get().wake_task(pi);
