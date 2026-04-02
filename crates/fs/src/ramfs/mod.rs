@@ -268,7 +268,7 @@ impl RamFs {
             );
         }
         for &entry in &entries {
-            if entry != NO_PAGE { self.free_page(entry); }
+            if entry != NO_PAGE && entry != 0 { self.free_page(entry); }
         }
         self.free_page(addr);
     }
@@ -332,13 +332,15 @@ impl RamFs {
     }
 
     /// Get the physical address of the Nth data page for an inode.
-    /// Returns NO_PAGE if not allocated.
+    /// Returns NO_PAGE if not allocated. Treats 0 as NO_PAGE since the
+    /// buddy allocator never returns physical address 0.
     fn get_data_page(&self, m: &InodeMeta, page_idx: usize) -> u64 {
         if page_idx < DIRECT_PAGES {
-            return m.direct[page_idx];
+            let addr = m.direct[page_idx];
+            return if addr == 0 || addr == NO_PAGE { NO_PAGE } else { addr };
         }
         if let Some((blk, slot)) = self.resolve_indirect(m, page_idx) {
-            if blk != NO_PAGE {
+            if blk != NO_PAGE && blk != 0 {
                 return self.indirect_entry(blk, slot);
             }
         }
@@ -367,7 +369,7 @@ impl RamFs {
         } else {
             self.inodes[ino_idx].indirect2
         };
-        if cur != NO_PAGE { return Ok(cur); }
+        if cur != NO_PAGE && cur != 0 { return Ok(cur); }
         let addr = self.alloc_page()?;
         // Zero-based sentinel: indirect_entry() treats 0 as NO_PAGE.
         // alloc_page() already zeroes the page, so entries start as NO_PAGE.
@@ -387,7 +389,8 @@ impl RamFs {
         }
 
         if page_idx < DIRECT_PAGES {
-            if self.inodes[ino_idx].direct[page_idx] == NO_PAGE {
+            let cur = self.inodes[ino_idx].direct[page_idx];
+            if cur == NO_PAGE || cur == 0 {
                 let addr = self.alloc_page()?;
                 self.inodes[ino_idx].direct[page_idx] = addr;
             }

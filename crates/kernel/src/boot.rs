@@ -41,6 +41,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
     let alloc_dyn: *mut dyn rux_mm::FrameAllocator =
         &mut *alloc_ptr as &mut dyn rux_mm::FrameAllocator;
     rux_fs::ramfs::RamFs::init_at(ramfs_ptr, alloc_dyn);
+    log("rux: ramfs init done\n");
 
     // Unpack initramfs into ramfs
     if let Some((initrd_start, initrd_size)) = params.initrd {
