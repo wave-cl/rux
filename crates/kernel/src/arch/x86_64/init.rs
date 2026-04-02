@@ -34,9 +34,8 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         console::write_str(rux_klib::fmt::u32_to_str(&mut buf, cpu_id));
         console::write_str(" online\n");
 
-        // 5. LAPIC timer for APs: deferred until scheduler is per-CPU safe.
-        // Currently the global scheduler has no spinlock protection.
-        // TODO: init_timer(32, 100_000) + scheduler spinlock
+        // 5. Start LAPIC timer on AP (vector 48, ~1000 Hz)
+        super::apic::init_timer(48, 100_000);
 
         // 6. Enable interrupts and enter idle loop
         // When the LAPIC timer fires, the IDT handler (vector 32) calls

@@ -9,6 +9,10 @@ pub use rux_sched::kernel::{Scheduler, KernelTask, ContextFns, MAX_TASKS};
 /// Accessed from the timer ISR and from kernel_main.
 static mut SCHED: Scheduler = Scheduler::new();
 
+/// Scheduler lock for SMP (unused until AP timer is enabled).
+#[allow(dead_code)]
+pub static SCHED_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// Get a mutable reference to the global scheduler.
 ///
 /// # Safety

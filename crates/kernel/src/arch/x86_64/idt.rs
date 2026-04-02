@@ -219,6 +219,9 @@ isr_stub!(no_err, 45);
 isr_stub!(no_err, 46);
 isr_stub!(no_err, 47);
 
+// AP LAPIC timer
+isr_stub!(no_err, 48);
+
 // Software interrupt for syscalls
 isr_stub!(no_err, 128); // INT 0x80
 
@@ -236,6 +239,7 @@ extern "C" {
     fn isr_stub_36(); fn isr_stub_37(); fn isr_stub_38(); fn isr_stub_39();
     fn isr_stub_40(); fn isr_stub_41(); fn isr_stub_42(); fn isr_stub_43();
     fn isr_stub_44(); fn isr_stub_45(); fn isr_stub_46(); fn isr_stub_47();
+    fn isr_stub_48();
     fn isr_stub_128();
 }
 
@@ -275,6 +279,9 @@ pub unsafe fn init() {
     for i in 32..48 {
         IDT[i] = IdtEntry::interrupt_gate(isr_stub_addr(i), KERNEL_CS, 0);
     }
+
+    // Vector 48 — AP LAPIC timer
+    IDT[48] = IdtEntry::interrupt_gate(isr_stub_48 as u64, KERNEL_CS, 0);
 
     // INT 0x80 — syscall trap gate, DPL=3 (callable from user space)
     IDT[128] = IdtEntry::trap_gate_user(isr_stub_128 as u64, KERNEL_CS, 0);
@@ -355,6 +362,10 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                     sched.tick(1_000_000);
                 }
             }
+        }
+        48 => {
+            // AP LAPIC timer — just ACK
+            unsafe { super::apic::eoi(); }
         }
         128 => {
             // INT 0x80 — syscall from user space
