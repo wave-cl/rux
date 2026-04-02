@@ -144,7 +144,7 @@ pub fn mkdir(path_ptr: usize) -> isize {
                 let _ = fs.utimes(ino, now, now);
                 0
             }
-            Err(_) => -17,
+            Err(_) => crate::errno::EEXIST,
         }
     }
 }
@@ -191,7 +191,7 @@ pub fn creat(path_ptr: usize) -> isize {
                 while *cstr.add(len) != 0 && len < 256 { len += 1; }
                 fdt::sys_open(core::slice::from_raw_parts(cstr, len), crate::kstate::fs())
             }
-            Err(_) => -17,
+            Err(_) => crate::errno::EEXIST,
         }
     }
 }
@@ -233,7 +233,7 @@ pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
         let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         match fs.symlink(dir_ino, fname, target) {
             Ok(_) => 0,
-            Err(_) => -17,
+            Err(_) => crate::errno::EEXIST,
         }
     }
 }
@@ -255,7 +255,7 @@ pub fn link(old_ptr: usize, new_ptr: usize) -> isize {
         let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         match fs.link(dir_ino, fname, old_ino) {
             Ok(()) => 0,
-            Err(_) => -17,
+            Err(_) => crate::errno::EEXIST,
         }
     }
 }

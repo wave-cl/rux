@@ -149,10 +149,12 @@ pub enum Syscall {
 /// Dispatch a syscall by its architecture-independent identifier.
 /// All arguments are native-width (usize). The arch entry point casts
 /// from register-width to usize before calling.
+///
+/// SMAP: stac/clac brackets the entire syscall so handlers can access
+/// user memory via raw pointers. Individual uaccess helpers (get_user,
+/// put_user, etc.) are idempotent when SMAP is already enabled.
+#[inline]
 pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
-    // Allow user memory access for the duration of the syscall (SMAP).
-    // clac is called at syscall entry (asm) to enforce SMAP by default;
-    // stac here grants access for the handler. clac restores protection.
     unsafe { crate::uaccess::stac(); }
     let result = dispatch_inner(sc, a0, a1, a2, a3, a4);
     unsafe { crate::uaccess::clac(); }

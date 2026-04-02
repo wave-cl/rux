@@ -41,6 +41,8 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
 /// write(fd, buf, count) — POSIX.1
 pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     if fd <= 2 && fdt::is_console_fd(fd) {
+        // Write raw bytes to console without \n→\r\n conversion.
+        // User programs handle their own line endings.
         unsafe {
             let ptr = buf as *const u8;
             for i in 0..len { Arch::write_byte(*ptr.add(i)); }
@@ -115,7 +117,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                         let _ = fs.utimes(ino, now, now);
                         fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
                     }
-                    Err(_) => -13,
+                    Err(_) => crate::errno::EACCES,
                 }
             }
             Err(e) => e,
@@ -172,7 +174,7 @@ pub fn pread64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
         let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, len);
         match crate::kstate::fs().read(ino, offset as u64, user_buf) {
             Ok(n) => n as isize,
-            Err(_) => -5,
+            Err(_) => crate::errno::EIO,
         }
     }
 }
