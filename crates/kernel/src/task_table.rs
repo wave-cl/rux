@@ -233,6 +233,14 @@ pub unsafe fn init_pid1() {
 /// Called by the scheduler's `pre_switch` callback before the actual
 /// context switch. Saves globals → old slot, loads new slot → globals.
 ///
+/// # SMP race warning
+/// The globals `PROCESS`, `FD_TABLE`, and `CURRENT_TASK_IDX` are shared
+/// across all CPUs. On QEMU TCG, CPUs are serialized (only one runs at
+/// a time), so no concurrent access occurs. On real SMP hardware or KVM,
+/// these globals need per-CPU copies (via GS-base on x86_64, TPIDR_EL1
+/// on aarch64) to prevent one CPU's context switch from corrupting
+/// another CPU's active process state.
+///
 /// # Safety
 /// Must be called with interrupts disabled (during schedule()).
 pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {

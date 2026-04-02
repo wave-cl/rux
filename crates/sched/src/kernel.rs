@@ -41,6 +41,20 @@ pub struct ContextFns {
 }
 
 /// Global scheduler state.
+/// Global scheduler shared across all CPUs.
+///
+/// # SMP race warning
+/// On QEMU TCG (software emulation), CPUs are serialized — only one
+/// executes at a time, so concurrent access doesn't occur. On real SMP
+/// hardware (KVM, bare metal), the following races exist:
+/// - `tick()` called from timer ISRs on multiple CPUs simultaneously
+///   (modifies `clock_ns`, `need_resched`, CFS tree)
+/// - `schedule()` called from syscall return on multiple CPUs
+///   (modifies `current`, picks from shared CFS queue)
+/// - `dequeue_current()` / `wake_task()` from syscall paths
+///
+/// Fix: per-CPU scheduler instances with per-CPU CFS runqueues,
+/// or a spinlock around all scheduler operations (with interrupt disable).
 pub struct Scheduler {
     pub cfs: CfsClass,
     pub tasks: [KernelTask; MAX_TASKS],
