@@ -362,8 +362,18 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             }
         }
         48 => {
-            // AP LAPIC timer — ACK only, no scheduler interaction
+            // AP LAPIC timer tick
             unsafe { super::apic::eoi(); }
+            // Run scheduler tick on AP — both CPUs share the global scheduler.
+            // No lock needed because: BSP ISR runs with IF=0 on BSP, AP ISR
+            // runs with IF=0 on AP. The CFS data structures are touched by
+            // both, but tick() only reads/writes task[current] and clock_ns.
+            // The pick_next/schedule path is only called from the syscall
+            // return path (not from the ISR), so no concurrent schedule().
+            unsafe {
+                let sched = crate::scheduler::get();
+                sched.tick(1_000_000);
+            }
         }
         128 => {
             // INT 0x80 — syscall from user space
