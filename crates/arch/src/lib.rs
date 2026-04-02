@@ -201,6 +201,10 @@ pub unsafe trait VforkContext {
     /// Restore parent registers and return to user mode with the given value.
     /// Does not return.
     unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> !;
+
+    /// Reset arch-specific state on exec.
+    /// Default: no-op. aarch64 overrides to reset signal trampoline mapping.
+    unsafe fn on_exec_reset() {}
 }
 
 /// Signal delivery and sigreturn: arch-specific user-stack frame operations.
@@ -295,6 +299,91 @@ pub trait StatLayout {
         }
         *((buf + Self::BLOCKS_OFF) as *mut i64) = blocks as i64;
     }
+}
+
+/// Per-CPU register setup and access.
+///
+/// Each architecture uses a dedicated register to point to the current
+/// CPU's PerCpu struct: GS_BASE on x86_64, TPIDR_EL1 on aarch64.
+///
+/// # Safety
+/// Implementations write hardware registers (MSRs, system registers).
+pub unsafe trait PerCpuOps {
+    /// Point the per-CPU hardware register at the given CPU's PerCpu struct.
+    unsafe fn init_percpu(id: usize, base: *mut u8);
+
+    /// Read the per-CPU base pointer from the hardware register.
+    /// Returns null if not yet initialized.
+    #[inline(always)]
+    unsafe fn percpu_base() -> *mut u8;
+}
+
+/// User memory access protection (SMAP on x86_64, PAN on aarch64).
+///
+/// x86_64 uses STAC/CLAC instructions to toggle RFLAGS.AC for SMAP.
+/// aarch64 will use PAN (deferred — currently no-ops).
+/// riscv64 would use SUM bit in sstatus.
+///
+/// # Safety
+/// Implementations manipulate CPU flags controlling supervisor access to user pages.
+pub unsafe trait UserAccessOps {
+    /// Begin user memory access (e.g., x86_64 STAC sets RFLAGS.AC).
+    #[inline(always)]
+    unsafe fn user_access_begin();
+
+    /// End user memory access (e.g., x86_64 CLAC clears RFLAGS.AC).
+    #[inline(always)]
+    unsafe fn user_access_end();
+
+    /// Enable the protection mechanism. Called once during boot after
+    /// the relevant CPU feature is detected and enabled (e.g., CR4.SMAP).
+    unsafe fn enable_user_access_protection() {}
+}
+
+/// Task context switch: save/restore arch hardware state around scheduler switches.
+///
+/// # Safety
+/// Implementations manipulate MSRs, system registers, and page table roots.
+pub unsafe trait TaskSwitchOps {
+    /// Return the kernel stack top for PID 1 (init).
+    /// x86_64: top of SYSCALL_STACK. aarch64: KSTACKS[0] + KSTACK_SIZE.
+    unsafe fn pid1_kstack_top() -> usize;
+
+    /// Initialize arch hardware state for PID 1 (e.g., set CURRENT_KSTACK_TOP).
+    unsafe fn init_pid1_hw(kstack_top: usize);
+
+    /// Save the outgoing task's user SP and TLS register.
+    #[inline(always)]
+    unsafe fn save_task_hw(saved_user_sp: &mut usize, tls: &mut u64);
+
+    /// Restore the incoming task's user SP, TLS register, and kernel stack top.
+    #[inline(always)]
+    unsafe fn restore_task_hw(saved_user_sp: usize, tls: u64, kstack_top: usize);
+
+    /// Switch page tables with ASID/PCID tagging to avoid full TLB flush.
+    unsafe fn switch_page_table(new_root: u64, asid: u16);
+}
+
+/// Process fork: arch-specific kernel stack setup and hardware state snapshot.
+///
+/// # Safety
+/// Implementations manipulate kernel stacks and read hardware registers.
+pub unsafe trait ForkOps {
+    /// Snapshot the current hardware state (user SP, TLS register, page table root).
+    unsafe fn snapshot_hw_state(saved_user_sp: &mut usize, tls: &mut u64, pt_root: &mut u64);
+
+    /// Set up a child's kernel stack so that context_switch into it
+    /// will return to userspace with return value 0 (fork child).
+    /// Returns the child's initial saved kernel SP.
+    unsafe fn setup_child_kstack(kstack_top: usize) -> usize;
+}
+
+/// Syscall entry state: access to arguments saved by the arch entry point.
+pub trait SyscallArgOps {
+    /// Read the 6th syscall argument saved by the arch-specific entry code.
+    /// x86_64: R9 saved in percpu. aarch64: x5 saved in global.
+    #[inline(always)]
+    fn saved_syscall_arg5() -> usize;
 }
 
 /// Linux `kernel_sigaction` struct layout — differs per architecture.

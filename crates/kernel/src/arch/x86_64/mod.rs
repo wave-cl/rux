@@ -10,6 +10,9 @@ pub mod paging;
 pub mod syscall;
 pub mod acpi;
 pub mod apic;
+pub mod uaccess;
+pub mod fork;
+pub mod task_switch;
 
 // Include boot assembly: multiboot1 header + 32→64 bit transition
 core::arch::global_asm!(include_str!("boot.S"));
@@ -18,6 +21,32 @@ core::arch::global_asm!(include_str!("ap_trampoline.S"));
 
 /// Zero-sized marker type for x86_64 architecture trait implementations.
 pub struct X86_64;
+
+unsafe impl rux_arch::PerCpuOps for X86_64 {
+    unsafe fn init_percpu(_id: usize, base: *mut u8) {
+        let val = base as u64;
+        let lo = val as u32;
+        let hi = (val >> 32) as u32;
+        // IA32_GS_BASE (0xC0000101) — active GS base (kernel before first swapgs)
+        core::arch::asm!("wrmsr", in("ecx") 0xC0000101u32, in("eax") lo, in("edx") hi, options(nostack));
+        // IA32_KERNEL_GS_BASE (0xC0000102) — swapped in by swapgs at syscall entry
+        core::arch::asm!("wrmsr", in("ecx") 0xC0000102u32, in("eax") lo, in("edx") hi, options(nostack));
+    }
+
+    #[inline(always)]
+    unsafe fn percpu_base() -> *mut u8 {
+        // GS-relative access deferred for QEMU TCG compatibility.
+        // Fall through to null — caller uses array fallback.
+        core::ptr::null_mut()
+    }
+}
+
+impl rux_arch::SyscallArgOps for X86_64 {
+    #[inline(always)]
+    fn saved_syscall_arg5() -> usize {
+        unsafe { crate::percpu::this_cpu().saved_syscall_a5 as usize }
+    }
+}
 
 impl rux_arch::ArchSpecificOps for X86_64 {
     fn arch_syscall(nr: usize, a0: usize, a1: usize) -> Option<isize> {

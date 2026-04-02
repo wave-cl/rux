@@ -394,6 +394,10 @@ unsafe impl rux_arch::VforkContext for super::Aarch64 {
             options(noreturn)
         );
     }
+
+    unsafe fn on_exec_reset() {
+        reset_trampoline();
+    }
 }
 
 // setjmp/longjmp buffer: callee-saved regs + SP + LR

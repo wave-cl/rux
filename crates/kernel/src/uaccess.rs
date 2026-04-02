@@ -1,34 +1,29 @@
-//! User-space memory access helpers with SMAP (Supervisor Mode Access Prevention).
+//! User-space memory access helpers with supervisor access protection.
 //!
 //! On x86_64 with CR4.SMAP enabled, the kernel cannot read/write user pages
-//! unless RFLAGS.AC is set. stac/clac bracket all user memory accesses.
-//! On aarch64, these are no-ops (PAN uses different mechanism, deferred).
+//! unless RFLAGS.AC is set (via STAC). On aarch64, PAN is similar but deferred.
+//! The arch-specific protection is provided by the UserAccessOps trait.
 
-// ── SMAP primitives ─────────────────────────────────────────────────
+use rux_arch::UserAccessOps;
 
-/// Whether SMAP is active (CR4.SMAP set). Checked at runtime to avoid
-/// executing stac/clac when SMAP is not enabled.
-static mut SMAP_ACTIVE: bool = false;
+// ── SMAP/PAN primitives ─────────────────────────────────────────────
 
-/// Called after CR4.SMAP is enabled to activate stac/clac guards.
-pub unsafe fn enable_smap_guards() { SMAP_ACTIVE = true; }
-
-/// Set AC flag — allow user page access (x86_64 SMAP).
+/// Begin user memory access (arch-specific: STAC on x86_64, no-op on aarch64).
 #[inline(always)]
 pub unsafe fn stac() {
-    #[cfg(target_arch = "x86_64")]
-    if SMAP_ACTIVE {
-        core::arch::asm!("stac", options(nostack));
-    }
+    crate::arch::Arch::user_access_begin();
 }
 
-/// Clear AC flag — block user page access (x86_64 SMAP).
+/// End user memory access (arch-specific: CLAC on x86_64, no-op on aarch64).
 #[inline(always)]
 pub unsafe fn clac() {
-    #[cfg(target_arch = "x86_64")]
-    if SMAP_ACTIVE {
-        core::arch::asm!("clac", options(nostack));
-    }
+    crate::arch::Arch::user_access_end();
+}
+
+/// Enable the user access protection mechanism.
+/// Called once during boot after the relevant CPU feature is enabled.
+pub unsafe fn enable_smap_guards() {
+    crate::arch::Arch::enable_user_access_protection();
 }
 
 // ── Typed user access helpers ───────────────────────────────────────

@@ -9,6 +9,9 @@ pub mod devicetree;
 pub mod paging;
 pub mod syscall;
 pub mod psci;
+pub mod uaccess;
+pub mod fork;
+pub mod task_switch;
 
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("exception.S"));
@@ -16,6 +19,26 @@ core::arch::global_asm!(include_str!("ap_entry.S"));
 
 /// Zero-sized marker type for aarch64 architecture trait implementations.
 pub struct Aarch64;
+
+unsafe impl rux_arch::PerCpuOps for Aarch64 {
+    unsafe fn init_percpu(_id: usize, base: *mut u8) {
+        core::arch::asm!("msr tpidr_el1, {}", in(reg) base as u64, options(nostack));
+    }
+
+    #[inline(always)]
+    unsafe fn percpu_base() -> *mut u8 {
+        let base: u64;
+        core::arch::asm!("mrs {}, tpidr_el1", out(reg) base, options(nostack));
+        base as *mut u8
+    }
+}
+
+impl rux_arch::SyscallArgOps for Aarch64 {
+    #[inline(always)]
+    fn saved_syscall_arg5() -> usize {
+        unsafe { syscall::SAVED_SYSCALL_A5 as usize }
+    }
+}
 
 impl rux_arch::ArchSpecificOps for Aarch64 {
     fn arch_syscall(_nr: usize, _a0: usize, _a1: usize) -> Option<isize> { None }

@@ -67,13 +67,10 @@ pub unsafe fn sys_fork() -> isize {
     child.tls = parent.tls;
     child.asid = (child_idx as u16) + 1; // ASID 0 = kernel, 1..N = processes
 
-    #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
+    #[cfg(not(feature = "native"))]
     {
-        child.saved_ksp = setup_child_kstack_x86(child.kstack_top);
-    }
-    #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
-    {
-        child.saved_ksp = setup_child_kstack_aarch64(child.kstack_top);
+        use rux_arch::ForkOps;
+        child.saved_ksp = crate::arch::Arch::setup_child_kstack(child.kstack_top);
     }
     #[cfg(feature = "native")]
     {
@@ -174,13 +171,10 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
     child.saved_user_sp = if child_stack != 0 { child_stack } else { parent.saved_user_sp };
     child.tls = parent.tls;
 
-    #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
+    #[cfg(not(feature = "native"))]
     {
-        child.saved_ksp = setup_child_kstack_x86(child.kstack_top);
-    }
-    #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
-    {
-        child.saved_ksp = setup_child_kstack_aarch64(child.kstack_top);
+        use rux_arch::ForkOps;
+        child.saved_ksp = crate::arch::Arch::setup_child_kstack(child.kstack_top);
     }
     #[cfg(feature = "native")]
     {
@@ -219,29 +213,14 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.child_available = crate::syscall::PROCESS.child_available;
     // FD_TABLE is a pointer into slot.fds — no copy needed.
 
-    #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
+    #[cfg(not(feature = "native"))]
     {
-        slot.saved_user_sp = crate::arch::x86_64::syscall::SAVED_USER_RSP as usize;
-        let lo: u32; let hi: u32;
-        core::arch::asm!("rdmsr", in("ecx") 0xC0000100u32, out("eax") lo, out("edx") hi, options(nostack));
-        slot.tls = (hi as u64) << 32 | lo as u64;
-        slot.pt_root = {
-            let cr3: u64;
-            core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
-            cr3
-        };
-    }
-    #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
-    {
-        let sp: u64;
-        core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
-        slot.saved_user_sp = sp as usize;
-        let tls: u64;
-        core::arch::asm!("mrs {}, tpidr_el0", out(reg) tls, options(nostack));
-        slot.tls = tls;
-        let ttbr: u64;
-        core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr, options(nostack));
-        slot.pt_root = ttbr & 0x0000_FFFF_FFFF_FFFF; // mask out ASID bits [63:48]
+        use rux_arch::ForkOps;
+        crate::arch::Arch::snapshot_hw_state(
+            &mut slot.saved_user_sp,
+            &mut slot.tls,
+            &mut slot.pt_root,
+        );
     }
     #[cfg(feature = "native")]
     {
@@ -280,14 +259,11 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
     let cow = crate::arch::PageTable::cow_bit();
 
     // Precompute raw PTE flags for child COW pages (user, read-only, COW bit set).
-    // Computed once, used for every page in the walk.
     let cow_child_flags = crate::arch::PageTable::pte_flags(user_rx) | cow;
 
     // Walk parent's user pages with mutable PTE access. For each page:
     // 1. Mark parent COW inline (no re-walk)
     // 2. Map child with pre-computed COW flags in a single walk (map_4k_raw)
-    // Previous: 3 child walks/page (unmap + map + leaf_pte_and_pa).
-    // Now: 1 child walk/page (map_4k_raw).
     parent_pt.walk_user_pages_mut(|va, pa, parent_pte| {
         use rux_arch::pte::PageTableEntryOps;
         crate::arch::ArchPte::set_writable(parent_pte, false);
@@ -300,81 +276,7 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
     });
 
     // Single full TLB flush after all parent pages are marked COW.
-    // This replaces N individual invlpg/tlbi calls with one batch flush.
     crate::arch::PageTable::flush_tlb_all();
 
     child_pt.root_phys().as_usize() as u64
-}
-
-// ── x86_64 child kernel stack setup ──────────────────────────────────
-
-#[cfg(all(target_arch = "x86_64", not(feature = "native")))]
-unsafe fn setup_child_kstack_x86(kstack_top: usize) -> usize {
-    let w = core::mem::size_of::<u64>();
-    let mut sp = kstack_top;
-
-    // Read parent's saved registers from the current kernel stack.
-    // CURRENT_KSTACK_TOP points to the top; the SYSCALL entry pushed
-    // 15 values below it: rcx, r11, rbx, rbp, r12, r13, r14, r15,
-    // rax, rdi, rsi, rdx, r10, r8, r9
-    let parent_top = crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP as *const u64;
-
-    // Push syscall frame (same layout as syscall_entry pushes)
-    // Positions: sub(1)=rcx, sub(2)=r11, ..., sub(15)=r9
-    // We push bottom-first (r9 at lowest address, rcx at highest)
-    // Push syscall frame so fork_child_sysret can pop it correctly.
-    // fork_child_sysret pops: r9, r8, r10, rdx, rsi, rdi, rax, r15, r14, r13, r12, rbp, rbx, r11, rcx
-    // The stack grows DOWN; fork_child_sysret pops UP (from low addr to high addr).
-    // So we push in order rcx→r11→...→r9 (i=1→15), putting rcx at HIGH addr and r9 at LOW addr.
-    // syscall_entry push order: rcx(sub(1)), r11(sub(2)), ..., r9(sub(15)).
-    for i in 1..=15u64 {
-        sp -= w;
-        let val = *parent_top.sub(i as usize);
-        if i == 9 {
-            // rax slot (sub(9)): set to 0 for child fork return value
-            *(sp as *mut u64) = 0;
-        } else {
-            *(sp as *mut u64) = val;
-        }
-    }
-
-    // Push context_switch frame: r15, r14, r13, r12, rbx, rbp, rip
-    sp -= w; *(sp as *mut usize) = crate::arch::x86_64::syscall::fork_child_sysret as usize; // rip
-    sp -= w; *(sp as *mut usize) = 0; // rbp
-    sp -= w; *(sp as *mut usize) = 0; // rbx
-    sp -= w; *(sp as *mut usize) = 0; // r12
-    sp -= w; *(sp as *mut usize) = 0; // r13
-    sp -= w; *(sp as *mut usize) = 0; // r14
-    sp -= w; *(sp as *mut usize) = 0; // r15
-
-    sp
-}
-
-// ── aarch64 child kernel stack setup ─────────────────────────────────
-
-#[cfg(all(target_arch = "aarch64", not(feature = "native")))]
-unsafe fn setup_child_kstack_aarch64(kstack_top: usize) -> usize {
-    // The parent's exception frame (34 u64s = 272 bytes) is on the current
-    // kernel stack. CURRENT_REGS_PTR points to the base of this frame.
-    let parent_regs = crate::arch::aarch64::syscall::CURRENT_REGS_PTR;
-
-    let mut sp = kstack_top & !0xF; // 16-byte align
-
-    // Push exception frame (272 bytes)
-    sp -= 272;
-    let frame = sp as *mut u64;
-    for i in 0..34 {
-        *frame.add(i) = *parent_regs.add(i);
-    }
-    // x0 = 0 (fork return value for child)
-    *frame.add(0) = 0;
-
-    // Push context_switch callee-saved frame (6 pairs = 96 bytes)
-    sp -= 96;
-    let ctx = sp as *mut usize;
-    *ctx.add(0) = 0;  // x29 (FP)
-    *ctx.add(1) = crate::arch::aarch64::context::fork_child_eret as usize; // x30 (LR)
-    for i in 2..12 { *ctx.add(i) = 0; } // x27-x20, x19
-
-    sp
 }

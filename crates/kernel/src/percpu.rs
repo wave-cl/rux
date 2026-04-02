@@ -1,13 +1,14 @@
 /// Per-CPU data structures.
 ///
 /// Each CPU has its own `PerCpu` instance, indexed by CPU ID (0 for BSP).
-/// Currently single-CPU: only slot 0 is used. The infrastructure is ready
-/// for SMP when AP startup is implemented.
+/// The arch-specific register setup (GS_BASE on x86_64, TPIDR_EL1 on
+/// aarch64) is provided by the PerCpuOps trait — no cfg/asm in this file.
+
+use rux_arch::PerCpuOps;
 
 /// Maximum number of CPUs supported.
 pub const MAX_CPUS: usize = 16;
 
-/// Per-CPU data. Each CPU has its own instance to avoid sharing hot state.
 /// Per-CPU data layout. #[repr(C)] ensures stable field offsets for asm access.
 ///
 /// x86_64 syscall_entry uses gs:[offset] to access saved_user_rsp,
@@ -69,23 +70,11 @@ static mut BSP_CPU_ID: usize = 0;
 /// or GS-base (x86_64) to point to the current CPU's PerCpu struct.
 pub unsafe fn enable_hw_cpu_id() { /* activate per-CPU access */ }
 
-/// Set TPIDR_EL1 (aarch64) or GS-base (x86_64) to point to this CPU's PerCpu.
+/// Set the per-CPU hardware register to point to this CPU's PerCpu struct.
+/// Delegates to the architecture's PerCpuOps implementation.
 pub unsafe fn init_this_cpu(id: usize) {
-    let base = &mut PERCPU[id] as *mut PerCpu as u64;
-    #[cfg(target_arch = "aarch64")]
-    core::arch::asm!("msr tpidr_el1, {}", in(reg) base, options(nostack));
-    #[cfg(target_arch = "x86_64")]
-    {
-        // Write to BOTH IA32_GS_BASE (for pre-swapgs kernel access) AND
-        // IA32_KERNEL_GS_BASE (for post-swapgs access after syscall entry).
-        // swapgs exchanges GS_BASE ↔ KERNEL_GS_BASE.
-        let lo = base as u32;
-        let hi = (base >> 32) as u32;
-        // IA32_GS_BASE (0xC0000101) — active GS base (used in kernel before first swapgs)
-        core::arch::asm!("wrmsr", in("ecx") 0xC0000101u32, in("eax") lo, in("edx") hi, options(nostack));
-        // IA32_KERNEL_GS_BASE (0xC0000102) — swapped in by swapgs at syscall entry
-        core::arch::asm!("wrmsr", in("ecx") 0xC0000102u32, in("eax") lo, in("edx") hi, options(nostack));
-    }
+    let base = &mut PERCPU[id] as *mut PerCpu as *mut u8;
+    crate::arch::Arch::init_percpu(id, base);
 }
 
 /// Read the current CPU's ID. Uses per-CPU register (fast, no table lookup).
@@ -95,22 +84,13 @@ pub unsafe fn cpu_id() -> usize {
 }
 
 /// Get the current CPU's per-CPU data.
-/// aarch64: reads TPIDR_EL1. x86_64: reads from GS-base.
+/// Uses the arch per-CPU register (TPIDR_EL1 on aarch64, GS-base on x86_64).
 /// Falls back to PERCPU[BSP_CPU_ID] if per-CPU registers not yet initialized.
 #[inline(always)]
 pub unsafe fn this_cpu() -> &'static mut PerCpu {
-    #[cfg(target_arch = "aarch64")]
-    {
-        let base: u64;
-        core::arch::asm!("mrs {}, tpidr_el1", out(reg) base, options(nostack));
-        if base != 0 {
-            return &mut *(base as *mut PerCpu);
-        }
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        // Read GS-base from MSR (can't use gs: prefix without segment setup)
-        // For now, fall through to array lookup. GS-relative asm comes in Part 3c.
+    let base = crate::arch::Arch::percpu_base();
+    if !base.is_null() {
+        return &mut *(base as *mut PerCpu);
     }
     &mut PERCPU[BSP_CPU_ID]
 }

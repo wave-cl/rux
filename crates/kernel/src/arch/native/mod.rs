@@ -191,6 +191,51 @@ impl rux_arch::SigactionLayout for NativeArch {
     const RESTORER_OFF: usize = 0;
 }
 
+// ── PerCpuOps ────────────────────────────────────────────────────────
+
+unsafe impl rux_arch::PerCpuOps for NativeArch {
+    unsafe fn init_percpu(_id: usize, _base: *mut u8) {}
+    #[inline(always)]
+    unsafe fn percpu_base() -> *mut u8 { core::ptr::null_mut() }
+}
+
+// ── TaskSwitchOps ────────────────────────────────────────────────────
+
+unsafe impl rux_arch::TaskSwitchOps for NativeArch {
+    unsafe fn pid1_kstack_top() -> usize {
+        crate::task_table::KSTACKS[0].as_ptr() as usize + crate::task_table::KSTACK_SIZE
+    }
+    unsafe fn init_pid1_hw(_kstack_top: usize) {}
+    #[inline(always)]
+    unsafe fn save_task_hw(_saved_user_sp: &mut usize, _tls: &mut u64) {}
+    #[inline(always)]
+    unsafe fn restore_task_hw(_saved_user_sp: usize, _tls: u64, _kstack_top: usize) {}
+    unsafe fn switch_page_table(_new_root: u64, _asid: u16) {}
+}
+
+// ── ForkOps ──────────────────────────────────────────────────────────
+
+unsafe impl rux_arch::ForkOps for NativeArch {
+    unsafe fn snapshot_hw_state(_saved_user_sp: &mut usize, _tls: &mut u64, _pt_root: &mut u64) {}
+    unsafe fn setup_child_kstack(_kstack_top: usize) -> usize { 0 }
+}
+
+// ── UserAccessOps ────────────────────────────────────────────────────
+
+unsafe impl rux_arch::UserAccessOps for NativeArch {
+    #[inline(always)]
+    unsafe fn user_access_begin() {}
+    #[inline(always)]
+    unsafe fn user_access_end() {}
+}
+
+// ── SyscallArgOps ────────────────────────────────────────────────────
+
+impl rux_arch::SyscallArgOps for NativeArch {
+    #[inline(always)]
+    fn saved_syscall_arg5() -> usize { 0 }
+}
+
 // ── KernelMapOps ─────────────────────────────────────────────────────
 
 unsafe impl crate::arch::KernelMapOps for NativeArch {

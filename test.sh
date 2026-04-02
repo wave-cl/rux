@@ -109,7 +109,7 @@ OUTPUT=$( { sleep 4; \
     -no-reboot -monitor none -m 128M 2>&1 || true )
 
 # Boot
-check "boot banner"             "rux 0.5.0 (x86_64)"
+check "boot banner"             "rux 0.6.0 (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
 check "SMP CPUs online"          "CPUs online"
 check "cpio unpacked"           "cpio: unpacked"
@@ -118,7 +118,7 @@ check "exec init"               "exec /sbin/init"
 check "shell prompt"            "/ # "
 
 # Core commands
-check "uname"                   "rux rux 0.5.0"
+check "uname"                   "rux rux 0.6.0"
 check "cat /etc/passwd"         "root:x:0:0:root:/root:/bin/sh"
 check "cat /etc/os-release"     "NAME=\"rux\""
 check "whoami"                  "root"
@@ -286,7 +286,7 @@ OUTPUT=$( { sleep 8; \
     -semihosting -no-reboot -m 128M 2>&1 || true )
 
 # Boot
-check "boot banner"             "rux 0.5.0 (aarch64)"
+check "boot banner"             "rux 0.6.0 (aarch64)"
 check "MMU enabled"             "MMU enabled"
 check "SMP CPUs online"          "CPUs online"
 check "cpio unpacked"           "cpio: unpacked"
@@ -295,7 +295,7 @@ check "exec init"               "exec /sbin/init"
 check "shell prompt"            "/ # "
 
 # Core commands
-check "uname"                   "rux rux 0.5.0"
+check "uname"                   "rux rux 0.6.0"
 check "cat /etc/passwd"         "root:x:0:0:root:/root:/bin/sh"
 check "cat /etc/os-release"     "NAME=\"rux\""
 check "whoami"                  "root"
