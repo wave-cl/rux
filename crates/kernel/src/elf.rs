@@ -101,7 +101,7 @@ pub unsafe fn load_elf_from_inode(
         let new_root = upt.root_phys().as_usize() as u64;
         crate::arch::Arch::write(new_root);
         unsafe {
-            crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root = new_root;
+            crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root = new_root;
         }
     }
 

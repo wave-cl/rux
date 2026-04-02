@@ -142,14 +142,27 @@ static mut NEXT_PID: u32 = 2; // PID 1 is init
 
 // ── Accessors ─────────────────────────────────────────────────────────
 
+/// Per-CPU current task index. Reads from percpu on SMP-ready builds,
+/// falls back to the global CURRENT_TASK_IDX.
+#[inline(always)]
+pub unsafe fn current_task_idx() -> usize {
+    CURRENT_TASK_IDX // TODO: crate::percpu::this_cpu().current_task_idx
+}
+
+/// Set the current CPU's task index (updates global for now).
+#[inline(always)]
+pub unsafe fn set_current_task_idx(idx: usize) {
+    CURRENT_TASK_IDX = idx;
+}
+
 /// Get the current task's PID.
 pub fn current_pid() -> u32 {
-    unsafe { TASK_TABLE[CURRENT_TASK_IDX].pid }
+    unsafe { TASK_TABLE[current_task_idx()].pid }
 }
 
 /// Get the current task's parent PID.
 pub fn current_ppid() -> u32 {
-    unsafe { TASK_TABLE[CURRENT_TASK_IDX].ppid }
+    unsafe { TASK_TABLE[current_task_idx()].ppid }
 }
 
 /// Allocate a new PID.
@@ -206,7 +219,7 @@ pub unsafe fn init_pid1() {
             is_pipe: false, pipe_id: 0, pipe_write: false,
         };
     }
-    CURRENT_TASK_IDX = 0;
+    set_current_task_idx(0);
 
     // Point FD_TABLE at this task's fd array — all FD accesses go directly
     // into the slot, eliminating the copy on context switch.
@@ -315,5 +328,5 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
         }
     }
 
-    CURRENT_TASK_IDX = new_idx;
+    set_current_task_idx(new_idx);
 }

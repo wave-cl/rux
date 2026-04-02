@@ -50,7 +50,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
             };
             let _ = cold.set_action(sig, action);
             // Also write to per-task slot for fork inheritance
-            let _ = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX).set_action(sig, action);
+            let _ = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx()).set_action(sig, action);
             if Arch::HAS_RESTORER {
                 super::PROCESS.signal_restorer[signum] = restorer;
             }
@@ -134,7 +134,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         use crate::task_table::*;
         unsafe {
             let target_pgid = if pid == 0 {
-                TASK_TABLE[CURRENT_TASK_IDX].pgid
+                TASK_TABLE[current_task_idx()].pgid
             } else {
                 (-pid) as u32
             };
@@ -179,7 +179,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         // Send signal to current process.
         unsafe {
             let hot = &mut super::PROCESS.signal_hot;
-            let cold = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX);
+            let cold = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx());
             let action = *cold.get_action(sig);
 
             // SIGKILL always terminates

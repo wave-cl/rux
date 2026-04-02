@@ -9,7 +9,7 @@ pub fn exit(status: i32) -> ! {
     unsafe {
         // Close pipe FDs, mark zombie/free, wake parent, schedule.
         use crate::task_table::*;
-        let idx = CURRENT_TASK_IDX;
+        let idx = current_task_idx();
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
             // Close all pipe FDs so reader/writer counts drop correctly.
             // Without this, blocked pipe waiters never see EOF/EPIPE.
@@ -97,7 +97,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 if t.state != TaskState::Zombie { continue; }
                 // pid matching: usize::MAX (-1) = any child, 0 = same process group
                 if pid == 0 {
-                    if t.pgid != TASK_TABLE[CURRENT_TASK_IDX].pgid { continue; }
+                    if t.pgid != TASK_TABLE[current_task_idx()].pgid { continue; }
                 } else if pid != usize::MAX && t.pid as usize != pid {
                     continue;
                 }
@@ -154,11 +154,11 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
             }
 
             // Block until a child exits.
-            TASK_TABLE[CURRENT_TASK_IDX].state = TaskState::WaitingForChild;
+            TASK_TABLE[current_task_idx()].state = TaskState::WaitingForChild;
             {
                 let sched = crate::scheduler::get();
                 // Mark Interruptible so schedule() doesn't re-enqueue the parent.
-                sched.tasks[CURRENT_TASK_IDX].entity.state = rux_sched::TaskState::Interruptible;
+                sched.tasks[current_task_idx()].entity.state = rux_sched::TaskState::Interruptible;
                 sched.dequeue_current();
                 sched.schedule(); // returns when woken by child's exit()
             }
@@ -297,7 +297,7 @@ pub fn getpgid(pid: usize) -> isize {
     unsafe {
         use crate::task_table::*;
         if pid == 0 {
-            return TASK_TABLE[CURRENT_TASK_IDX].pgid as isize;
+            return TASK_TABLE[current_task_idx()].pgid as isize;
         }
         for i in 0..MAX_PROCS {
             if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32 {
@@ -313,7 +313,7 @@ pub fn getpgid(pid: usize) -> isize {
 pub fn setsid() -> isize {
     unsafe {
         use crate::task_table::*;
-        let idx = CURRENT_TASK_IDX;
+        let idx = current_task_idx();
         let pid = TASK_TABLE[idx].pid;
         TASK_TABLE[idx].pgid = pid;
         pid as isize

@@ -68,7 +68,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         // SIGPIPE: writing to a pipe with no readers
         if result == -32 {
             use rux_proc::signal::*;
-            let cold: &rux_proc::signal::SignalCold = crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX);
+            let cold: &rux_proc::signal::SignalCold = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx());
             let action = *cold.get_action(Signal::Pipe);
             if action.handler_type == SignalHandler::Default {
                 super::posix::exit(128 + 13);
@@ -301,7 +301,7 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
 unsafe fn can_pipe_block() -> bool {
     use crate::task_table::*;
     (0..MAX_PROCS).any(|i| {
-        i != CURRENT_TASK_IDX && TASK_TABLE[i].active
+        i != current_task_idx() && TASK_TABLE[i].active
             && TASK_TABLE[i].state != TaskState::Zombie
     })
 }
@@ -310,7 +310,7 @@ unsafe fn can_pipe_block() -> bool {
 unsafe fn pipe_block(pipe_id: u8) {
     use crate::task_table::*;
     use rux_sched::SchedClassOps;
-    let idx = CURRENT_TASK_IDX;
+    let idx = current_task_idx();
     rux_ipc::pipe::register_waiter(pipe_id, idx as u8);
     TASK_TABLE[idx].state = TaskState::WaitingForPipe;
     TASK_TABLE[idx].waiting_pipe_id = pipe_id;

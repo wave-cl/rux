@@ -224,7 +224,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Brk => linux::brk(a0),
 
         // ── Process ────────────────────────────────────────────────
-        Syscall::Getpid => unsafe { crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].tgid as isize },
+        Syscall::Getpid => unsafe { crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].tgid as isize },
         Syscall::Getppid => crate::task_table::current_ppid() as isize,
         Syscall::Exit => posix::exit(a0 as i32),
         Syscall::ExitGroup => linux::exit_group(a0 as i32),
@@ -241,7 +241,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── User/group IDs (single user: always root) ─────────────
         Syscall::Getuid | Syscall::Geteuid |
         Syscall::Getgid | Syscall::Getegid => 0, // uid=0, gid=0
-        Syscall::Gettid => unsafe { crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pid as isize },
+        Syscall::Gettid => unsafe { crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pid as isize },
 
         // ── Process groups ────────────────────────────────────────
         Syscall::Setpgid => posix::setpgid(a0, a1),
@@ -330,7 +330,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     // we must NOT call begin_child because that would free the parent's exec frames.
     // Instead: directly switch CR3 to kernel PT, free the forked PT, skip CHILD_PAGES.
     // Fork children use free_user_address_space in waitpid for cleanup.
-    let is_fork_child = crate::task_table::CURRENT_TASK_IDX != 0;
+    let is_fork_child = crate::task_table::current_task_idx() != 0;
 
     if is_fork_child {
         // Switch CR3 to kernel PT so it's safe to free the forked PT.
@@ -342,7 +342,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
         // Free the forked PT (the address space we're replacing).
         // Use the COW-aware variant: shared frames are only freed when their
         // refcount reaches zero (dec_ref returns true).
-        let old_pt_root = crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root;
+        let old_pt_root = crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root;
         if old_pt_root != 0 {
             let old_pt = crate::arch::PageTable::from_root(
                 rux_klib::PhysAddr::new(old_pt_root as usize)
@@ -350,7 +350,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
             old_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
             // Set pt_root to kernel PT (not 0) so if preempted before the new
             // user PT is loaded, swap_process_state switches to a valid PT.
-            crate::task_table::TASK_TABLE[crate::task_table::CURRENT_TASK_IDX].pt_root = kpt;
+            crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root = kpt;
         }
     } else {
         // Init/vfork path: begin_child switches CR3 and frees previous child's frames.
@@ -360,7 +360,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     // Reset signal state on exec (POSIX: caught signals revert to default)
     PROCESS.signal_hot = rux_proc::signal::SignalHot::new();
     PROCESS.signal_cold = rux_proc::signal::SignalCold::new();
-    *crate::task_table::signal_cold_mut(crate::task_table::CURRENT_TASK_IDX) = rux_proc::signal::SignalCold::new();
+    *crate::task_table::signal_cold_mut(crate::task_table::current_task_idx()) = rux_proc::signal::SignalCold::new();
     PROCESS.signal_restorer = [0; 32];
 
     // Reset arch-specific signal trampoline state

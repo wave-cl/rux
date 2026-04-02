@@ -109,7 +109,7 @@ fn futex_wait(uaddr: usize, expected: u32) -> isize {
         }
 
         // Block until woken by FUTEX_WAKE
-        let idx = CURRENT_TASK_IDX;
+        let idx = current_task_idx();
         TASK_TABLE[idx].state = TaskState::WaitingForFutex;
         TASK_TABLE[idx].futex_addr = uaddr;
         let sched = crate::scheduler::get();

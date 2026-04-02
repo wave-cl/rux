@@ -18,7 +18,7 @@ pub unsafe fn sys_fork() -> isize {
         None => return -11, // -EAGAIN (no free slots)
     };
     let child_pid = alloc_pid();
-    let parent_idx = CURRENT_TASK_IDX;
+    let parent_idx = current_task_idx();
 
     // 2. Sync current globals to parent slot (may be stale)
     sync_globals_to_slot(parent_idx);
@@ -122,7 +122,7 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
         None => return -11,
     };
     let child_pid = alloc_pid();
-    let parent_idx = CURRENT_TASK_IDX;
+    let parent_idx = current_task_idx();
 
     sync_globals_to_slot(parent_idx);
 
