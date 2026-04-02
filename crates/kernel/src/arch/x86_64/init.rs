@@ -22,10 +22,11 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         // 3. IDT (shared with BSP — IDT is the same for all CPUs)
         super::idt::load();
 
-        // 4. Set GS-base + mark online
+        // 4. Set GS-base + per-CPU state
         crate::percpu::init_this_cpu(cpu_id as usize);
         let pc = crate::percpu::cpu(cpu_id as usize);
         pc.cpu_id = cpu_id;
+        pc.syscall_kstack_top = kstack_top as u64;
         pc.online = true;
         pc.idle = true;
         pc.current_task_idx = usize::MAX;
@@ -99,11 +100,8 @@ unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
 }
 
 pub fn x86_64_init(multiboot_info: usize) {
-    // Initialize BSP per-CPU data + set GS-base
-    unsafe {
-        crate::percpu::init_bsp();
-        crate::percpu::init_this_cpu(0); // GS-base → &PERCPU[0]
-    }
+    // Initialize BSP per-CPU data
+    unsafe { crate::percpu::init_bsp(); }
 
     // Initialize GDT with TSS — use the actual boot_stack_top from boot.S
     unsafe {
@@ -112,6 +110,9 @@ pub fn x86_64_init(multiboot_info: usize) {
         super::gdt::init(stack_top);
     }
     console::write_str("rux: GDT + TSS loaded\n");
+
+    // Set GS-base AFTER GDT init (GDT init zeros GS segment, clearing hidden base)
+    unsafe { crate::percpu::init_this_cpu(0); }
 
     // Detect and enable CPU features
     unsafe {

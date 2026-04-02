@@ -8,24 +8,44 @@
 pub const MAX_CPUS: usize = 16;
 
 /// Per-CPU data. Each CPU has its own instance to avoid sharing hot state.
+/// Per-CPU data layout. #[repr(C)] ensures stable field offsets for asm access.
+///
+/// x86_64 syscall_entry uses gs:[offset] to access saved_user_rsp,
+/// saved_syscall_a5, and syscall_kstack_top. Offsets must match the
+/// PERCPU_OFFSET_* constants below.
 #[repr(C)]
 pub struct PerCpu {
+    // ── Fields accessed from assembly (offsets must be stable) ────
+    /// Saved user RSP on SYSCALL entry (gs:[0]).
+    pub saved_user_rsp: u64,        // offset 0
+    /// Saved 6th syscall arg R9 (gs:[8]).
+    pub saved_syscall_a5: u64,      // offset 8
+    /// Kernel stack top for SYSCALL entry (gs:[16]).
+    pub syscall_kstack_top: u64,    // offset 16
+
+    // ── Fields accessed from Rust ────────────────────────────────
     /// This CPU's ID (APIC ID on x86_64, MPIDR on aarch64).
-    pub cpu_id: u32,
+    pub cpu_id: u32,                // offset 24
     /// Whether this CPU is online and executing.
-    pub online: bool,
-    /// Whether this CPU is in the idle loop (no runnable tasks).
-    pub idle: bool,
-    _pad: [u8; 2],
+    pub online: bool,               // offset 28
+    /// Whether this CPU is in the idle loop.
+    pub idle: bool,                 // offset 29
+    _pad: [u8; 2],                  // offset 30
     /// Index of the currently running task on this CPU.
-    pub current_task_idx: usize,
-    /// Kernel stack top for this CPU's syscall entry (x86_64: loaded into RSP by SYSCALL).
-    pub kstack_top: u64,
+    pub current_task_idx: usize,    // offset 32
+    /// Kernel stack top (legacy, same as syscall_kstack_top).
+    pub kstack_top: u64,            // offset 40
 }
+
+/// Assembly-accessible offsets into PerCpu (must match #[repr(C)] layout).
+pub const PERCPU_OFFSET_SAVED_USER_RSP: usize = 0;
+pub const PERCPU_OFFSET_SAVED_A5: usize = 8;
+pub const PERCPU_OFFSET_KSTACK_TOP: usize = 16;
 
 impl PerCpu {
     pub const fn new() -> Self {
         Self {
+            saved_user_rsp: 0, saved_syscall_a5: 0, syscall_kstack_top: 0,
             cpu_id: 0, online: false, idle: true, _pad: [0; 2],
             current_task_idx: 0, kstack_top: 0,
         }
@@ -56,10 +76,15 @@ pub unsafe fn init_this_cpu(id: usize) {
     core::arch::asm!("msr tpidr_el1, {}", in(reg) base, options(nostack));
     #[cfg(target_arch = "x86_64")]
     {
-        // IA32_GS_BASE (MSR 0xC0000101) = per-CPU struct address
+        // Write to BOTH IA32_GS_BASE (for pre-swapgs kernel access) AND
+        // IA32_KERNEL_GS_BASE (for post-swapgs access after syscall entry).
+        // swapgs exchanges GS_BASE ↔ KERNEL_GS_BASE.
         let lo = base as u32;
         let hi = (base >> 32) as u32;
+        // IA32_GS_BASE (0xC0000101) — active GS base (used in kernel before first swapgs)
         core::arch::asm!("wrmsr", in("ecx") 0xC0000101u32, in("eax") lo, in("edx") hi, options(nostack));
+        // IA32_KERNEL_GS_BASE (0xC0000102) — swapped in by swapgs at syscall entry
+        core::arch::asm!("wrmsr", in("ecx") 0xC0000102u32, in("eax") lo, in("edx") hi, options(nostack));
     }
 }
 

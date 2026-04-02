@@ -204,6 +204,8 @@ pub unsafe fn init_pid1() {
         let kstack = crate::arch::x86_64::syscall::syscall_stack_top() as usize;
         slot.kstack_top = kstack;
         crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP = kstack as u64;
+        // Set percpu kstack_top for gs-relative access in syscall_entry
+        crate::percpu::this_cpu().syscall_kstack_top = kstack as u64;
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -293,6 +295,11 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     // Restore hardware state
     #[cfg(target_arch = "x86_64")]
     {
+        // Update per-CPU syscall state (gs-relative in syscall_entry asm)
+        let pc = crate::percpu::this_cpu();
+        pc.saved_user_rsp = new.saved_user_sp as u64;
+        pc.syscall_kstack_top = new.kstack_top as u64;
+        // Keep legacy globals in sync for compatibility
         crate::arch::x86_64::syscall::SAVED_USER_RSP = new.saved_user_sp as u64;
         crate::arch::x86_64::syscall::CURRENT_KSTACK_TOP = new.kstack_top as u64;
         let lo = new.tls as u32;

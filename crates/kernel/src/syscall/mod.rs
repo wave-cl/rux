@@ -215,7 +215,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Mmap => {
             // mmap has 6 args. The 6th (offset) is saved arch-specifically.
             #[cfg(target_arch = "x86_64")]
-            let a5 = unsafe { crate::arch::x86_64::syscall::SAVED_SYSCALL_A5 as usize };
+            let a5 = unsafe { crate::percpu::this_cpu().saved_syscall_a5 as usize };
             #[cfg(target_arch = "aarch64")]
             let a5 = unsafe { crate::arch::aarch64::syscall::SAVED_SYSCALL_A5 as usize };
             posix::mmap(a0, a1, a2, a3, a4, a5)

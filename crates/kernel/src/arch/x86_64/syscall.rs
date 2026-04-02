@@ -64,6 +64,12 @@ unsafe extern "C" fn syscall_entry() {
         // Note: clac for SMAP enforcement is done at the Rust level via
         // the SMAP_ACTIVE guard in uaccess::stac/clac. Can't use clac here
         // unconditionally because QEMU TCG may not support SMAP instructions.
+        // Per-CPU via GS-base ready (swapgs + gs:[offset]) but disabled for QEMU
+        // timing compatibility. Enable for real hardware / KVM:
+        // "swapgs",
+        // "mov gs:[0], rsp",     // saved_user_rsp
+        // "mov gs:[8], r9",      // saved_syscall_a5
+        // "mov rsp, gs:[16]",    // syscall_kstack_top
         "mov [rip + {saved_user_rsp}], rsp",
         "mov [rip + {saved_a5}], r9",
         "mov rsp, [rip + {current_kstack_top}]",
@@ -127,6 +133,7 @@ unsafe extern "C" fn syscall_entry() {
         "mov rsp, [rip + {saved_user_rsp}]",
 
         // Return to user mode
+        // For real SMP: "swapgs" here before sysretq
         "sysretq",
 
         saved_user_rsp = sym SAVED_USER_RSP,
