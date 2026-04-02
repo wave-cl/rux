@@ -313,9 +313,25 @@ pub unsafe fn load() {
 pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {
     match vector {
         0 => panic!("Division by zero"),
-        6 => panic!("Invalid opcode"),
+        6 | 13 => {
+            // frame points to saved GPRs; RIP is at offset 136 (15 GPRs + vec + errcode)
+            let rip = unsafe { *((frame as *const u64).add(17)) };
+            let cr2: u64 = if vector == 14 {
+                unsafe { let v: u64; core::arch::asm!("mov {}, cr2", out(reg) v, options(nostack)); v }
+            } else { 0 };
+            use rux_arch::ConsoleOps;
+            let name = if vector == 6 { "Invalid opcode (#UD)" } else { "General protection fault (#GP)" };
+            crate::arch::Arch::write_str("rux: EXCEPTION: ");
+            crate::arch::Arch::write_str(name);
+            crate::arch::Arch::write_str("\n  RIP=0x");
+            let mut buf = [0u8; 16];
+            crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut buf, rip as usize));
+            crate::arch::Arch::write_str(" error_code=0x");
+            crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut buf, error_code as usize));
+            crate::arch::Arch::write_str("\n");
+            loop { unsafe { core::arch::asm!("cli; hlt"); } }
+        }
         8 => panic!("Double fault (error_code={:#x})", error_code),
-        13 => panic!("General protection fault (error_code={:#x})", error_code),
         14 => {
             let cr2: u64;
             unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nostack)); }

@@ -43,6 +43,19 @@ build_initramfs() {
         chmod 755 "$STAGING/bin/auxv"
     fi
 
+    # ── Dynamic linking test binary + musl ld.so ─────────────────
+    local DYNHELLO="$USER_DIR/dynhello_${ARCH}.elf"
+    local LDMUSL="$USER_DIR/ld-musl-${ARCH}.so.1"
+    if [ -f "$DYNHELLO" ] && [ -f "$LDMUSL" ]; then
+        cp "$DYNHELLO" "$STAGING/bin/dynhello"
+        chmod 755 "$STAGING/bin/dynhello"
+        cp "$LDMUSL" "$STAGING/lib/ld-musl-${ARCH}.so.1"
+        chmod 755 "$STAGING/lib/ld-musl-${ARCH}.so.1"
+        # musl ld.so IS libc.so — create symlink for ld.so resolution
+        ln -sf "ld-musl-${ARCH}.so.1" "$STAGING/lib/libc.so"
+        echo "  + dynhello + ld-musl-${ARCH}.so.1"
+    fi
+
     # ── /bin symlinks ────────────────────────────────────────────
     for cmd in sh ash cat cp date dd df dmesg hostname echo ed egrep false fgrep grep \
                gunzip gzip kill ln ls mkdir mknod mktemp more mount mv nice nohup \
