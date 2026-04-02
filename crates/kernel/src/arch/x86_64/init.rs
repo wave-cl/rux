@@ -31,10 +31,7 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         pc.idle = true;
         pc.current_task_idx = usize::MAX;
 
-        console::write_str("rux: AP ");
-        let mut buf = [0u8; 10];
-        console::write_str(rux_klib::fmt::u32_to_str(&mut buf, cpu_id));
-        console::write_str(" online\n");
+        // AP is online — BSP prints status after all APs check in
 
         // 5. Start LAPIC timer on AP (vector 48, ~1000 Hz)
         super::apic::init_timer(48, 100_000);

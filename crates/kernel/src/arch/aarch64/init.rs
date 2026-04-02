@@ -23,10 +23,8 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
         // Start per-CPU timer (aarch64 generic timer is per-CPU)
         super::timer::init(1000);
 
-        console::write_str("rux: AP ");
-        let mut buf = [0u8; 10];
-        console::write_str(rux_klib::fmt::u32_to_str(&mut buf, cpu_id as u32));
-        console::write_str(" online\n");
+        // AP is online — BSP prints status after all APs check in
+        // (avoids interleaved console output from concurrent CPUs)
 
         // Enable interrupts and enter scheduler loop
         core::arch::asm!("msr daifclr, #0xF", options(nostack));
@@ -151,6 +149,11 @@ pub fn aarch64_init(dtb_addr: usize) {
                 waited += 1;
             }
             if !crate::percpu::cpu(ap_id).online { break; }
+
+            console::write_str("rux: AP ");
+            let mut idbuf = [0u8; 10];
+            console::write_str(rux_klib::fmt::u32_to_str(&mut idbuf, ap_id as u32));
+            console::write_str(" online\n");
         }
 
         let total = crate::percpu::online_cpus();
