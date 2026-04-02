@@ -295,90 +295,82 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
 }
 
 /// x86_64 Linux syscall number → generic Syscall enum.
+///
+/// Const lookup table: O(1) bounds check + index. Entries not in the table
+/// fall through to Unknown(nr). ArchSpecific(158) handled inline.
+#[inline]
 fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
     use crate::syscall::Syscall;
-    match nr {
-        0 => Syscall::Read,
-        1 => Syscall::Write,
-        2 => Syscall::Open,
-        3 => Syscall::Close,
-        4 => Syscall::Stat,                 // stat (follows symlinks)
-        6 => Syscall::Lstat,                // lstat (no follow)
-        5 => Syscall::Fstat,
-        7 => Syscall::Poll,
-        8 => Syscall::Lseek,
-        9 => Syscall::Mmap,
-        10 => Syscall::Mprotect,
-        11 => Syscall::Munmap,
-        12 => Syscall::Brk,
-        13 => Syscall::Sigaction,
-        14 => Syscall::Sigprocmask,
-        15 => Syscall::Sigreturn,
-        16 => Syscall::Ioctl,
-        17 => Syscall::Pread64,
-        20 => Syscall::Writev,
-        21 => Syscall::Access,
-        22 | 293 => Syscall::Pipe2,
-        24 => Syscall::SchedYield,
-        32 => Syscall::Dup,
-        33 => Syscall::Dup2,
-        35 => Syscall::Nanosleep,
-        37 => Syscall::Alarm,
-        39 => Syscall::Getpid,
-        40 => Syscall::Sendfile,
-        60 => Syscall::Exit,
-        61 => Syscall::Wait4,
-        62 => Syscall::Kill,
-        63 => Syscall::Uname,
-        72 => Syscall::Fcntl,
-        78 | 217 => Syscall::Getdents64,
-        79 => Syscall::Getcwd,
-        80 => Syscall::Chdir,
-        82 | 264 => Syscall::Rename,       // rename / renameat
-        83 => Syscall::Mkdir,
-        86 => Syscall::Link,               // link(old, new)
-        265 => Syscall::Linkat,            // linkat(olddirfd, old, newdirfd, new, flags)
-        87 => Syscall::Unlink,
-        88 | 266 => Syscall::Symlink,       // symlink / symlinkat
-        89 | 267 => Syscall::Readlink,      // readlink / readlinkat
-        90 => Syscall::Chmod,              // chmod(path, mode)
-        91 => Syscall::Fchmod,             // fchmod(fd, mode)
-        92 => Syscall::Chown,              // chown(path, uid, gid)
-        93 => Syscall::Fchown,             // fchown(fd, uid, gid)
-        96 => Syscall::Gettimeofday,
-        97 => Syscall::Getrlimit,
-        99 => Syscall::Sysinfo,
-        137 | 138 => Syscall::Statfs, // statfs / fstatfs
-        102 | 107 => Syscall::Getuid,
-        104 | 108 => Syscall::Getgid,
-        109 => Syscall::Setpgid,
-        115 | 116 => Syscall::Getgroups, // getgroups / setgroups
-        110 => Syscall::Getppid,
-        111 => Syscall::Getpgid,
-        112 => Syscall::Setsid,
-        121 => Syscall::Getpgid,
-        131 => Syscall::Sigaltstack,
-        157 => Syscall::Prctl,
-        186 => Syscall::Gettid,
-        200 => Syscall::Tkill,
-        202 => Syscall::Futex,
-        204 => Syscall::SchedGetaffinity,
-        218 => Syscall::SetTidAddress,
-        228 => Syscall::ClockGettime,
-        231 => Syscall::ExitGroup,
-        257 => Syscall::OpenAt,
-        262 => Syscall::FstatAt,
-        269 => Syscall::Faccessat,
-        273 => Syscall::SetRobustList,
-        280 => Syscall::Utimensat,
-        292 => Syscall::Dup2,               // dup3 → dup2 (ignore flags)
-        302 => Syscall::Prlimit64,
-        334 => Syscall::Rseq,
-        // x86_64-specific
-        158 => Syscall::ArchSpecific(nr),
-        _ => Syscall::Unknown(nr),
-    }
+    // x86_64 arch_prctl
+    if nr == 158 { return Syscall::ArchSpecific(nr); }
+    SYSCALL_TABLE_X86.get(nr).copied().unwrap_or(Syscall::Unknown(nr))
 }
+
+/// Compile-time syscall number → Syscall enum table for x86_64 Linux.
+/// Index = Linux syscall number. Unknown entries are Syscall::Unknown(0)
+/// (never returned — translate_x86_64 uses .get() which returns None for gaps).
+const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
+    use crate::syscall::Syscall;
+    let u = Syscall::Unknown(0); // placeholder for gaps
+    let mut t = [u; 335];
+    // File I/O
+    t[0] = Syscall::Read;        t[1] = Syscall::Write;
+    t[2] = Syscall::Open;        t[3] = Syscall::Close;
+    t[4] = Syscall::Stat;        t[5] = Syscall::Fstat;
+    t[6] = Syscall::Lstat;       t[7] = Syscall::Poll;
+    t[8] = Syscall::Lseek;       t[16] = Syscall::Ioctl;
+    t[17] = Syscall::Pread64;    t[20] = Syscall::Writev;
+    t[22] = Syscall::Pipe2;      t[32] = Syscall::Dup;
+    t[33] = Syscall::Dup2;       t[40] = Syscall::Sendfile;
+    t[72] = Syscall::Fcntl;      t[292] = Syscall::Dup2; // dup3
+    t[293] = Syscall::Pipe2;     // pipe2
+    // File metadata
+    t[21] = Syscall::Access;     t[78] = Syscall::Getdents64;
+    t[217] = Syscall::Getdents64;
+    // Memory
+    t[9] = Syscall::Mmap;        t[10] = Syscall::Mprotect;
+    t[11] = Syscall::Munmap;     t[12] = Syscall::Brk;
+    // Signals
+    t[13] = Syscall::Sigaction;  t[14] = Syscall::Sigprocmask;
+    t[15] = Syscall::Sigreturn;  t[131] = Syscall::Sigaltstack;
+    // Process
+    t[24] = Syscall::SchedYield; t[35] = Syscall::Nanosleep;
+    t[37] = Syscall::Alarm;      t[39] = Syscall::Getpid;
+    t[60] = Syscall::Exit;       t[61] = Syscall::Wait4;
+    t[62] = Syscall::Kill;       t[63] = Syscall::Uname;
+    t[110] = Syscall::Getppid;   t[231] = Syscall::ExitGroup;
+    // Directory / path ops
+    t[79] = Syscall::Getcwd;     t[80] = Syscall::Chdir;
+    t[82] = Syscall::Rename;     t[264] = Syscall::Rename;
+    t[83] = Syscall::Mkdir;      t[86] = Syscall::Link;
+    t[265] = Syscall::Linkat;    t[87] = Syscall::Unlink;
+    t[88] = Syscall::Symlink;    t[266] = Syscall::Symlink;
+    t[89] = Syscall::Readlink;   t[267] = Syscall::Readlink;
+    t[257] = Syscall::OpenAt;    t[262] = Syscall::FstatAt;
+    t[269] = Syscall::Faccessat; t[280] = Syscall::Utimensat;
+    // Permissions
+    t[90] = Syscall::Chmod;      t[91] = Syscall::Fchmod;
+    t[92] = Syscall::Chown;      t[93] = Syscall::Fchown;
+    // User/group IDs
+    t[102] = Syscall::Getuid;    t[107] = Syscall::Getuid;
+    t[104] = Syscall::Getgid;    t[108] = Syscall::Getgid;
+    t[115] = Syscall::Getgroups; t[116] = Syscall::Getgroups;
+    // Process groups
+    t[109] = Syscall::Setpgid;   t[111] = Syscall::Getpgid;
+    t[112] = Syscall::Setsid;    t[121] = Syscall::Getpgid;
+    // Time / info
+    t[96] = Syscall::Gettimeofday; t[97] = Syscall::Getrlimit;
+    t[99] = Syscall::Sysinfo;    t[228] = Syscall::ClockGettime;
+    t[137] = Syscall::Statfs;    t[138] = Syscall::Statfs;
+    // Linux extensions
+    t[157] = Syscall::Prctl;     t[186] = Syscall::Gettid;
+    t[200] = Syscall::Tkill;     t[202] = Syscall::Futex;
+    t[204] = Syscall::SchedGetaffinity;
+    t[218] = Syscall::SetTidAddress;
+    t[273] = Syscall::SetRobustList;
+    t[302] = Syscall::Prlimit64; t[334] = Syscall::Rseq;
+    t
+};
 
 pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
     unsafe {

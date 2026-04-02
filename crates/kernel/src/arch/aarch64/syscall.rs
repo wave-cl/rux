@@ -195,94 +195,71 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
 }
 
 /// aarch64 Linux syscall number → generic Syscall enum.
+///
+/// Const lookup table: O(1) bounds check + index.
+#[inline]
 fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
     use crate::syscall::Syscall;
-    match nr {
-        // File I/O
-        56 => Syscall::OpenAt,
-        57 => Syscall::Close,
-        63 => Syscall::Read,
-        64 => Syscall::Write,
-        66 => Syscall::Writev,
-        67 => Syscall::Pread64,
-        71 => Syscall::Sendfile,
-        23 => Syscall::Dup,
-        24 => Syscall::Dup2,
-        25 => Syscall::Fcntl,
-        29 => Syscall::Ioctl,
-        62 => Syscall::Lseek,
-        59 => Syscall::Pipe2,
-        // File metadata
-        79 => Syscall::FstatAt,
-        80 => Syscall::Fstat,
-        78 => Syscall::Readlinkat,          // readlinkat(dirfd, path, buf, bufsiz)
-        48 => Syscall::Faccessat,
-        // Directory / path ops
-        17 => Syscall::Getcwd,
-        33 => Syscall::Mknodat,             // mknodat(dirfd, path, mode, dev)
-        34 => Syscall::Mkdirat,             // mkdirat(dirfd, path, mode)
-        35 => Syscall::Unlinkat,            // unlinkat(dirfd, path, flags)
-        36 => Syscall::Symlinkat,            // symlinkat(target, dirfd, linkpath)
-        37 => Syscall::Linkat,              // linkat(olddirfd, old, newdirfd, new, flags)
-        38 => Syscall::Renameat,            // renameat(olddirfd, old, newdirfd, new)
-        49 => Syscall::Chdir,
-        52 => Syscall::Fchmodat,            // fchmodat(dirfd, path, mode)
-        53 => Syscall::Fchmod,              // fchmod(fd, mode)
-        54 => Syscall::Fchownat,            // fchownat(dirfd, path, uid, gid, flags)
-        55 => Syscall::Fchown,              // fchown(fd, uid, gid)
-        88 => Syscall::Utimensat,
-        // Memory
-        222 => Syscall::Mmap,
-        215 => Syscall::Munmap,
-        226 => Syscall::Mprotect,
-        214 => Syscall::Brk,
-        // Process
-        172 => Syscall::Getpid,
-        173 => Syscall::Getppid,
-        93 => Syscall::Exit,
-        94 => Syscall::ExitGroup,
-        129 => Syscall::Kill,
-        160 => Syscall::Uname,
-        260 => Syscall::Wait4,
-        // User/group IDs
-        158 | 159 => Syscall::Getgroups, // getgroups / setgroups
-        174 => Syscall::Getuid,
-        175 => Syscall::Geteuid,
-        176 => Syscall::Getgid,
-        177 => Syscall::Getegid,
-        // Process groups
-        154 => Syscall::Setpgid,
-        155 => Syscall::Getpgid,
-        157 => Syscall::Setsid,
-        // Signals
-        134 => Syscall::Sigaction,
-        135 => Syscall::Sigprocmask,
-        132 => Syscall::Sigaltstack,
-        139 => Syscall::Sigreturn,
-        // Time / scheduling
-        113 => Syscall::ClockGettime,
-        101 => Syscall::Nanosleep,
-        124 => Syscall::SchedYield,
-        // Linux extensions
-        61 => Syscall::Getdents64,
-        43 | 44 => Syscall::Statfs, // statfs / fstatfs
-        179 => Syscall::Sysinfo,
-        96 => Syscall::SetTidAddress,
-        178 => Syscall::Gettid,
-        167 => Syscall::Prctl,
-        99 => Syscall::SetRobustList,
-        98 => Syscall::Futex,
-        131 => Syscall::Tgkill,
-        130 => Syscall::Tkill,
-        123 => Syscall::SchedGetaffinity,
-        261 => Syscall::Prlimit64,
-        293 => Syscall::Rseq,
-        73 => Syscall::Poll,
-        169 => Syscall::Gettimeofday,
-        163 => Syscall::Getrlimit,
-        _ => Syscall::Unknown(nr),
-    }
+    SYSCALL_TABLE_AA64.get(nr).copied().unwrap_or(Syscall::Unknown(nr))
 }
+
+/// Compile-time syscall number → Syscall enum table for aarch64 Linux.
+const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
+    use crate::syscall::Syscall;
+    let u = Syscall::Unknown(0);
+    let mut t = [u; 294];
+    // File I/O
+    t[56] = Syscall::OpenAt;     t[57] = Syscall::Close;
+    t[63] = Syscall::Read;       t[64] = Syscall::Write;
+    t[66] = Syscall::Writev;     t[67] = Syscall::Pread64;
+    t[71] = Syscall::Sendfile;   t[23] = Syscall::Dup;
+    t[24] = Syscall::Dup2;       t[25] = Syscall::Fcntl;
+    t[29] = Syscall::Ioctl;      t[62] = Syscall::Lseek;
+    t[59] = Syscall::Pipe2;      t[73] = Syscall::Poll;
+    // File metadata
+    t[79] = Syscall::FstatAt;    t[80] = Syscall::Fstat;
+    t[78] = Syscall::Readlinkat; t[48] = Syscall::Faccessat;
+    // Directory / path ops
+    t[17] = Syscall::Getcwd;     t[33] = Syscall::Mknodat;
+    t[34] = Syscall::Mkdirat;    t[35] = Syscall::Unlinkat;
+    t[36] = Syscall::Symlinkat;  t[37] = Syscall::Linkat;
+    t[38] = Syscall::Renameat;   t[49] = Syscall::Chdir;
+    // Permissions
+    t[52] = Syscall::Fchmodat;   t[53] = Syscall::Fchmod;
+    t[54] = Syscall::Fchownat;   t[55] = Syscall::Fchown;
+    t[88] = Syscall::Utimensat;
+    // Memory
+    t[222] = Syscall::Mmap;      t[215] = Syscall::Munmap;
+    t[226] = Syscall::Mprotect;  t[214] = Syscall::Brk;
+    // Process
+    t[172] = Syscall::Getpid;    t[173] = Syscall::Getppid;
+    t[93] = Syscall::Exit;       t[94] = Syscall::ExitGroup;
+    t[129] = Syscall::Kill;      t[160] = Syscall::Uname;
+    t[260] = Syscall::Wait4;
+    // User/group IDs
+    t[158] = Syscall::Getgroups; t[159] = Syscall::Getgroups;
+    t[174] = Syscall::Getuid;    t[175] = Syscall::Geteuid;
+    t[176] = Syscall::Getgid;    t[177] = Syscall::Getegid;
+    // Process groups
+    t[154] = Syscall::Setpgid;   t[155] = Syscall::Getpgid;
+    t[157] = Syscall::Setsid;
+    // Signals
+    t[134] = Syscall::Sigaction; t[135] = Syscall::Sigprocmask;
+    t[132] = Syscall::Sigaltstack; t[139] = Syscall::Sigreturn;
+    // Time / scheduling
+    t[113] = Syscall::ClockGettime; t[101] = Syscall::Nanosleep;
+    t[124] = Syscall::SchedYield;   t[169] = Syscall::Gettimeofday;
+    t[163] = Syscall::Getrlimit;
+    // Linux extensions
+    t[61] = Syscall::Getdents64; t[43] = Syscall::Statfs;
+    t[44] = Syscall::Statfs;     t[179] = Syscall::Sysinfo;
+    t[96] = Syscall::SetTidAddress; t[178] = Syscall::Gettid;
+    t[167] = Syscall::Prctl;     t[99] = Syscall::SetRobustList;
+    t[98] = Syscall::Futex;      t[131] = Syscall::Tgkill;
+    t[130] = Syscall::Tkill;     t[123] = Syscall::SchedGetaffinity;
+    t[261] = Syscall::Prlimit64; t[293] = Syscall::Rseq;
+    t
+};
 
 // ── VforkContext implementation ─────────────────────────────────────────
 

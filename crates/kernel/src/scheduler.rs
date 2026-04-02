@@ -17,6 +17,7 @@ pub static SCHED_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::Atom
 ///
 /// # Safety
 /// Must be called with interrupts disabled or from a single-CPU context.
+#[inline(always)]
 pub unsafe fn get() -> &'static mut Scheduler {
     &mut *(&raw mut SCHED)
 }
