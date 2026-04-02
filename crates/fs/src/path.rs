@@ -261,6 +261,7 @@ mod tests {
             unsafe { drop(Box::from_raw(ptr)); }
         }
         fn available_frames(&self, _size: PageSize) -> usize { usize::MAX }
+        fn alloc_base(&self) -> PhysAddr { PhysAddr::new(0) }
     }
 
     impl Drop for MockAllocator {

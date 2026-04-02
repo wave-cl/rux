@@ -1152,6 +1152,10 @@ mod tests {
         fn available_frames(&self, _size: PageSize) -> usize {
             usize::MAX // unlimited for tests
         }
+
+        fn alloc_base(&self) -> PhysAddr {
+            PhysAddr::new(0)
+        }
     }
 
     impl Drop for MockAllocator {
@@ -1645,5 +1649,39 @@ mod tests {
         let len = 6 - i;
         buf[1..1 + len].copy_from_slice(&digits[i..6]);
         1 + len
+    }
+
+    /// Test: write a large file (> 12 direct pages = > 48KB) and read it back.
+    /// Exercises the indirect block allocation path.
+    #[test]
+    fn large_file_write_read_roundtrip() {
+        let (_alloc, mut fs) = new_fs();
+        let fname = FileName::new(b"bigfile").unwrap();
+        let ino = fs.create(0, fname, 0o644 | 0o100000).unwrap();
+
+        // Write 200KB of patterned data (50 pages, well into indirect range)
+        let file_size = 200 * 1024;
+        let mut write_buf = [0u8; 4096];
+        for offset in (0..file_size).step_by(4096) {
+            let page_num = (offset / 4096) as u8;
+            for b in write_buf.iter_mut() { *b = page_num.wrapping_add(0x42); }
+            let chunk = 4096usize.min(file_size - offset);
+            let n = fs.write(ino, offset as u64, &write_buf[..chunk]).unwrap();
+            assert_eq!(n, chunk);
+        }
+
+        // Read back and verify every page
+        let mut read_buf = [0u8; 4096];
+        for offset in (0..file_size).step_by(4096) {
+            let page_num = (offset / 4096) as u8;
+            let expected = page_num.wrapping_add(0x42);
+            let chunk = 4096usize.min(file_size - offset);
+            let n = fs.read(ino, offset as u64, &mut read_buf[..chunk]).unwrap();
+            assert_eq!(n, chunk, "short read at offset {offset}");
+            for (i, &b) in read_buf[..chunk].iter().enumerate() {
+                assert_eq!(b, expected,
+                    "data mismatch at offset {offset}+{i} (page {page_num}): got {b:#x}, expected {expected:#x}");
+            }
+        }
     }
 }

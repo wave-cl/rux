@@ -93,11 +93,12 @@ pub unsafe fn load_elf_from_inode(
         entry_point = elf_info.entry as usize;
     }
 
-    // Activate page table
+    // Activate page table + flush TLB (exec replaces the entire address space)
     {
         use rux_arch::PageTableRootOps;
         let new_root = upt.root_phys().as_usize() as u64;
         crate::arch::Arch::write(new_root);
+        crate::arch::PageTable::flush_tlb_all();
         unsafe {
             crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root = new_root;
         }
