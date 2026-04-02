@@ -195,14 +195,46 @@ pub fn aarch64_init(dtb_addr: usize) {
     }
 }
 
+/// Parse an 8-digit hex field from a cpio header at the given address.
+unsafe fn cpio_hex8(addr: usize) -> usize {
+    let mut val = 0usize;
+    for i in 0..8 {
+        let b = *(addr as *const u8).add(i);
+        let digit = match b {
+            b'0'..=b'9' => (b - b'0') as usize,
+            b'a'..=b'f' => (b - b'a' + 10) as usize,
+            b'A'..=b'F' => (b - b'A' + 10) as usize,
+            _ => 0,
+        };
+        val = (val << 4) | digit;
+    }
+    val
+}
+
 /// Scan RAM for a cpio newc archive (magic "070701").
+/// Walks cpio entries to compute the actual archive size instead of
+/// using the scan range end (which gave wildly wrong sizes).
 unsafe fn find_cpio_in_ram(start: usize, end: usize) -> Option<(usize, usize)> {
     let magic = *b"070701";
     let mut addr = start;
     while addr + 6 < end {
         let p = addr as *const [u8; 6];
         if *p == magic {
-            let size = end - addr;
+            // Found cpio start — walk entries to compute actual size
+            let mut pos = addr;
+            loop {
+                if pos + 110 > end { break; }
+                let hdr = pos as *const [u8; 6];
+                if *hdr != magic { break; }
+                let filesize = cpio_hex8(pos + 54);
+                let namesize = cpio_hex8(pos + 94);
+                let name_start = pos + 110;
+                let data_start = (name_start + namesize + 3) & !3;
+                let data_end = data_start + filesize;
+                pos = (data_end + 3) & !3;
+            }
+            let size = pos - addr;
+
             console::write_str("rux: initrd found at ");
             { let mut hb = [0u8; 16]; console::write_str("0x"); console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, addr)); }
             console::write_str(" (");

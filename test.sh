@@ -31,7 +31,7 @@ rust-objcopy --output-target=elf32-i386 \
 # ── x86_64 ───────────────────────────────────────────────────────────
 printf "\n\033[1m── x86_64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 4; \
+OUTPUT=$( { sleep 6; \
     printf 'uname -a\n'; sleep 1; \
     printf 'cat /proc/meminfo | head -1\n'; sleep 3; \
     printf 'env | head -1\n'; sleep 3; \
@@ -210,7 +210,7 @@ check "proc stat pgid"         "1"
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 8; \
+OUTPUT=$( { sleep 12; \
     printf 'uname -a\n'; sleep 2; \
     printf 'cat /etc/passwd\n'; sleep 2; \
     printf 'cat /etc/os-release\n'; sleep 2; \

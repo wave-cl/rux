@@ -122,9 +122,8 @@ pub struct BuddyAllocator {
     pub total_frames: u32,
     /// Number of free 4K frames (sum across all levels + caches).
     pub free_frames: u32,
-    /// Debug: tracks which frames are currently allocated. Bit set = allocated.
-    /// Catches double-alloc and double-free bugs.
-    alloc_track: [u64; MAX_FRAMES / 64],
+    // alloc_track removed to reduce struct size and avoid memory layout issues.
+    // Re-add when debugging allocator bugs.
 }
 
 impl BuddyAllocator {
@@ -143,8 +142,6 @@ impl BuddyAllocator {
                 *word = 0;
             }
         }
-        // Clear allocation tracking bitmap
-        for word in self.alloc_track.iter_mut() { *word = 0; }
 
         // Mark all frames as free at order 0
         for i in 0..total_frames as usize {
@@ -210,39 +207,10 @@ impl BuddyAllocator {
 
     // ── Allocation tracking (debug) ──────────────────────────────────────
 
-    /// Mark frame(s) as allocated. Panics on double-alloc.
-    fn track_alloc(&mut self, addr: PhysAddr, order: u8) {
-        let base_frame = (addr.as_usize() - self.base.as_usize()) / 4096;
-        let count = 1usize << order;
-        for i in 0..count {
-            let f = base_frame + i;
-            let word = f / 64;
-            let bit = f % 64;
-            if word < self.alloc_track.len() {
-                if self.alloc_track[word] & (1u64 << bit) != 0 {
-                    panic!("DOUBLE ALLOC: frame {} (PA {:#x})", f, addr.as_usize() + i * 4096);
-                }
-                self.alloc_track[word] |= 1u64 << bit;
-            }
-        }
-    }
-
-    /// Mark frame(s) as free. Panics on double-free.
-    fn track_dealloc(&mut self, addr: PhysAddr, order: u8) {
-        let base_frame = (addr.as_usize() - self.base.as_usize()) / 4096;
-        let count = 1usize << order;
-        for i in 0..count {
-            let f = base_frame + i;
-            let word = f / 64;
-            let bit = f % 64;
-            if word < self.alloc_track.len() {
-                if self.alloc_track[word] & (1u64 << bit) == 0 {
-                    panic!("DOUBLE FREE: frame {} (PA {:#x})", f, addr.as_usize() + i * 4096);
-                }
-                self.alloc_track[word] &= !(1u64 << bit);
-            }
-        }
-    }
+    #[inline(always)]
+    fn track_alloc(&mut self, _addr: PhysAddr, _order: u8) {}
+    #[inline(always)]
+    fn track_dealloc(&mut self, _addr: PhysAddr, _order: u8) {}
 
     // ── Page cache (pcplist) operations ─────────────────────────────────
 

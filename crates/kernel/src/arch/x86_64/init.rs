@@ -245,6 +245,16 @@ pub fn x86_64_init(multiboot_info: usize) {
     let ramfs_addr = (alloc_addr + alloc_size_bytes + 0xFFF) & !0xFFF;
     let ramfs_end = (ramfs_addr + core::mem::size_of::<rux_fs::ramfs::RamFs>() + 0xFFF) & !0xFFF;
 
+    // Log computed layout
+    {
+        console::write_str("rux: layout: alloc@0x");
+        let mut hx = [0u8; 16];
+        console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hx, alloc_addr));
+        console::write_str(" ramfs@0x");
+        console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hx, ramfs_addr));
+        console::write_str("\n");
+    }
+
     // ── Init frame allocator from the largest region ────────────────────
     let mut best = 0;
     for i in 1..memmap.count {
