@@ -37,13 +37,17 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         // 5. Start LAPIC timer on AP (vector 48, ~1000 Hz)
         super::apic::init_timer(48, 100_000);
 
-        // 6. Enable interrupts and enter idle loop
-        // When the LAPIC timer fires, the IDT handler (vector 32) calls
-        // sched.tick() + sched.schedule(). If there are runnable tasks,
-        // the AP will context-switch to them.
+        // 6. Enable interrupts and enter scheduler loop
+        // After each timer interrupt (vector 48), check if the scheduler
+        // wants to reschedule. If so, pick up a runnable task.
         core::arch::asm!("sti", options(nostack, preserves_flags));
         loop {
             core::arch::asm!("hlt", options(nostack, nomem));
+            // After waking from hlt (timer fired), check reschedule
+            let sched = crate::scheduler::get();
+            if sched.need_resched {
+                sched.schedule();
+            }
         }
     }
 }
