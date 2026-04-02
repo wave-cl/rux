@@ -13,7 +13,7 @@ pub fn exit(status: i32) -> ! {
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
             // Close all pipe FDs so reader/writer counts drop correctly.
             // Without this, blocked pipe waiters never see EOF/EPIPE.
-            for i in 0..64usize {
+            for i in 0..rux_fs::fdtable::MAX_FDS {
                 if (*rux_fs::fdtable::FD_TABLE)[i].active && (*rux_fs::fdtable::FD_TABLE)[i].is_pipe {
                     let pid = (*rux_fs::fdtable::FD_TABLE)[i].pipe_id;
                     let pw = (*rux_fs::fdtable::FD_TABLE)[i].pipe_write;
@@ -42,17 +42,15 @@ pub fn exit(status: i32) -> ! {
 
                 // Find parent, send SIGCHLD, wake if blocked in waitpid.
                 let ppid = TASK_TABLE[idx].ppid;
-                for i in 0..MAX_PROCS {
-                    let t = &mut TASK_TABLE[i];
-                    if !t.active || t.pid != ppid { continue; }
+                if let Some(pi) = find_task_by_pid(ppid) {
+                    let t = &mut TASK_TABLE[pi];
                     t.last_child_exit = status;
                     t.child_available = true;
                     t.signal_hot.pending = t.signal_hot.pending.add(17); // SIGCHLD
                     if t.state == TaskState::WaitingForChild {
                         t.state = TaskState::Ready;
-                        crate::scheduler::get().wake_task(i);
+                        crate::scheduler::get().wake_task(pi);
                     }
-                    break;
                 }
             }
 
@@ -277,17 +275,17 @@ pub fn setpgid(pid: usize, pgid: usize) -> isize {
         let target_pid = if pid == 0 { my_pid } else { pid as u32 };
         let new_pgid = if pgid == 0 { target_pid } else { pgid as u32 };
 
-        for i in 0..MAX_PROCS {
-            let t = &mut TASK_TABLE[i];
-            if t.active && t.pid == target_pid {
+        match find_task_by_pid(target_pid) {
+            Some(i) => {
+                let t = &mut TASK_TABLE[i];
                 if target_pid != my_pid && t.ppid != my_pid {
                     return -1; // -EPERM: can only set pgid for self or child
                 }
                 t.pgid = new_pgid;
-                return 0;
+                0
             }
+            None => -3, // -ESRCH
         }
-        -3 // -ESRCH
     }
 }
 
@@ -299,12 +297,10 @@ pub fn getpgid(pid: usize) -> isize {
         if pid == 0 {
             return TASK_TABLE[current_task_idx()].pgid as isize;
         }
-        for i in 0..MAX_PROCS {
-            if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32 {
-                return TASK_TABLE[i].pgid as isize;
-            }
+        match find_task_by_pid(pid as u32) {
+            Some(i) => TASK_TABLE[i].pgid as isize,
+            None => -3, // -ESRCH
         }
-        -3 // -ESRCH
     }
 }
 

@@ -224,10 +224,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         use crate::task_table::*;
         unsafe {
             // Find target process in TASK_TABLE.
-            let target_idx = (0..MAX_PROCS).find(|&i| {
-                TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32
-            });
-            let target_idx = match target_idx {
+            let target_idx = match find_task_by_pid(pid as u32) {
                 Some(i) => i,
                 None => return -3, // -ESRCH
             };
@@ -238,15 +235,12 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                 TASK_TABLE[target_idx].state = TaskState::Zombie;
                 TASK_TABLE[target_idx].exit_code = 128 + 9;
                 let ppid = TASK_TABLE[target_idx].ppid;
-                for i in 0..MAX_PROCS {
-                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == ppid {
-                        TASK_TABLE[i].last_child_exit = 128 + 9;
-                        TASK_TABLE[i].child_available = true;
-                        if TASK_TABLE[i].state == TaskState::WaitingForChild {
-                            TASK_TABLE[i].state = TaskState::Ready;
-                            crate::scheduler::get().wake_task(i);
-                        }
-                        break;
+                if let Some(pi) = find_task_by_pid(ppid) {
+                    TASK_TABLE[pi].last_child_exit = 128 + 9;
+                    TASK_TABLE[pi].child_available = true;
+                    if TASK_TABLE[pi].state == TaskState::WaitingForChild {
+                        TASK_TABLE[pi].state = TaskState::Ready;
+                        crate::scheduler::get().wake_task(pi);
                     }
                 }
                 let sched = crate::scheduler::get();

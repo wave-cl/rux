@@ -7,7 +7,7 @@
 
 use rux_proc::fs::FsContext;
 use rux_proc::signal::SignalHot;
-use rux_fs::fdtable::{OpenFile, EMPTY_FD};
+use rux_fs::fdtable::{OpenFile, EMPTY_FD, MAX_FDS};
 
 /// Maximum number of concurrent processes.
 pub const MAX_PROCS: usize = 16;
@@ -54,7 +54,7 @@ pub struct TaskSlot {
     pub signal_restorer: [usize; 32],
 
     // ── File descriptors (mirrors FD_TABLE global) ────────────────────
-    pub fds: [OpenFile; 64],
+    pub fds: [OpenFile; MAX_FDS],
 
     // ── Hardware context ──────────────────────────────────────────────
     pub pt_root: u64,          // CR3 / TTBR0_EL1
@@ -87,7 +87,7 @@ impl TaskSlot {
             fs_ctx: FsContext::new(),
             signal_hot: SignalHot::new(),
             signal_restorer: [0; 32],
-            fds: [EMPTY_FD; 64],
+            fds: [EMPTY_FD; MAX_FDS],
             pt_root: 0,
             kstack_top: 0, saved_ksp: 0,
             saved_user_sp: 0, tls: 0, asid: 0,
@@ -182,6 +182,14 @@ pub fn alloc_task_slot() -> Option<usize> {
             }
         }
         None
+    }
+}
+
+/// Find the task slot index for a given PID. Returns None if not found.
+#[inline]
+pub fn find_task_by_pid(pid: u32) -> Option<usize> {
+    unsafe {
+        (0..MAX_PROCS).find(|&i| TASK_TABLE[i].active && TASK_TABLE[i].pid == pid)
     }
 }
 

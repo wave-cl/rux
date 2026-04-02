@@ -5,7 +5,19 @@
 //! the parent returns the child's PID.
 
 use crate::task_table::*;
+use rux_fs::fdtable::{OpenFile, MAX_FDS};
 use rux_klib::{PhysAddr, VirtAddr};
+
+/// Copy a parent's FD table to a child, bumping pipe reference counts.
+#[inline]
+unsafe fn copy_fds_with_pipe_refs(src: &[OpenFile; MAX_FDS], dst: &mut [OpenFile; MAX_FDS]) {
+    for i in 0..MAX_FDS {
+        dst[i] = src[i];
+        if dst[i].active && dst[i].is_pipe {
+            (crate::pipe::PIPE.dup_ref)(dst[i].pipe_id, dst[i].pipe_write);
+        }
+    }
+}
 
 /// fork() syscall entry point.
 ///
@@ -50,12 +62,7 @@ pub unsafe fn sys_fork() -> isize {
     child.clone_flags = 0;
 
     // 4. Copy FD table + bump pipe refcounts
-    for i in 0..64 {
-        child.fds[i] = parent.fds[i];
-        if child.fds[i].active && child.fds[i].is_pipe {
-            (crate::pipe::PIPE.dup_ref)(child.fds[i].pipe_id, child.fds[i].pipe_write);
-        }
-    }
+    copy_fds_with_pipe_refs(&parent.fds, &mut child.fds);
 
     // 5. Share address space with COW (mark all user pages read-only + COW bit)
     let alloc = crate::kstate::alloc();
@@ -67,14 +74,9 @@ pub unsafe fn sys_fork() -> isize {
     child.tls = parent.tls;
     child.asid = (child_idx as u16) + 1; // ASID 0 = kernel, 1..N = processes
 
-    #[cfg(not(feature = "native"))]
     {
         use rux_arch::ForkOps;
         child.saved_ksp = crate::arch::Arch::setup_child_kstack(child.kstack_top);
-    }
-    #[cfg(feature = "native")]
-    {
-        child.saved_ksp = 0; // no actual context switch in native mode
     }
 
     // 7. Enqueue child in scheduler
@@ -159,26 +161,16 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
     // CLONE_FILES: share FD table (copy parent's FDs to child slot)
     // In the pointer-swap model, each task has its own fds array.
     // For threads, we copy the parent's FDs so both start with the same view.
-    for i in 0..64 {
-        child.fds[i] = parent.fds[i];
-        if child.fds[i].active && child.fds[i].is_pipe {
-            (crate::pipe::PIPE.dup_ref)(child.fds[i].pipe_id, child.fds[i].pipe_write);
-        }
-    }
+    copy_fds_with_pipe_refs(&parent.fds, &mut child.fds);
 
     // Set up child kernel stack with user stack from clone argument
     child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
     child.saved_user_sp = if child_stack != 0 { child_stack } else { parent.saved_user_sp };
     child.tls = parent.tls;
 
-    #[cfg(not(feature = "native"))]
     {
         use rux_arch::ForkOps;
         child.saved_ksp = crate::arch::Arch::setup_child_kstack(child.kstack_top);
-    }
-    #[cfg(feature = "native")]
-    {
-        child.saved_ksp = 0;
     }
 
     // Enqueue child
@@ -202,6 +194,7 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
 }
 
 /// Sync current PROCESS/FD_TABLE globals into the given task slot.
+#[inline]
 unsafe fn sync_globals_to_slot(idx: usize) {
     let slot = &mut TASK_TABLE[idx];
     slot.program_brk = crate::syscall::PROCESS.program_brk;
@@ -213,7 +206,6 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.child_available = crate::syscall::PROCESS.child_available;
     // FD_TABLE is a pointer into slot.fds — no copy needed.
 
-    #[cfg(not(feature = "native"))]
     {
         use rux_arch::ForkOps;
         crate::arch::Arch::snapshot_hw_state(
@@ -221,12 +213,6 @@ unsafe fn sync_globals_to_slot(idx: usize) {
             &mut slot.tls,
             &mut slot.pt_root,
         );
-    }
-    #[cfg(feature = "native")]
-    {
-        slot.saved_user_sp = 0;
-        slot.tls = 0;
-        slot.pt_root = 0;
     }
 }
 
