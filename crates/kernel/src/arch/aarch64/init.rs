@@ -125,39 +125,37 @@ pub fn aarch64_init(dtb_addr: usize) {
         core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar, options(nostack));
         core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr, options(nostack));
 
-        // Per-AP kernel stack
-        let ap_stack_top = crate::task_table::KSTACKS[1].as_ptr() as u64
-            + crate::task_table::KSTACK_SIZE as u64;
+        // Start APs via PSCI: try CPUs 1..MAX_CPUS, stop on first failure
+        extern "C" { static mut AP_BOOT_DATA: [u64; 7]; fn ap_entry_asm(); }
 
-        // Fill AP_BOOT_DATA (defined in ap_entry.S)
-        extern "C" { static mut AP_BOOT_DATA: [u64; 7]; }
-        AP_BOOT_DATA[0] = ttbr0;                              // TTBR0_EL1
-        AP_BOOT_DATA[1] = tcr;                                // TCR_EL1
-        AP_BOOT_DATA[2] = mair;                               // MAIR_EL1
-        AP_BOOT_DATA[3] = vbar;                               // VBAR_EL1
-        AP_BOOT_DATA[4] = sctlr;                              // SCTLR_EL1
-        AP_BOOT_DATA[5] = ap_stack_top;                       // stack_top
-        AP_BOOT_DATA[6] = ap_entry_rust as *const () as u64;  // entry_fn
+        let max_aps = 4usize.min(crate::percpu::MAX_CPUS);
+        for ap_id in 1..max_aps {
+            AP_BOOT_DATA[0] = ttbr0;
+            AP_BOOT_DATA[1] = tcr;
+            AP_BOOT_DATA[2] = mair;
+            AP_BOOT_DATA[3] = vbar;
+            AP_BOOT_DATA[4] = sctlr;
+            AP_BOOT_DATA[5] = crate::task_table::KSTACKS[ap_id].as_ptr() as u64
+                + crate::task_table::KSTACK_SIZE as u64;
+            AP_BOOT_DATA[6] = ap_entry_rust as *const () as u64;
 
-        // Start AP 1 via PSCI CPU_ON
-        extern "C" { fn ap_entry_asm(); }
-        let ret = super::psci::cpu_on(1, ap_entry_asm as *const () as u64, 1);
-        if ret == 0 {
-            // Wait for AP to come online (up to ~100ms worth of spinning)
+            let ret = super::psci::cpu_on(ap_id as u64, ap_entry_asm as *const () as u64, ap_id as u64);
+            if ret != 0 { break; } // no more CPUs
+
             let mut waited = 0u64;
             while waited < 10_000_000 {
-                if crate::percpu::cpu(1).online { break; }
+                if crate::percpu::cpu(ap_id).online { break; }
                 core::hint::spin_loop();
                 waited += 1;
             }
-            if crate::percpu::cpu(1).online {
-                console::write_str("rux: SMP: 2 CPUs online\n");
-            } else {
-                console::write_str("rux: AP 1 started but not responding\n");
-            }
-        } else {
-            console::write_str("rux: PSCI CPU_ON failed (single-CPU)\n");
+            if !crate::percpu::cpu(ap_id).online { break; }
         }
+
+        let total = crate::percpu::online_cpus();
+        console::write_str("rux: SMP: ");
+        let mut nbuf = [0u8; 10];
+        console::write_str(rux_klib::fmt::u32_to_str(&mut nbuf, total as u32));
+        console::write_str(" CPUs online\n");
     }
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────

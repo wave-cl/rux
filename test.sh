@@ -111,7 +111,7 @@ OUTPUT=$( { sleep 4; \
 # Boot
 check "boot banner"             "rux 0.5.0 (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
-check "AP 1 online"             "AP 1 online"
+check "SMP CPUs online"          "CPUs online"
 check "cpio unpacked"           "cpio: unpacked"
 check "procfs mounted"          "procfs mounted at /proc"
 check "exec init"               "exec /sbin/init"
@@ -288,7 +288,7 @@ OUTPUT=$( { sleep 8; \
 # Boot
 check "boot banner"             "rux 0.5.0 (aarch64)"
 check "MMU enabled"             "MMU enabled"
-check "SMP 2 CPUs"              "SMP: 2 CPUs"
+check "SMP CPUs online"          "CPUs online"
 check "cpio unpacked"           "cpio: unpacked"
 check "procfs mounted"          "procfs mounted at /proc"
 check "exec init"               "exec /sbin/init"

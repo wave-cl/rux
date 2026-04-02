@@ -38,6 +38,10 @@ static mut PERCPU: [PerCpu; MAX_CPUS] = {
     [EMPTY; MAX_CPUS]
 };
 
+// AP stacks use KSTACKS[cpu_id] from task_table.rs (shared with tasks).
+// With MAX_PROCS=16, APs 1..N consume N task stack slots.
+// TODO: separate AP_KSTACKS when BSS layout issues are resolved.
+
 /// Boot CPU ID (always 0).
 static mut BSP_CPU_ID: usize = 0;
 

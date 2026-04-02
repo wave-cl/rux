@@ -299,36 +299,44 @@ pub fn x86_64_init(multiboot_info: usize) {
         let size = end as usize - src as usize;
         core::ptr::copy_nonoverlapping(src, 0x8000 as *mut u8, size);
 
-        // Fill trampoline data at 0x8F00
-        let data = 0x8F00 as *mut u64;
+        // Start APs: try CPUs 1..MAX_CPUS, skip if SIPI times out
         let cr3: u64;
         core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
-        *data.add(0) = cr3;  // CR3
-        let ap_stack = crate::task_table::KSTACKS[1].as_ptr() as u64
-            + crate::task_table::KSTACK_SIZE as u64;
-        *data.add(1) = ap_stack;                          // stack_top
-        *data.add(2) = ap_entry as *const () as u64;      // entry_fn
-        *data.add(3) = 1;                                 // cpu_id
+        let data = 0x8F00 as *mut u64;
 
-        // INIT-SIPI-SIPI to AP 1
-        let ap_apic_id = 1u32;
-        super::apic::send_init(ap_apic_id);
-        // Busy-wait ~10ms
-        let t0 = super::pit::ticks();
-        while super::pit::ticks() - t0 < 10 { core::hint::spin_loop(); }
-        // SIPI: vector 0x08 = page 0x8000
-        super::apic::send_sipi(ap_apic_id, 0x08);
-        // Wait up to 100ms for AP online
-        let t0 = super::pit::ticks();
-        while super::pit::ticks() - t0 < 100 {
-            if crate::percpu::cpu(1).online { break; }
-            core::hint::spin_loop();
+        // Try up to 4 APs (QEMU -smp N, max N=4 for reasonable boot time).
+        // Each failed SIPI costs ~50ms timeout. Larger N needs MADT detection.
+        let max_aps = 4usize.min(crate::percpu::MAX_CPUS);
+        for ap_id in 1..max_aps {
+            *data.add(0) = cr3;
+            *data.add(1) = crate::task_table::KSTACKS[ap_id].as_ptr() as u64
+                + crate::task_table::KSTACK_SIZE as u64;
+            *data.add(2) = ap_entry as *const () as u64;
+            *data.add(3) = ap_id as u64;
+
+            super::apic::send_init(ap_id as u32);
+            let t0 = super::pit::ticks();
+            while super::pit::ticks() - t0 < 10 { core::hint::spin_loop(); }
+            super::apic::send_sipi(ap_id as u32, 0x08);
+
+            let t0 = super::pit::ticks();
+            while super::pit::ticks() - t0 < 20 { // 20ms timeout
+                if crate::percpu::cpu(ap_id).online { break; }
+                core::hint::spin_loop();
+            }
+            if !crate::percpu::cpu(ap_id).online { break; } // no more APs
+
+            console::write_str("rux: AP ");
+            let mut idbuf = [0u8; 10];
+            console::write_str(rux_klib::fmt::u32_to_str(&mut idbuf, ap_id as u32));
+            console::write_str(" online\n");
         }
-        if crate::percpu::cpu(1).online {
-            console::write_str("rux: AP 1 online\n");
-        } else {
-            console::write_str("rux: AP 1 not responding (single-CPU)\n");
-        }
+
+        let total = crate::percpu::online_cpus();
+        console::write_str("rux: SMP: ");
+        let mut nbuf = [0u8; 10];
+        console::write_str(rux_klib::fmt::u32_to_str(&mut nbuf, total as u32));
+        console::write_str(" CPUs online\n");
     }
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
