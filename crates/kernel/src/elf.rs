@@ -105,8 +105,10 @@ pub unsafe fn load_elf_from_inode(
         }
     }
 
-    // Write exec args to user stack and enter user mode
+    // Write exec args to user stack (needs stac for SMAP — user pages)
+    crate::uaccess::stac();
     let user_sp = rux_proc::execargs::write_to_stack(stack_top as usize);
+    crate::uaccess::clac();
     {
         use rux_arch::UserModeOps;
         crate::arch::Arch::enter_user_mode(entry_point, user_sp);

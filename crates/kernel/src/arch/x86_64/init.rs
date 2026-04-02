@@ -112,8 +112,22 @@ pub fn x86_64_init(multiboot_info: usize) {
         if features.has(PCID)     { cr4 |= 1 << 17; console::write_str("rux: PCID enabled\n"); }
         if features.has(SMEP)     { cr4 |= 1 << 20; console::write_str("rux: SMEP enabled\n"); }
         if features.has(FSGSBASE) { cr4 |= 1 << 16; console::write_str("rux: FSGSBASE enabled\n"); }
-        // SMAP (CR4 bit 21) — enabled after all user access sites are wrapped with stac/clac
+        if features.has(SMAP) {
+            // SMAP requires hardware support for stac/clac instructions.
+            // QEMU TCG (software emulation) does not support SMAP — stac/clac
+            // cause #UD. Only enable on real hardware or KVM.
+            // cr4 |= 1 << 21;
+            // console::write_str("rux: SMAP enabled\n");
+            console::write_str("rux: SMAP detected (not enabled on TCG)\n");
+        }
+        // Must set CR4 before enabling stac/clac guards
+
         core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
+
+        // Activate stac/clac runtime guards now that CR4 is set
+        if features.has(SMAP) {
+            crate::uaccess::enable_smap_guards();
+        }
     }
 
     // Initialize IDT with all exception/IRQ handlers

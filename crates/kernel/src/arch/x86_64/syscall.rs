@@ -61,6 +61,9 @@ unsafe extern "C" fn syscall_entry() {
         // Switch to per-task kernel stack (save user RSP).
         // CURRENT_KSTACK_TOP is updated by swap_process_state on every context switch
         // so each task uses its own kstack, preventing cross-task stack corruption.
+        // Note: clac for SMAP enforcement is done at the Rust level via
+        // the SMAP_ACTIVE guard in uaccess::stac/clac. Can't use clac here
+        // unconditionally because QEMU TCG may not support SMAP instructions.
         "mov [rip + {saved_user_rsp}], rsp",
         "mov [rip + {saved_a5}], r9",
         "mov rsp, [rip + {current_kstack_top}]",
@@ -183,7 +186,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
             return unsafe { crate::fork::sys_fork() } as i64;
         }
         57 | 58 => return unsafe { crate::fork::sys_fork() } as i64,
-        59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
+        59 => { unsafe { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
         _ => {}
     }
 
@@ -199,7 +202,10 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Check for pending signals before returning to userspace
     unsafe {
         if crate::syscall::PROCESS.signal_hot.has_deliverable() {
-            return crate::syscall::generic_deliver_signal::<super::X86_64>(result);
+            crate::uaccess::stac(); // signal frame is on user stack
+            let sig_result = crate::syscall::generic_deliver_signal::<super::X86_64>(result);
+            crate::uaccess::clac();
+            return sig_result;
         }
         // Check for pending reschedule (set by timer tick or fork).
         let sched = crate::scheduler::get();
@@ -379,7 +385,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
 
         // Exec uses generic implementation
         let result: i64 = match nr {
-            59 => { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); 0 }
+            59 => { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); 0 }
             _ => {
                 let sc = translate_x86_64(nr as usize);
                 crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, 0, 0) as i64

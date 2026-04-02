@@ -31,7 +31,7 @@ pub fn exit(status: i32) -> ! {
                 // clear_child_tid: write 0 to user address (for pthread_join / futex)
                 let ctid = TASK_TABLE[idx].clear_child_tid;
                 if ctid != 0 {
-                    *(ctid as *mut u32) = 0;
+                    crate::uaccess::put_user(ctid, 0u32);
                     super::posix::futex_wake(ctid, 1);
                 }
                 // Thread doesn't become zombie — just free the slot
@@ -126,7 +126,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 }
 
                 if wstatus_ptr != 0 {
-                    *(wstatus_ptr as *mut u32) = (exit_code as u32) << 8;
+                    crate::uaccess::put_user(wstatus_ptr, (exit_code as u32) << 8);
                 }
                 return child_pid;
             }
@@ -146,7 +146,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                     super::PROCESS.child_available = false;
                     if wstatus_ptr != 0 {
                         let status = (super::PROCESS.last_child_exit as u32) << 8;
-                        *(wstatus_ptr as *mut u32) = status;
+                        crate::uaccess::put_user(wstatus_ptr, status as u32);
                     }
                     return 42; // fake child PID for vfork path
                 }
@@ -171,11 +171,13 @@ pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
         let len = super::PROCESS.fs_ctx.cwd_path_len;
         if buf == 0 || size < len + 1 { return -34; } // -ERANGE
+        crate::uaccess::stac();
         let ptr = buf as *mut u8;
         for i in 0..len {
             *ptr.add(i) = super::PROCESS.fs_ctx.cwd_path[i];
         }
         *ptr.add(len) = 0;
+        crate::uaccess::clac();
     }
     buf as isize
 }
@@ -184,6 +186,7 @@ pub fn getcwd(buf: usize, size: usize) -> isize {
 pub fn uname(buf: usize) -> isize {
     if buf == 0 { return -14; }
     unsafe {
+        crate::uaccess::stac();
         let ptr = buf as *mut u8;
         for i in 0..325 { *ptr.add(i) = 0; }
         // sysname
@@ -216,6 +219,7 @@ pub fn uname(buf: usize) -> isize {
                 *ptr.add(260 + i) = b;
             }
         }
+        crate::uaccess::clac();
     }
     0
 }
@@ -223,8 +227,8 @@ pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
     if tp == 0 { return -14; }
     let ticks = Arch::ticks();
     unsafe {
-        *(tp as *mut u64) = ticks / 1000;
-        *((tp + 8) as *mut u64) = (ticks % 1000) * 1_000_000;
+        crate::uaccess::put_user(tp, ticks / 1000);
+        crate::uaccess::put_user(tp + 8, (ticks % 1000) * 1_000_000);
     }
     0
 }
@@ -233,8 +237,8 @@ pub fn nanosleep(req_ptr: usize) -> isize {
     if req_ptr == 0 { return -14; }
     unsafe {
         use rux_arch::HaltOps;
-        let tv_sec = *(req_ptr as *const u64);
-        let tv_nsec = *((req_ptr + 8) as *const u64);
+        let tv_sec: u64 = crate::uaccess::get_user(req_ptr);
+        let tv_nsec: u64 = crate::uaccess::get_user(req_ptr + 8);
         let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
         // Ensure timer is running for accurate sleep
         use rux_arch::TimerControl;
@@ -255,8 +259,8 @@ pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: us
     if old_limit != 0 {
         unsafe {
             let rlim_infinity: u64 = !0;
-            *(old_limit as *mut u64) = rlim_infinity; // rlim_cur
-            *((old_limit + 8) as *mut u64) = rlim_infinity; // rlim_max
+            crate::uaccess::put_user(old_limit, rlim_infinity);
+            crate::uaccess::put_user(old_limit + 8, rlim_infinity);
         }
     }
     0

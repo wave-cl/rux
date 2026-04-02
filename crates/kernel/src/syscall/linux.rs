@@ -11,9 +11,8 @@ pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
     match crate::pipe::create() {
         Ok((_pipe_id, read_fd, write_fd)) => {
             unsafe {
-                let p = pipefd_ptr as *mut i32;
-                *p = read_fd as i32;
-                *p.add(1) = write_fd as i32;
+                crate::uaccess::put_user(pipefd_ptr, read_fd as i32);
+                crate::uaccess::put_user(pipefd_ptr + 4, write_fd as i32);
             }
             0
         }
