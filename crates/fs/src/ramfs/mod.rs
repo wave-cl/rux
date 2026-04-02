@@ -369,8 +369,8 @@ impl RamFs {
         };
         if cur != NO_PAGE { return Ok(cur); }
         let addr = self.alloc_page()?;
-        let page = self.page_mut(addr);
-        for byte in page.iter_mut() { *byte = 0xFF; }
+        // Zero-based sentinel: indirect_entry() treats 0 as NO_PAGE.
+        // alloc_page() already zeroes the page, so entries start as NO_PAGE.
         if which == 0 {
             self.inodes[ino_idx].indirect = addr;
         } else {

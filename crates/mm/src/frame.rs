@@ -122,6 +122,9 @@ pub struct BuddyAllocator {
     pub total_frames: u32,
     /// Number of free 4K frames (sum across all levels + caches).
     pub free_frames: u32,
+    /// Debug: tracks which frames are currently allocated. Bit set = allocated.
+    /// Catches double-alloc and double-free bugs.
+    alloc_track: [u64; MAX_FRAMES / 64],
 }
 
 impl BuddyAllocator {
@@ -140,6 +143,8 @@ impl BuddyAllocator {
                 *word = 0;
             }
         }
+        // Clear allocation tracking bitmap
+        for word in self.alloc_track.iter_mut() { *word = 0; }
 
         // Mark all frames as free at order 0
         for i in 0..total_frames as usize {
@@ -158,19 +163,30 @@ impl BuddyAllocator {
         if order > MAX_BUDDY_ORDER {
             return Err(MemoryError::InvalidSize);
         }
-        if order == 0 {
+        let addr = if order == 0 {
             if self.pcp.is_empty() { self.pcp_refill(); }
             if !self.pcp.is_empty() {
                 self.free_frames -= 1;
-                return Ok(self.pcp.pop());
+                self.pcp.pop()
+            } else {
+                return self.buddy_alloc(order);
             }
-        }
-        self.buddy_alloc(order)
+        } else {
+            return self.buddy_alloc(order);
+        };
+
+        // Track allocation: assert no double-alloc
+        self.track_alloc(addr, order);
+
+        Ok(addr)
     }
 
     /// Deallocate a block of 2^order contiguous pages.
     /// Order-0 (4K) goes through PCP cache, draining when overfull.
     pub fn dealloc_order(&mut self, addr: PhysAddr, order: u8) {
+        // Track deallocation: assert no double-free
+        self.track_dealloc(addr, order);
+
         self.free_frames += 1u32 << order;
         if order == 0 {
             self.pcp.push(addr);
@@ -190,6 +206,42 @@ impl BuddyAllocator {
     #[inline(always)]
     pub fn free_memory(&self) -> usize {
         self.free_frames as usize * 4096
+    }
+
+    // ── Allocation tracking (debug) ──────────────────────────────────────
+
+    /// Mark frame(s) as allocated. Panics on double-alloc.
+    fn track_alloc(&mut self, addr: PhysAddr, order: u8) {
+        let base_frame = (addr.as_usize() - self.base.as_usize()) / 4096;
+        let count = 1usize << order;
+        for i in 0..count {
+            let f = base_frame + i;
+            let word = f / 64;
+            let bit = f % 64;
+            if word < self.alloc_track.len() {
+                if self.alloc_track[word] & (1u64 << bit) != 0 {
+                    panic!("DOUBLE ALLOC: frame {} (PA {:#x})", f, addr.as_usize() + i * 4096);
+                }
+                self.alloc_track[word] |= 1u64 << bit;
+            }
+        }
+    }
+
+    /// Mark frame(s) as free. Panics on double-free.
+    fn track_dealloc(&mut self, addr: PhysAddr, order: u8) {
+        let base_frame = (addr.as_usize() - self.base.as_usize()) / 4096;
+        let count = 1usize << order;
+        for i in 0..count {
+            let f = base_frame + i;
+            let word = f / 64;
+            let bit = f % 64;
+            if word < self.alloc_track.len() {
+                if self.alloc_track[word] & (1u64 << bit) == 0 {
+                    panic!("DOUBLE FREE: frame {} (PA {:#x})", f, addr.as_usize() + i * 4096);
+                }
+                self.alloc_track[word] &= !(1u64 << bit);
+            }
+        }
     }
 
     // ── Page cache (pcplist) operations ─────────────────────────────────
@@ -309,6 +361,7 @@ impl BuddyAllocator {
                 let frame_idx = current_idx << order;
                 let addr = PhysAddr::new(self.base.as_usize() + frame_idx * 4096);
                 self.free_frames -= 1u32 << order;
+                self.track_alloc(addr, order);
                 return Ok(addr);
             }
         }
