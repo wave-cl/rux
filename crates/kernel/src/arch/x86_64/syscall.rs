@@ -178,8 +178,6 @@ extern "C" {
 /// Called from the assembly entry point with syscall number and arguments.
 #[no_mangle]
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
-    use crate::syscall::Syscall;
-
     // Process creation syscalls (handled before generic dispatch)
     match nr {
         // 56=clone(flags, stack, ptid, ctid, tls), 57=fork, 58=vfork

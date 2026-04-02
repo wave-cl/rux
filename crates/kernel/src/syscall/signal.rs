@@ -234,15 +234,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                 // Force-kill the target: mark zombie, wake parent
                 TASK_TABLE[target_idx].state = TaskState::Zombie;
                 TASK_TABLE[target_idx].exit_code = 128 + 9;
-                let ppid = TASK_TABLE[target_idx].ppid;
-                if let Some(pi) = find_task_by_pid(ppid) {
-                    TASK_TABLE[pi].last_child_exit = 128 + 9;
-                    TASK_TABLE[pi].child_available = true;
-                    if TASK_TABLE[pi].state == TaskState::WaitingForChild {
-                        TASK_TABLE[pi].state = TaskState::Ready;
-                        crate::scheduler::get().wake_task(pi);
-                    }
-                }
+                notify_parent_child_exit(TASK_TABLE[target_idx].ppid, 128 + 9);
                 let sched = crate::scheduler::get();
                 sched.tasks[target_idx].entity.state = rux_sched::TaskState::Dead;
                 sched.tasks[target_idx].active = false;

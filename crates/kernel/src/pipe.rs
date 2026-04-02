@@ -19,7 +19,6 @@ pub fn create() -> Result<(u8, isize, isize), isize> {
 /// pipe read (wakes writers), write (wakes readers), or close (EOF/EPIPE).
 pub unsafe fn wake_pipe_waiters(pipe_id: u8) {
     use crate::task_table::*;
-    use rux_sched::SchedClassOps;
 
     let (count, waiters) = rux_ipc::pipe::get_waiters(pipe_id);
     if count == 0 { return; }

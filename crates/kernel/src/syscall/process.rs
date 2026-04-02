@@ -39,19 +39,7 @@ pub fn exit(status: i32) -> ! {
                 TASK_TABLE[idx].state = TaskState::Free;
             } else {
                 TASK_TABLE[idx].state = TaskState::Zombie;
-
-                // Find parent, send SIGCHLD, wake if blocked in waitpid.
-                let ppid = TASK_TABLE[idx].ppid;
-                if let Some(pi) = find_task_by_pid(ppid) {
-                    let t = &mut TASK_TABLE[pi];
-                    t.last_child_exit = status;
-                    t.child_available = true;
-                    t.signal_hot.pending = t.signal_hot.pending.add(17); // SIGCHLD
-                    if t.state == TaskState::WaitingForChild {
-                        t.state = TaskState::Ready;
-                        crate::scheduler::get().wake_task(pi);
-                    }
-                }
+                notify_parent_child_exit(TASK_TABLE[idx].ppid, status);
             }
 
             // Mark entity Dead so schedule() doesn't re-enqueue us.

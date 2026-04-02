@@ -4,7 +4,7 @@
 /// This module handles the kernel-specific parts: page table construction,
 /// VFS reader adapter, and the transition to user mode.
 
-pub use rux_elf::{parse_elf, ElfInfo, LoadSegment, PF_R, PF_W, PF_X, load_segments};
+pub use rux_elf::parse_elf;
 
 
 /// VFS-backed ELF reader — adapts a VFS inode to the `ElfReader` trait.
@@ -51,9 +51,7 @@ pub unsafe fn load_elf_from_inode(
     ino: u64,
     alloc: &mut dyn rux_mm::FrameAllocator,
 ) -> ! {
-    use rux_klib::VirtAddr;
     use rux_fs::FileSystem;
-
     let mut talloc = crate::pgtrack::TrackingAllocator::new(alloc);
     let alloc: &mut dyn rux_mm::FrameAllocator = &mut talloc;
 
@@ -129,7 +127,6 @@ unsafe fn load_dynamic_interp(
     main_hdr: &[u8],
 ) -> usize {
     use rux_arch::ConsoleOps;
-    use rux_fs::FileSystem;
 
     // 1. Read interpreter path from PT_INTERP
     let interp_off = main_elf.interp_offset as usize;

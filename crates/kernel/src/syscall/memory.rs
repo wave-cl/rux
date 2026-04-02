@@ -101,7 +101,6 @@ pub fn futex(uaddr: usize, op: usize, val: usize) -> isize {
 fn futex_wait(uaddr: usize, expected: u32) -> isize {
     unsafe {
         use crate::task_table::*;
-        use rux_sched::SchedClassOps;
 
         // Atomic check: if value changed since caller checked, return EAGAIN
         if uaddr == 0 || *(uaddr as *const u32) != expected {
@@ -125,7 +124,6 @@ fn futex_wait(uaddr: usize, expected: u32) -> isize {
 pub fn futex_wake(uaddr: usize, max_wake: usize) -> isize {
     unsafe {
         use crate::task_table::*;
-        use rux_sched::SchedClassOps;
 
         let sched = crate::scheduler::get();
         let mut woken = 0usize;

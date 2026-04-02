@@ -121,7 +121,6 @@ pub fn sysinfo(info_ptr: usize) -> isize {
         let uptime = ticks / 1000; // seconds since boot
 
         let total_frames = {
-            use rux_mm::FrameAllocator;
             16384usize // hardcoded, matches init
         };
         let free_frames = {

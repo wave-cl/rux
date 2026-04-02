@@ -1,6 +1,6 @@
 /// x86_64 boot initialization: hardware setup and shell launch.
 
-use super::{console, exit};
+use super::console;
 use crate::{scheduler, pgtrack};
 
 /// AP (Application Processor) entry point. Called by the AP trampoline

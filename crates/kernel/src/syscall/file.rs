@@ -309,7 +309,6 @@ unsafe fn can_pipe_block() -> bool {
 /// Block the current task until a pipe has activity.
 unsafe fn pipe_block(pipe_id: u8) {
     use crate::task_table::*;
-    use rux_sched::SchedClassOps;
     let idx = current_task_idx();
     rux_ipc::pipe::register_waiter(pipe_id, idx as u8);
     TASK_TABLE[idx].state = TaskState::WaitingForPipe;

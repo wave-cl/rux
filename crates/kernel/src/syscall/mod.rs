@@ -308,7 +308,6 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(_path_ptr: usize, _argv_pt
 #[cfg(not(feature = "native"))]
 pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize) -> ! {
     use rux_arch::ConsoleOps;
-    use rux_fs::FileSystem;
 
     let fs = crate::kstate::fs();
     let alloc = crate::kstate::alloc();

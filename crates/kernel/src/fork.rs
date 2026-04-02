@@ -1,12 +1,23 @@
-//! fork() syscall implementation.
+//! fork() and clone() syscall implementations.
 //!
-//! Creates a child process with a full copy of the parent's address space,
-//! file descriptors, and signal state. The child returns 0 from fork();
-//! the parent returns the child's PID.
+//! Creates child processes/threads. fork() creates a full COW copy;
+//! clone() shares the address space (threads). Common setup is in
+//! `init_child_slot()` and `enqueue_child()`.
 
 use crate::task_table::*;
 use rux_fs::fdtable::{OpenFile, MAX_FDS};
-use rux_klib::{PhysAddr, VirtAddr};
+use rux_klib::PhysAddr;
+
+// ── Clone flags ──────────────────────────────────────────────────────
+
+const CLONE_VM: usize = 0x100;
+const CLONE_FS: usize = 0x200;
+const CLONE_FILES: usize = 0x400;
+const CLONE_SIGHAND: usize = 0x800;
+const CLONE_THREAD: usize = 0x10000;
+const CLONE_CHILD_CLEARTID: usize = 0x200000;
+
+// ── Shared helpers ───────────────────────────────────────────────────
 
 /// Copy a parent's FD table to a child, bumping pipe reference counts.
 #[inline]
@@ -19,25 +30,19 @@ unsafe fn copy_fds_with_pipe_refs(src: &[OpenFile; MAX_FDS], dst: &mut [OpenFile
     }
 }
 
-/// fork() syscall entry point.
-///
-/// # Safety
-/// Manipulates page tables, kernel stacks, and scheduler state.
-pub unsafe fn sys_fork() -> isize {
-    // 1. Allocate child task slot
-    let child_idx = match alloc_task_slot() {
-        Some(idx) => idx,
-        None => return -11, // -EAGAIN (no free slots)
-    };
-    let child_pid = alloc_pid();
-    let parent_idx = current_task_idx();
-
-    // 2. Sync current globals to parent slot (may be stale)
-    sync_globals_to_slot(parent_idx);
-
-    // 3. Copy parent state to child
+/// Initialize common child task fields shared by fork() and clone().
+#[inline]
+unsafe fn init_child_slot(
+    parent_idx: usize,
+    child_idx: usize,
+    child_pid: u32,
+    inherit_signals: bool,
+    clone_flags: u32,
+    clear_child_tid: usize,
+) {
     let parent = &TASK_TABLE[parent_idx];
     let child = &mut TASK_TABLE[child_idx];
+
     child.active = true;
     child.pid = child_pid;
     child.ppid = parent.pid;
@@ -47,65 +52,88 @@ pub unsafe fn sys_fork() -> isize {
     child.mmap_base = parent.mmap_base;
     child.fs_ctx = parent.fs_ctx;
 
-    child.signal_hot = parent.signal_hot;
+    // fork inherits parent's pending signals; clone starts fresh
+    child.signal_hot = if inherit_signals {
+        parent.signal_hot
+    } else {
+        rux_proc::signal::SignalHot::new()
+    };
+    // Signal handlers (cold) and restorer table always inherited
     core::ptr::copy_nonoverlapping(
         signal_cold_mut(parent_idx) as *const _ as *const u8,
         signal_cold_mut(child_idx) as *mut _ as *mut u8,
         core::mem::size_of::<rux_proc::signal::SignalCold>(),
     );
     child.signal_restorer = parent.signal_restorer;
+
     child.last_child_exit = 0;
     child.child_available = false;
     child.exit_code = 0;
     child.wake_at = 0;
-    child.tgid = child_pid; // new process = new thread group
-    child.clone_flags = 0;
+    child.clone_flags = clone_flags;
+    child.clear_child_tid = clear_child_tid;
 
-    // 4. Copy FD table + bump pipe refcounts
-    copy_fds_with_pipe_refs(&parent.fds, &mut child.fds);
-
-    // 5. Share address space with COW (mark all user pages read-only + COW bit)
-    let alloc = crate::kstate::alloc();
-    child.pt_root = cow_fork_address_space(parent.pt_root, alloc);
-
-    // 6. Set up child kernel stack + ASID
-    child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
+    // Copy parent's TLS and user SP (caller may override for clone)
     child.saved_user_sp = parent.saved_user_sp;
     child.tls = parent.tls;
-    child.asid = (child_idx as u16) + 1; // ASID 0 = kernel, 1..N = processes
 
+    // Set up child kernel stack
+    child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
     {
         use rux_arch::ForkOps;
         child.saved_ksp = crate::arch::Arch::setup_child_kstack(child.kstack_top);
     }
+}
 
-    // 7. Enqueue child in scheduler
+/// Enqueue a newly created child task in the CFS scheduler.
+#[inline]
+unsafe fn enqueue_child(child_idx: usize) {
     use rux_sched::SchedClassOps;
     let sched = crate::scheduler::get();
     let task = &mut sched.tasks[child_idx];
     task.active = true;
-    task.saved_sp = TASK_TABLE[child_idx].saved_ksp; // context_switch reads this
+    task.saved_sp = TASK_TABLE[child_idx].saved_ksp;
     task.entity = rux_sched::entity::SchedEntity::new(child_idx as u64);
     task.entity.state = rux_sched::TaskState::Ready;
     task.entity.nice = 0;
     sched.cfs.set_clock(0, sched.clock_ns);
     sched.cfs.enqueue(0, &mut task.entity, rux_sched::fair::constants::WF_FORK);
+}
 
-    // 8. Mark parent as having a child available (for wait)
+// ── fork() ───────────────────────────────────────────────────────────
+
+/// fork() syscall entry point.
+///
+/// # Safety
+/// Manipulates page tables, kernel stacks, and scheduler state.
+pub unsafe fn sys_fork() -> isize {
+    let child_idx = match alloc_task_slot() {
+        Some(idx) => idx,
+        None => return -11, // -EAGAIN
+    };
+    let child_pid = alloc_pid();
+    let parent_idx = current_task_idx();
+
+    sync_globals_to_slot(parent_idx);
+    init_child_slot(parent_idx, child_idx, child_pid, true, 0, 0);
+
+    // Copy FDs + COW fork address space
+    copy_fds_with_pipe_refs(&TASK_TABLE[parent_idx].fds, &mut TASK_TABLE[child_idx].fds);
+    let alloc = crate::kstate::alloc();
+    TASK_TABLE[child_idx].pt_root = cow_fork_address_space(TASK_TABLE[parent_idx].pt_root, alloc);
+    TASK_TABLE[child_idx].asid = (child_idx as u16) + 1;
+    TASK_TABLE[child_idx].tgid = child_pid;
+
+    enqueue_child(child_idx);
+
+    // Notify parent
     TASK_TABLE[parent_idx].child_available = true;
     crate::syscall::PROCESS.child_available = true;
 
     child_pid as isize
 }
 
-// ── Clone flags ──────────────────────────────────────────────────────
-
-const CLONE_VM: usize = 0x100;
-const CLONE_FS: usize = 0x200;
-const CLONE_FILES: usize = 0x400;
-const CLONE_SIGHAND: usize = 0x800;
-const CLONE_THREAD: usize = 0x10000;
-const CLONE_CHILD_CLEARTID: usize = 0x200000;
+// ── clone() ──────────────────────────────────────────────────────────
 
 /// clone() syscall for threads (CLONE_VM set).
 ///
@@ -124,66 +152,29 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
     let parent_idx = current_task_idx();
 
     sync_globals_to_slot(parent_idx);
-
-    let parent = &TASK_TABLE[parent_idx];
-    let child = &mut TASK_TABLE[child_idx];
-
-    child.active = true;
-    child.pid = child_pid;
-    child.ppid = parent.pid;
-    child.pgid = parent.pgid;
-    child.state = TaskState::Ready;
-    child.program_brk = parent.program_brk;
-    child.mmap_base = parent.mmap_base;
-    child.fs_ctx = parent.fs_ctx;
-
-    child.signal_hot = rux_proc::signal::SignalHot::new(); // threads start with no pending signals
-    core::ptr::copy_nonoverlapping(
-        signal_cold_mut(parent_idx) as *const _ as *const u8,
-        signal_cold_mut(child_idx) as *mut _ as *mut u8,
-        core::mem::size_of::<rux_proc::signal::SignalCold>(),
+    init_child_slot(
+        parent_idx, child_idx, child_pid, false,
+        flags as u32,
+        if flags & CLONE_CHILD_CLEARTID != 0 { child_tid_ptr } else { 0 },
     );
-    child.signal_restorer = parent.signal_restorer;
-    child.last_child_exit = 0;
-    child.child_available = false;
-    child.exit_code = 0;
-    child.wake_at = 0;
-    child.clone_flags = flags as u32;
-    child.clear_child_tid = if flags & CLONE_CHILD_CLEARTID != 0 { child_tid_ptr } else { 0 };
 
-    // CLONE_THREAD: same thread group (getpid returns parent's tgid)
-    child.tgid = if flags & CLONE_THREAD != 0 { parent.tgid } else { child_pid };
+    // CLONE_THREAD: same thread group
+    let parent = &TASK_TABLE[parent_idx];
+    TASK_TABLE[child_idx].tgid = if flags & CLONE_THREAD != 0 { parent.tgid } else { child_pid };
 
     // CLONE_VM: share address space (same page table, no COW)
-    child.pt_root = parent.pt_root;
-    child.asid = parent.asid; // same ASID since same address space
+    TASK_TABLE[child_idx].pt_root = parent.pt_root;
+    TASK_TABLE[child_idx].asid = parent.asid;
 
-    // CLONE_FILES: share FD table (copy parent's FDs to child slot)
-    // In the pointer-swap model, each task has its own fds array.
-    // For threads, we copy the parent's FDs so both start with the same view.
-    copy_fds_with_pipe_refs(&parent.fds, &mut child.fds);
+    // Copy FDs (both fork and clone copy — threads start with same view)
+    copy_fds_with_pipe_refs(&parent.fds, &mut TASK_TABLE[child_idx].fds);
 
-    // Set up child kernel stack with user stack from clone argument
-    child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
-    child.saved_user_sp = if child_stack != 0 { child_stack } else { parent.saved_user_sp };
-    child.tls = parent.tls;
-
-    {
-        use rux_arch::ForkOps;
-        child.saved_ksp = crate::arch::Arch::setup_child_kstack(child.kstack_top);
+    // Override user stack if provided
+    if child_stack != 0 {
+        TASK_TABLE[child_idx].saved_user_sp = child_stack;
     }
 
-    // Enqueue child
-    use rux_sched::SchedClassOps;
-    let sched = crate::scheduler::get();
-    let task = &mut sched.tasks[child_idx];
-    task.active = true;
-    task.saved_sp = TASK_TABLE[child_idx].saved_ksp;
-    task.entity = rux_sched::entity::SchedEntity::new(child_idx as u64);
-    task.entity.state = rux_sched::TaskState::Ready;
-    task.entity.nice = 0;
-    sched.cfs.set_clock(0, sched.clock_ns);
-    sched.cfs.enqueue(0, &mut task.entity, rux_sched::fair::constants::WF_FORK);
+    enqueue_child(child_idx);
 
     // Write child tid to user space if requested
     if child_tid_ptr != 0 {
@@ -192,6 +183,8 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
 
     child_pid as isize
 }
+
+// ── Internal helpers ─────────────────────────────────────────────────
 
 /// Sync current PROCESS/FD_TABLE globals into the given task slot.
 #[inline]
@@ -204,16 +197,13 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.signal_restorer = crate::syscall::PROCESS.signal_restorer;
     slot.last_child_exit = crate::syscall::PROCESS.last_child_exit;
     slot.child_available = crate::syscall::PROCESS.child_available;
-    // FD_TABLE is a pointer into slot.fds — no copy needed.
 
-    {
-        use rux_arch::ForkOps;
-        crate::arch::Arch::snapshot_hw_state(
-            &mut slot.saved_user_sp,
-            &mut slot.tls,
-            &mut slot.pt_root,
-        );
-    }
+    use rux_arch::ForkOps;
+    crate::arch::Arch::snapshot_hw_state(
+        &mut slot.saved_user_sp,
+        &mut slot.tls,
+        &mut slot.pt_root,
+    );
 }
 
 /// Fork the parent's user address space using copy-on-write.
@@ -226,8 +216,6 @@ unsafe fn sync_globals_to_slot(idx: usize) {
 /// Each shared frame gets its refcount incremented twice (once per sharer).
 /// Returns the child's new page table root physical address.
 unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::FrameAllocator) -> u64 {
-    use rux_mm::FrameAllocator;
-
     let parent_pt = crate::arch::PageTable::from_root(PhysAddr::new(parent_pt_root as usize));
 
     // Create child page table with kernel identity map
@@ -237,32 +225,22 @@ unsafe fn cow_fork_address_space(parent_pt_root: u64, alloc: &mut dyn rux_mm::Fr
         crate::arch::Arch::map_kernel_pages(&mut child_pt, alloc);
     }
 
-    // Initial mapping for shared pages: user-readable + executable, no write.
     let user_rx = rux_mm::MappingFlags::USER
         .or(rux_mm::MappingFlags::READ)
         .or(rux_mm::MappingFlags::EXECUTE);
-
     let cow = crate::arch::PageTable::cow_bit();
-
-    // Precompute raw PTE flags for child COW pages (user, read-only, COW bit set).
     let cow_child_flags = crate::arch::PageTable::pte_flags(user_rx) | cow;
 
-    // Walk parent's user pages with mutable PTE access. For each page:
-    // 1. Mark parent COW inline (no re-walk)
-    // 2. Map child with pre-computed COW flags in a single walk (map_4k_raw)
+    // Walk parent's user pages: mark parent COW inline + map child in one walk
     parent_pt.walk_user_pages_mut(|va, pa, parent_pte| {
         use rux_arch::pte::PageTableEntryOps;
         crate::arch::ArchPte::set_writable(parent_pte, false);
         parent_pte.0 |= cow;
-
         let _ = child_pt.map_4k_raw(va, pa, cow_child_flags, alloc);
-
         crate::cow::inc_ref(pa);
         crate::cow::inc_ref(pa);
     });
 
-    // Single full TLB flush after all parent pages are marked COW.
     crate::arch::PageTable::flush_tlb_all();
-
     child_pt.root_phys().as_usize() as u64
 }

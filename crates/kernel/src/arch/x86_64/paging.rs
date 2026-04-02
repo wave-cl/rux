@@ -4,7 +4,7 @@
 /// TLB flush (invlpg), and page table activation (CR3 write).
 /// The generic 4-level walker lives in `rux_mm::pt4`.
 
-use rux_klib::{PhysAddr, VirtAddr};
+use rux_klib::VirtAddr;
 use rux_arch::x86_64::pte::{self as pte, X86_64Pte};
 use rux_mm::{ArchPaging, MappingFlags};
 

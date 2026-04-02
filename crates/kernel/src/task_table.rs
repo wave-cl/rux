@@ -193,6 +193,22 @@ pub fn find_task_by_pid(pid: u32) -> Option<usize> {
     }
 }
 
+/// Notify a parent that a child has exited or been killed.
+/// Sends SIGCHLD, sets child_available, wakes parent if blocked in waitpid.
+#[inline]
+pub unsafe fn notify_parent_child_exit(child_ppid: u32, exit_status: i32) {
+    if let Some(pi) = find_task_by_pid(child_ppid) {
+        let t = &mut TASK_TABLE[pi];
+        t.last_child_exit = exit_status;
+        t.child_available = true;
+        t.signal_hot.pending = t.signal_hot.pending.add(17); // SIGCHLD
+        if t.state == TaskState::WaitingForChild {
+            t.state = TaskState::Ready;
+            crate::scheduler::get().wake_task(pi);
+        }
+    }
+}
+
 /// Initialize task slot 0 as PID 1 (init).
 /// Called from boot.rs after kstate::init().
 pub unsafe fn init_pid1() {

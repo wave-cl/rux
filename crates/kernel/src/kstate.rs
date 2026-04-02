@@ -8,7 +8,7 @@
 
 use rux_fs::vfs::Vfs;
 use rux_mm::frame::BuddyAllocator;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
 pub struct KernelState {
     pub fs: *mut Vfs,

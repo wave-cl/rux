@@ -3,7 +3,7 @@
 /// The scheduling logic lives in `rux_sched::kernel`. This module provides
 /// the global static instance and the arch-specific context function setup.
 
-pub use rux_sched::kernel::{Scheduler, KernelTask, ContextFns, MAX_TASKS};
+pub use rux_sched::kernel::{Scheduler, ContextFns};
 
 /// Global scheduler instance.
 /// Accessed from the timer ISR and from kernel_main.
