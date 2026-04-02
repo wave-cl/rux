@@ -233,6 +233,18 @@ pub fn x86_64_init(multiboot_info: usize) {
         console::write_str(" KiB)\n");
     }
 
+    // ── Layout: compute addresses for BuddyAllocator + RamFs ─────────────
+    // These must be above the initrd to avoid overwriting cpio data.
+    let initrd_info = unsafe { super::multiboot::get_initrd(multiboot_info) };
+    let initrd_end = match initrd_info {
+        Some((start, size)) => ((start + size) + 0xFFF) & !0xFFF,
+        None => 0x200000,
+    };
+    let alloc_addr = initrd_end.max(0x300000);
+    let alloc_size_bytes = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
+    let ramfs_addr = (alloc_addr + alloc_size_bytes + 0xFFF) & !0xFFF;
+    let ramfs_end = (ramfs_addr + core::mem::size_of::<rux_fs::ramfs::RamFs>() + 0xFFF) & !0xFFF;
+
     // ── Init frame allocator from the largest region ────────────────────
     let mut best = 0;
     for i in 1..memmap.count {
@@ -242,8 +254,11 @@ pub fn x86_64_init(multiboot_info: usize) {
     }
     if memmap.count > 0 {
         let region = &memmap.regions[best];
-        let alloc_base = if region.base.as_usize() < 0x200000 {
-            0x780000usize
+        // Frame allocation range must be above the kernel BSS, initrd,
+        // BuddyAllocator struct, and RamFs struct.
+        let min_alloc_base = 0x780000usize.max(ramfs_end);
+        let alloc_base = if region.base.as_usize() < min_alloc_base {
+            min_alloc_base
         } else {
             region.base.as_usize()
         };
@@ -259,14 +274,14 @@ pub fn x86_64_init(multiboot_info: usize) {
 
         unsafe {
             console::write_str("rux: zeroing allocator...\n");
-            let alloc_ptr = 0x300000 as *mut u64;
-            let alloc_qwords = core::mem::size_of::<rux_mm::frame::BuddyAllocator>() / 8;
+            let alloc_ptr = alloc_addr as *mut u64;
+            let alloc_qwords = alloc_size_bytes / 8;
             for i in 0..alloc_qwords {
                 core::ptr::write_volatile(alloc_ptr.add(i), 0u64);
             }
             console::write_str("rux: zeroing done\n");
 
-            let alloc = &mut *(0x300000 as *mut rux_mm::frame::BuddyAllocator);
+            let alloc = &mut *(alloc_addr as *mut rux_mm::frame::BuddyAllocator);
             console::write_str("rux: calling init...\n");
             alloc.init(rux_klib::PhysAddr::new(alloc_base), frames);
             console::write_str("rux: init done\n");
@@ -389,19 +404,21 @@ pub fn x86_64_init(multiboot_info: usize) {
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
     unsafe {
+        // Use computed addresses (above initrd) for allocator and ramfs
         static mut PROCFS: rux_fs::procfs::ProcFs = rux_fs::procfs::ProcFs::new(
             || super::pit::ticks(),
             || 16384,
             || unsafe {
+                // Note: we can't capture alloc_addr in a static closure,
+                // so we read the allocator from the kstate module after init.
                 use rux_mm::FrameAllocator;
-                (*(0x300000 as *const rux_mm::frame::BuddyAllocator))
-                    .available_frames(rux_mm::PageSize::FourK)
+                crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK)
             },
         );
         crate::boot::boot(crate::boot::BootParams {
-            alloc_ptr: 0x300000 as *mut rux_mm::frame::BuddyAllocator,
-            ramfs_ptr: 0x310000 as *mut rux_fs::ramfs::RamFs,
-            initrd: super::multiboot::get_initrd(multiboot_info),
+            alloc_ptr: alloc_addr as *mut rux_mm::frame::BuddyAllocator,
+            ramfs_ptr: ramfs_addr as *mut rux_fs::ramfs::RamFs,
+            initrd: initrd_info,
             procfs: &mut *(&raw mut PROCFS),
             log: console::write_str,
         });
