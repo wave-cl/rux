@@ -146,7 +146,7 @@ pub fn futex_wake(uaddr: usize, max_wake: usize) -> isize {
 pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
     if addr & 0xFFF != 0 { return crate::errno::EINVAL; }
     unsafe {
-        let mut upt = super::current_user_page_table();
+        let upt = super::current_user_page_table();
         let aligned_len = (len + 0xFFF) & !0xFFF;
 
         let mut flags = rux_mm::MappingFlags::USER.or(rux_mm::MappingFlags::READ);

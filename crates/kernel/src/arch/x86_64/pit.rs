@@ -61,6 +61,7 @@ pub unsafe fn start_timer() {
     outb(0x21, mask & !0x01);
 }
 
+#[allow(dead_code)]
 pub fn now_ns() -> u64 {
     let t = ticks();
     let div = DIVISOR.load(Ordering::Relaxed) as u64;

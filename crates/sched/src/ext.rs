@@ -6,7 +6,9 @@ use crate::cpu::CpuId;
 pub type DsqId = u64;
 
 /// Well-known DSQ IDs.
+#[allow(dead_code)]
 pub const DSQ_LOCAL: DsqId = u64::MAX;
+#[allow(dead_code)]
 pub const DSQ_GLOBAL: DsqId = u64::MAX - 1;
 
 /// Flags for dispatch operations.

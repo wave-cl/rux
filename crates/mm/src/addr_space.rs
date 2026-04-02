@@ -1,5 +1,5 @@
 use rux_klib::{PhysAddr, VirtAddr};
-use crate::{MappingFlags, MemoryError};
+use crate::MappingFlags;
 use crate::vma::VmaList;
 
 /// Flags for mmap.

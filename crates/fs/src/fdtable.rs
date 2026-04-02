@@ -61,7 +61,7 @@ pub unsafe fn set_active_fds(fds: *mut [OpenFile; MAX_FDS]) {
 
 /// Point FD_TABLE at boot-time storage (used before task table exists).
 pub unsafe fn init_boot_fds() {
-    FD_TABLE = &mut FD_TABLE_STORAGE as *mut [OpenFile; MAX_FDS];
+    FD_TABLE = &raw mut FD_TABLE_STORAGE as *mut [OpenFile; MAX_FDS];
 }
 
 /// Get the inode for a file descriptor (for getdents to read directory).
@@ -335,7 +335,7 @@ pub fn create_pipe(
     let write_fd = match alloc_pipe_fd(pipe_id, true) {
         Ok(fd) => fd,
         Err(e) => {
-            unsafe { sys_close(read_fd as usize, Some(pipes)) };
+            sys_close(read_fd as usize, Some(pipes));
             (pipes.close)(pipe_id, false);
             (pipes.close)(pipe_id, true);
             return Err(e);

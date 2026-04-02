@@ -36,7 +36,7 @@ static mut PIPES: [PipeBuf; MAX_PIPES] = {
 /// Allocate a pipe slot. Returns pipe_id or -EMFILE.
 pub fn alloc() -> Result<u8, isize> {
     unsafe {
-        let pipe_id = PIPES.iter().position(|p| !p.active)
+        let pipe_id = (&raw const PIPES).as_ref().unwrap().iter().position(|p| !p.active)
             .ok_or(-24isize)? as u8;
         PIPES[pipe_id as usize] = PipeBuf {
             buf: [0; PIPE_BUF_SIZE],
@@ -164,7 +164,7 @@ pub fn clear_all_waiters(pipe_id: u8) {
 /// Reset all pipes (called on exec).
 pub fn reset() {
     unsafe {
-        for p in PIPES.iter_mut() {
+        for p in (&raw mut PIPES).as_mut().unwrap().iter_mut() {
             *p = PipeBuf {
                 buf: [0; PIPE_BUF_SIZE],
                 read_pos: 0, write_pos: 0, count: 0,

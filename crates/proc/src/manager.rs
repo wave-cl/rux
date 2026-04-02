@@ -1,11 +1,10 @@
 use crate::id::{Pid, Tgid, Pgid, Sid};
 use crate::error::ProcError;
-use crate::signal::{Signal, SignalHot, SignalCold, SigInfo, SigCode};
+use crate::signal::{Signal, SignalHot, SigInfo, SigCode};
 use crate::task::{Task, TaskFlags};
 use crate::lifecycle::{ExitStatus, CloneFlags, WaitOptions, ProcessOps};
 use crate::pid::PidBitmap;
-use crate::fd::{FdTable, FdOps};
-use crate::rlimit::ResourceLimits;
+use crate::fd::FdOps;
 use rux_sched::TaskState;
 
 /// Maximum concurrent tasks.

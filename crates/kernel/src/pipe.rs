@@ -7,9 +7,7 @@ pub static PIPE: &rux_fs::fdtable::PipeFns = &rux_ipc::PIPE_FNS;
 
 /// Create a new pipe. Returns (pipe_id, read_fd, write_fd) or error.
 pub fn create() -> Result<(u8, isize, isize), isize> {
-    unsafe {
-        rux_fs::fdtable::create_pipe(PIPE)
-    }
+    rux_fs::fdtable::create_pipe(PIPE)
 }
 
 /// Wake tasks blocked on a specific pipe using the per-pipe waitlist.

@@ -16,7 +16,9 @@ pub fn exit_qemu(code: u32) -> ! {
     loop { core::hint::spin_loop(); }
 }
 
+#[allow(dead_code)]
 pub const EXIT_SUCCESS: u32 = 0x10;
+#[allow(dead_code)]
 pub const EXIT_FAILURE: u32 = 0x11;
 
 impl rux_arch::ExitOps for super::X86_64 {

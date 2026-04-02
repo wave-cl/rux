@@ -260,7 +260,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Stubs: accepted but no-op ─────────────────────────────
         Syscall::Mprotect => posix::mprotect(a0, a1, a2),
-        Syscall::Faccessat | Syscall::Access |
+        Syscall::Access |
         Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
         Syscall::Getgroups | Syscall::Getrlimit |
         Syscall::Futex => posix::futex(a0, a1, a2),
@@ -381,7 +381,7 @@ pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64
         &mut (*(&raw mut PROCESS)).signal_cold,
         &(*(&raw const PROCESS)).signal_restorer,
         syscall_result,
-        |status| { posix::exit(status); loop {} },
+        |status| posix::exit(status),
     )
 }
 

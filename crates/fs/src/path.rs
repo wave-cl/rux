@@ -1,4 +1,4 @@
-use crate::{FileSystem, FileName, InodeId, InodeStat, InodeType, VfsError, S_IFMT, S_IFLNK};
+use crate::{FileSystem, FileName, InodeId, InodeStat, VfsError, S_IFMT, S_IFLNK};
 
 /// Maximum depth for parent tracking during path resolution.
 const MAX_DEPTH: usize = 64;

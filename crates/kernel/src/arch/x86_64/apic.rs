@@ -6,6 +6,7 @@
 
 /// LAPIC register offsets (MMIO, 4-byte aligned).
 const LAPIC_ID: usize      = 0x020; // Local APIC ID
+#[allow(dead_code)]
 const LAPIC_VERSION: usize  = 0x030;
 const LAPIC_TPR: usize      = 0x080; // Task Priority Register
 const LAPIC_EOI: usize      = 0x0B0; // End of Interrupt
@@ -14,6 +15,7 @@ const LAPIC_ICR_LO: usize   = 0x300; // Interrupt Command Register (low)
 const LAPIC_ICR_HI: usize   = 0x310; // Interrupt Command Register (high)
 const LAPIC_TIMER_LVT: usize = 0x320; // Timer LVT
 const LAPIC_TIMER_ICR: usize = 0x380; // Timer Initial Count
+#[allow(dead_code)]
 const LAPIC_TIMER_CCR: usize = 0x390; // Timer Current Count
 const LAPIC_TIMER_DCR: usize = 0x3E0; // Timer Divide Configuration
 
@@ -58,6 +60,7 @@ pub unsafe fn eoi() {
 }
 
 /// Send an IPI (Inter-Processor Interrupt) to a specific CPU.
+#[allow(dead_code)]
 pub unsafe fn send_ipi(target_apic_id: u32, vector: u8) {
     // Set target in ICR high
     lapic_write(LAPIC_ICR_HI, target_apic_id << 24);
@@ -103,6 +106,7 @@ pub unsafe fn init_timer(vector: u8, initial_count: u32) {
 
 /// Number of CPUs detected (from ACPI MADT or CPUID, simplified for now).
 /// Returns 1 for single-CPU QEMU, will be extended with MADT parsing.
+#[allow(dead_code)]
 pub fn cpu_count() -> usize {
     1 // TODO: parse ACPI MADT for LAPIC entries
 }

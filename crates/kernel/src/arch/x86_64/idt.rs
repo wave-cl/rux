@@ -75,12 +75,12 @@ const IDT_ENTRIES: usize = 256;
 
 static mut IDT: [IdtEntry; IDT_ENTRIES] = [IdtEntry::EMPTY; IDT_ENTRIES];
 
-/// Generic interrupt/exception stub that saves registers and calls
-/// a Rust handler. Each vector gets a small trampoline that pushes
-/// the vector number, then jumps to the common handler.
-///
-/// The common handler saves all GPRs, calls `interrupt_dispatch(vector, frame)`,
-/// restores GPRs, and iretq's.
+// Generic interrupt/exception stub that saves registers and calls
+// a Rust handler. Each vector gets a small trampoline that pushes
+// the vector number, then jumps to the common handler.
+//
+// The common handler saves all GPRs, calls `interrupt_dispatch(vector, frame)`,
+// restores GPRs, and iretq's.
 
 // Generate 256 interrupt stubs via assembly
 core::arch::global_asm!(r#"
@@ -281,10 +281,10 @@ pub unsafe fn init() {
     }
 
     // Vector 48 — AP LAPIC timer
-    IDT[48] = IdtEntry::interrupt_gate(isr_stub_48 as u64, KERNEL_CS, 0);
+    IDT[48] = IdtEntry::interrupt_gate(isr_stub_48 as *const () as u64, KERNEL_CS, 0);
 
     // INT 0x80 — syscall trap gate, DPL=3 (callable from user space)
-    IDT[128] = IdtEntry::trap_gate_user(isr_stub_128 as u64, KERNEL_CS, 0);
+    IDT[128] = IdtEntry::trap_gate_user(isr_stub_128 as *const () as u64, KERNEL_CS, 0);
 
     // Load IDT
     let idt_ptr = IdtPtr {

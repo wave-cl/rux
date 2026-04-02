@@ -314,7 +314,6 @@ pub unsafe trait PerCpuOps {
 
     /// Read the per-CPU base pointer from the hardware register.
     /// Returns null if not yet initialized.
-    #[inline(always)]
     unsafe fn percpu_base() -> *mut u8;
 }
 
@@ -328,11 +327,9 @@ pub unsafe trait PerCpuOps {
 /// Implementations manipulate CPU flags controlling supervisor access to user pages.
 pub unsafe trait UserAccessOps {
     /// Begin user memory access (e.g., x86_64 STAC sets RFLAGS.AC).
-    #[inline(always)]
     unsafe fn user_access_begin();
 
     /// End user memory access (e.g., x86_64 CLAC clears RFLAGS.AC).
-    #[inline(always)]
     unsafe fn user_access_end();
 
     /// Enable the protection mechanism. Called once during boot after
@@ -353,11 +350,9 @@ pub unsafe trait TaskSwitchOps {
     unsafe fn init_pid1_hw(kstack_top: usize);
 
     /// Save the outgoing task's user SP and TLS register.
-    #[inline(always)]
     unsafe fn save_task_hw(saved_user_sp: &mut usize, tls: &mut u64);
 
     /// Restore the incoming task's user SP, TLS register, and kernel stack top.
-    #[inline(always)]
     unsafe fn restore_task_hw(saved_user_sp: usize, tls: u64, kstack_top: usize);
 
     /// Switch page tables with ASID/PCID tagging to avoid full TLB flush.
@@ -382,7 +377,6 @@ pub unsafe trait ForkOps {
 pub trait SyscallArgOps {
     /// Read the 6th syscall argument saved by the arch-specific entry code.
     /// x86_64: R9 saved in percpu. aarch64: x5 saved in global.
-    #[inline(always)]
     fn saved_syscall_arg5() -> usize;
 }
 

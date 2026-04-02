@@ -1,5 +1,5 @@
 use rux_klib::{PhysAddr, VirtAddr};
-use crate::{MappingFlags, MemoryError, PageSize};
+use crate::{MappingFlags, MemoryError};
 use rux_arch::pte::PageTableEntry;
 
 /// Page table levels (for 4-level paging on both x86_64 and aarch64).

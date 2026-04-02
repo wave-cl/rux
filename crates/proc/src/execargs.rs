@@ -83,7 +83,6 @@ pub unsafe fn set_from_user(path: &[u8], argv_ptr: usize, _envp_ptr: usize) {
 pub fn set(path: &[u8], arg: &[u8]) {
     unsafe {
         ARGC = 0;
-        let mut buf_pos = 0usize;
 
         // argv[0] = path
         let plen = path.len().min(255);
@@ -91,7 +90,7 @@ pub fn set(path: &[u8], arg: &[u8]) {
         ARGV_LENS[0] = plen;
         for i in 0..plen { ARGV_BUF[i] = path[i]; }
         ARGV_BUF[plen] = 0;
-        buf_pos = plen + 1;
+        let buf_pos = plen + 1;
         ARGC = 1;
 
         // argv[1] = arg (if non-empty)

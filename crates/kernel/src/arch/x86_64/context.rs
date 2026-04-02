@@ -9,6 +9,7 @@
 /// convention before we get here.
 
 /// Saved context for a kernel task. Stored on the task's kernel stack.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct SwitchContext {
@@ -23,6 +24,7 @@ pub struct SwitchContext {
 
 impl SwitchContext {
     /// Create an initial context for a new task that will "return" to `entry`.
+    #[allow(dead_code)]
     pub const fn new(entry: u64) -> Self {
         Self {
             r15: 0,

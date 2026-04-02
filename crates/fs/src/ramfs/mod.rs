@@ -346,6 +346,7 @@ impl RamFs {
     }
 
     /// Allocate an indirect block if not yet allocated.
+    #[allow(dead_code)]
     fn ensure_indirect_block(blk: &mut u64, alloc_fn: &mut dyn FnMut() -> Result<u64, VfsError>) -> Result<u64, VfsError> {
         if *blk == NO_PAGE {
             let addr = alloc_fn()?;

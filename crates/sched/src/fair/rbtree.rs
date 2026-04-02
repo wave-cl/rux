@@ -186,9 +186,9 @@ impl FairTimeline {
                 while !current.is_null() {
                     // Prune: if this subtree can't beat our best, skip entirely
                     if (*current).rb_min_vdeadline >= best_vd {
-                        current = core::ptr::null_mut();
                         break;
                     }
+
 
                     // Check if this node is eligible and has a better deadline
                     if !vruntime_gt((*current).vruntime, avg_vrt)
@@ -232,6 +232,7 @@ impl FairTimeline {
 
     /// Refresh augmentation for the entire subtree (post-order).
     /// Called after structural changes that may have invalidated multiple nodes.
+    #[allow(dead_code)]
     unsafe fn propagate_full(&self, node: *mut SchedEntity) {
         if node.is_null() {
             return;

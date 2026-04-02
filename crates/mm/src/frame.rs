@@ -89,6 +89,7 @@ impl OrderCache {
         self.entries[order as usize]
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     fn put(&mut self, order: u8, addr: PhysAddr) {
         self.entries[order as usize] = addr;

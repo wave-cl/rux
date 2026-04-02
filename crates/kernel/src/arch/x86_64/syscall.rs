@@ -17,7 +17,7 @@ pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
 /// Get the top address of the default SYSCALL_STACK.
 pub fn syscall_stack_top() -> u64 {
-    unsafe { (&raw const SYSCALL_STACK) as *const u8 as u64 + 65536 }
+    (&raw const SYSCALL_STACK) as *const u8 as u64 + 65536
 }
 
 /// Saved user RSP during syscall (single-process, no swapgs needed).
@@ -36,7 +36,7 @@ pub unsafe fn init_syscall_msrs() {
     core::arch::asm!("wrmsr", in("ecx") 0xC0000081u32, in("eax") star as u32, in("edx") (star >> 32) as u32);
 
     // IA32_LSTAR (0xC0000082): syscall entry point
-    let lstar = syscall_entry as u64;
+    let lstar = syscall_entry as *const () as u64;
     core::arch::asm!("wrmsr", in("ecx") 0xC0000082u32, in("eax") lstar as u32, in("edx") (lstar >> 32) as u32);
 
     // IA32_SFMASK (0xC0000084): clear IF (bit 9) on syscall entry
@@ -143,10 +143,10 @@ unsafe extern "C" fn syscall_entry() {
     );
 }
 
-/// Fork child return trampoline.
-/// context_switch retq's here. The child's kernel stack has a full
-/// syscall register frame (same layout as syscall_entry pushes).
-/// Pops all saved regs (with RAX=0 for fork return), then sysretq.
+// Fork child return trampoline.
+// context_switch retq's here. The child's kernel stack has a full
+// syscall register frame (same layout as syscall_entry pushes).
+// Pops all saved regs (with RAX=0 for fork return), then sysretq.
 core::arch::global_asm!(r#"
 .att_syntax prefix
 .global fork_child_sysret
@@ -190,7 +190,7 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
             return unsafe { crate::fork::sys_fork() } as i64;
         }
         57 | 58 => return unsafe { crate::fork::sys_fork() } as i64,
-        59 => { unsafe { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } return 0; }
+        59 => { unsafe { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } }
         _ => {}
     }
 
@@ -381,7 +381,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
 
         // Exec uses generic implementation
         let result: i64 = match nr {
-            59 => { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); 0 }
+            59 => { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); }
             _ => {
                 let sc = translate_x86_64(nr as usize);
                 crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, 0, 0) as i64
@@ -409,7 +409,7 @@ static mut VFORK_JMP: JmpBuf = JmpBuf {
     rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0, rsp: 0, rip: 0,
 };
 
-// setjmp/longjmp implemented in pure assembly for correctness
+// setjmp/longjmp in pure assembly for correctness
 core::arch::global_asm!(r#"
 .att_syntax prefix
 
@@ -474,7 +474,9 @@ unsafe impl rux_arch::UserModeOps for super::X86_64 {
 pub fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
     const ARCH_SET_FS: u64 = 0x1002;
     const ARCH_SET_GS: u64 = 0x1001;
+    #[allow(dead_code)]
     const ARCH_GET_FS: u64 = 0x1003;
+    #[allow(dead_code)]
     const ARCH_GET_GS: u64 = 0x1004;
 
     unsafe {

@@ -261,7 +261,6 @@ pub fn kill(pid: isize, signum: usize) -> isize {
 
 /// Internal exit helper (avoids circular naming with posix::exit).
 fn posix_exit(status: i32) -> ! {
-    super::posix::exit(status);
-    loop {}
+    super::posix::exit(status)
 }
 

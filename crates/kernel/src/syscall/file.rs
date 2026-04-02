@@ -153,7 +153,7 @@ pub fn dup(oldfd: usize) -> isize {
 
 /// dup2(oldfd, newfd) — POSIX.1
 pub fn dup2(oldfd: usize, newfd: usize) -> isize {
-    unsafe { fdt::sys_dup2(oldfd, newfd, Some(&crate::pipe::PIPE)) }
+    fdt::sys_dup2(oldfd, newfd, Some(&crate::pipe::PIPE))
 }
 
 /// lseek(fd, offset, whence) — POSIX.1
