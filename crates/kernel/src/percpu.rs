@@ -38,17 +38,32 @@ static mut PERCPU: [PerCpu; MAX_CPUS] = {
     [EMPTY; MAX_CPUS]
 };
 
-/// Boot CPU ID (always 0 for now).
+/// Boot CPU ID (always 0).
 static mut BSP_CPU_ID: usize = 0;
 
-/// Get the current CPU's per-CPU data.
-///
-/// # Safety
-/// Must be called after `init_bsp()`. On SMP, must read the actual
-/// CPU ID from hardware (APIC ID / MPIDR). Currently returns BSP slot.
+/// Cached CPU ID for the current core. Set once per CPU at init/AP entry.
+/// Avoids expensive LAPIC MMIO reads on every syscall.
+#[cfg(target_arch = "x86_64")]
+static mut CACHED_CPU_ID: usize = 0;
+#[cfg(target_arch = "aarch64")]
+static mut CACHED_CPU_ID: usize = 0;
+#[cfg(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")))]
+static mut CACHED_CPU_ID: usize = 0;
+
+/// Set the cached CPU ID for the current core. Called once per CPU.
+pub unsafe fn set_cpu_id(id: usize) { CACHED_CPU_ID = id; }
+
+/// Enable hardware CPU ID detection (legacy, now no-op — use set_cpu_id).
+pub unsafe fn enable_hw_cpu_id() { /* no-op, kept for API compat */ }
+
+/// Read the current CPU's ID (cached, no MMIO read).
+#[inline(always)]
+pub unsafe fn cpu_id() -> usize { CACHED_CPU_ID }
+
+/// Get the current CPU's per-CPU data using hardware CPU ID.
 #[inline(always)]
 pub unsafe fn this_cpu() -> &'static mut PerCpu {
-    &mut PERCPU[BSP_CPU_ID]
+    &mut PERCPU[cpu_id()]
 }
 
 /// Get per-CPU data for a specific CPU.

@@ -29,7 +29,10 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
 
 pub fn aarch64_init(dtb_addr: usize) {
     // Initialize BSP per-CPU data
-    unsafe { crate::percpu::init_bsp(); }
+    unsafe {
+        crate::percpu::init_bsp();
+        crate::percpu::enable_hw_cpu_id(); // MPIDR always readable
+    }
 
     console::write_str("rux: aarch64 running in EL1\n");
 

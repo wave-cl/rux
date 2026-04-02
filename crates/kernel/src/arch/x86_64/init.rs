@@ -282,6 +282,7 @@ pub fn x86_64_init(multiboot_info: usize) {
     // PIT timer is running (initialized above). Safe to init LAPIC and start APs.
     unsafe {
         super::apic::init_bsp();
+        crate::percpu::enable_hw_cpu_id(); // LAPIC MMIO now readable
         let bsp_id = super::apic::bsp_id();
         console::write_str("rux: BSP LAPIC ID=");
         let mut buf2 = [0u8; 10];

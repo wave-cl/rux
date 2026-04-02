@@ -142,14 +142,15 @@ static mut NEXT_PID: u32 = 2; // PID 1 is init
 
 // ── Accessors ─────────────────────────────────────────────────────────
 
-/// Per-CPU current task index. Reads from percpu on SMP-ready builds,
-/// falls back to the global CURRENT_TASK_IDX.
+/// Current task index. Uses the global (correct on QEMU TCG where CPUs
+/// are serialized). On real SMP hardware, this needs per-CPU storage
+/// via GS-base (x86_64) or TPIDR_EL1 (aarch64).
 #[inline(always)]
 pub unsafe fn current_task_idx() -> usize {
-    CURRENT_TASK_IDX // TODO: crate::percpu::this_cpu().current_task_idx
+    CURRENT_TASK_IDX
 }
 
-/// Set the current CPU's task index (updates global for now).
+/// Set the current task index (global + percpu for future SMP).
 #[inline(always)]
 pub unsafe fn set_current_task_idx(idx: usize) {
     CURRENT_TASK_IDX = idx;
