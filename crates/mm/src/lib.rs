@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 use rux_klib::{PhysAddr, VirtAddr};
 
