@@ -80,6 +80,12 @@ unsafe impl super::KernelMapOps for X86_64 {
     ) {
         use rux_klib::PhysAddr;
         use rux_mm::MappingFlags;
+        // User PTs must use 4K pages for the kernel identity map (not huge pages).
+        // User ELF segments (0x400000+) overlap the 0-128MB kernel identity map.
+        // Huge pages at L1 (PD) level would prevent map_4k from creating user PTEs
+        // in the same 2MB regions — ensure_table returns the huge PTE as a table
+        // pointer, causing corruption. Boot kernel PT (no user mappings) uses huge
+        // pages safely since no 4K user pages share its page directories.
         let kflags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::EXECUTE);
         pt.identity_map_range(PhysAddr::new(0), 128 * 1024 * 1024, kflags, alloc)
             .expect("kernel map");
