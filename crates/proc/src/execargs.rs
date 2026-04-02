@@ -131,19 +131,34 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
 
     let word = core::mem::size_of::<usize>(); // 8 on 64-bit, 4 on 32-bit
 
-    // Auxv: 6 base pairs + up to 5 dynamic pairs, × 2 words each
+    // Auxv: 8 base pairs + up to 5 dynamic pairs, × 2 words each
+    // Base: AT_PAGESZ, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_HWCAP, AT_RANDOM, AT_NULL
     let dyn_auxv_count = if AUXV_PHDR != 0 { 5 } else { 0 };
-    let auxv_size = (6 + dyn_auxv_count) * 2 * word;
+    let auxv_size = (8 + dyn_auxv_count) * 2 * word;
+    let random_size = 16; // 16 bytes for AT_RANDOM
 
     // Header: argc + argv[0..argc] + NULL + envp[0..3] + NULL
     let header_slots = 1 + argc + 1 + env_strs.len() + 1;
     let header_size = header_slots * word;
 
-    let total = header_size + auxv_size + str_size;
+    let total = header_size + auxv_size + random_size + str_size;
     let aligned_total = (total + 15) & !15;
 
     let sp = stack_top - aligned_total;
-    let str_base = sp + header_size + auxv_size;
+    let random_base = sp + header_size + auxv_size;
+    let str_base = random_base + random_size;
+
+    // Write 16 pseudorandom bytes for AT_RANDOM (stack canary seed).
+    // No entropy source available — use a simple mix of stack address + counter.
+    // musl just needs non-zero bytes; cryptographic quality not required.
+    {
+        static mut RAND_COUNTER: u64 = 0x517e_4d6f_7275_7321; // "SqMorus!"
+        RAND_COUNTER = RAND_COUNTER.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let r = random_base as *mut u64;
+        *r = RAND_COUNTER ^ (stack_top as u64);
+        RAND_COUNTER = RAND_COUNTER.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *r.add(1) = RAND_COUNTER ^ (sp as u64);
+    }
 
     // Write strings
     let mut str_pos = str_base;
@@ -185,11 +200,13 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     // Auxiliary vector (pointer-width pairs)
     let auxv = hdr.add(slot) as *mut [usize; 2];
     let mut ai = 0;
-    (*auxv.add(ai)) = [6, 4096];   ai += 1; // AT_PAGESZ
-    (*auxv.add(ai)) = [11, 0];     ai += 1; // AT_UID
-    (*auxv.add(ai)) = [23, 0];     ai += 1; // AT_EUID
-    (*auxv.add(ai)) = [13, 0];     ai += 1; // AT_GID
-    (*auxv.add(ai)) = [14, 0];     ai += 1; // AT_EGID
+    (*auxv.add(ai)) = [6, 4096];            ai += 1; // AT_PAGESZ
+    (*auxv.add(ai)) = [11, 0];              ai += 1; // AT_UID
+    (*auxv.add(ai)) = [23, 0];              ai += 1; // AT_EUID
+    (*auxv.add(ai)) = [13, 0];              ai += 1; // AT_GID
+    (*auxv.add(ai)) = [14, 0];              ai += 1; // AT_EGID
+    (*auxv.add(ai)) = [16, 0];              ai += 1; // AT_HWCAP (no special features)
+    (*auxv.add(ai)) = [25, random_base];    ai += 1; // AT_RANDOM (16 random bytes)
 
     // Dynamic linking entries (only if set)
     if AUXV_PHDR != 0 {
