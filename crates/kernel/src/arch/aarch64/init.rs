@@ -9,11 +9,13 @@ use crate::{scheduler, pgtrack};
 #[no_mangle]
 pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
     unsafe {
+        // Set TPIDR_EL1 for this CPU (must be first — this_cpu() depends on it)
+        crate::percpu::init_this_cpu(cpu_id as usize);
         let pc = crate::percpu::cpu(cpu_id as usize);
         pc.cpu_id = cpu_id as u32;
         pc.online = true;
         pc.idle = true;
-        pc.current_task_idx = usize::MAX; // no task assigned
+        pc.current_task_idx = usize::MAX;
 
         // Initialize GIC CPU interface for this AP
         super::gic::init_cpu();
@@ -40,10 +42,10 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
 }
 
 pub fn aarch64_init(dtb_addr: usize) {
-    // Initialize BSP per-CPU data
+    // Initialize BSP per-CPU data + set TPIDR_EL1
     unsafe {
         crate::percpu::init_bsp();
-        crate::percpu::enable_hw_cpu_id(); // MPIDR always readable
+        crate::percpu::init_this_cpu(0); // TPIDR_EL1 → &PERCPU[0]
     }
 
     console::write_str("rux: aarch64 running in EL1\n");

@@ -22,12 +22,13 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         // 3. IDT (shared with BSP — IDT is the same for all CPUs)
         super::idt::load();
 
-        // 4. Mark online
+        // 4. Set GS-base + mark online
+        crate::percpu::init_this_cpu(cpu_id as usize);
         let pc = crate::percpu::cpu(cpu_id as usize);
         pc.cpu_id = cpu_id;
         pc.online = true;
         pc.idle = true;
-        pc.current_task_idx = usize::MAX; // no task assigned
+        pc.current_task_idx = usize::MAX;
 
         console::write_str("rux: AP ");
         let mut buf = [0u8; 10];
@@ -98,8 +99,11 @@ unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
 }
 
 pub fn x86_64_init(multiboot_info: usize) {
-    // Initialize BSP per-CPU data (must be first — other code may read it)
-    unsafe { crate::percpu::init_bsp(); }
+    // Initialize BSP per-CPU data + set GS-base
+    unsafe {
+        crate::percpu::init_bsp();
+        crate::percpu::init_this_cpu(0); // GS-base → &PERCPU[0]
+    }
 
     // Initialize GDT with TSS — use the actual boot_stack_top from boot.S
     unsafe {
@@ -282,7 +286,7 @@ pub fn x86_64_init(multiboot_info: usize) {
     // PIT timer is running (initialized above). Safe to init LAPIC and start APs.
     unsafe {
         super::apic::init_bsp();
-        crate::percpu::enable_hw_cpu_id(); // LAPIC MMIO now readable
+        // GS-base already set for BSP at boot (init_this_cpu(0) above)
         let bsp_id = super::apic::bsp_id();
         console::write_str("rux: BSP LAPIC ID=");
         let mut buf2 = [0u8; 10];

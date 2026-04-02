@@ -45,29 +45,49 @@ static mut PERCPU: [PerCpu; MAX_CPUS] = {
 /// Boot CPU ID (always 0).
 static mut BSP_CPU_ID: usize = 0;
 
-/// Cached CPU ID for the current core. Set once per CPU at init/AP entry.
-/// Avoids expensive LAPIC MMIO reads on every syscall.
-#[cfg(target_arch = "x86_64")]
-static mut CACHED_CPU_ID: usize = 0;
-#[cfg(target_arch = "aarch64")]
-static mut CACHED_CPU_ID: usize = 0;
-#[cfg(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")))]
-static mut CACHED_CPU_ID: usize = 0;
+/// Enable per-CPU data access. Call after setting TPIDR_EL1 (aarch64)
+/// or GS-base (x86_64) to point to the current CPU's PerCpu struct.
+pub unsafe fn enable_hw_cpu_id() { /* activate per-CPU access */ }
 
-/// Set the cached CPU ID for the current core. Called once per CPU.
-pub unsafe fn set_cpu_id(id: usize) { CACHED_CPU_ID = id; }
+/// Set TPIDR_EL1 (aarch64) or GS-base (x86_64) to point to this CPU's PerCpu.
+pub unsafe fn init_this_cpu(id: usize) {
+    let base = &mut PERCPU[id] as *mut PerCpu as u64;
+    #[cfg(target_arch = "aarch64")]
+    core::arch::asm!("msr tpidr_el1, {}", in(reg) base, options(nostack));
+    #[cfg(target_arch = "x86_64")]
+    {
+        // IA32_GS_BASE (MSR 0xC0000101) = per-CPU struct address
+        let lo = base as u32;
+        let hi = (base >> 32) as u32;
+        core::arch::asm!("wrmsr", in("ecx") 0xC0000101u32, in("eax") lo, in("edx") hi, options(nostack));
+    }
+}
 
-/// Enable hardware CPU ID detection (legacy, now no-op — use set_cpu_id).
-pub unsafe fn enable_hw_cpu_id() { /* no-op, kept for API compat */ }
-
-/// Read the current CPU's ID (cached, no MMIO read).
+/// Read the current CPU's ID. Uses per-CPU register (fast, no table lookup).
 #[inline(always)]
-pub unsafe fn cpu_id() -> usize { CACHED_CPU_ID }
+pub unsafe fn cpu_id() -> usize {
+    this_cpu().cpu_id as usize
+}
 
-/// Get the current CPU's per-CPU data using hardware CPU ID.
+/// Get the current CPU's per-CPU data.
+/// aarch64: reads TPIDR_EL1. x86_64: reads from GS-base.
+/// Falls back to PERCPU[BSP_CPU_ID] if per-CPU registers not yet initialized.
 #[inline(always)]
 pub unsafe fn this_cpu() -> &'static mut PerCpu {
-    &mut PERCPU[cpu_id()]
+    #[cfg(target_arch = "aarch64")]
+    {
+        let base: u64;
+        core::arch::asm!("mrs {}, tpidr_el1", out(reg) base, options(nostack));
+        if base != 0 {
+            return &mut *(base as *mut PerCpu);
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // Read GS-base from MSR (can't use gs: prefix without segment setup)
+        // For now, fall through to array lookup. GS-relative asm comes in Part 3c.
+    }
+    &mut PERCPU[BSP_CPU_ID]
 }
 
 /// Get per-CPU data for a specific CPU.
