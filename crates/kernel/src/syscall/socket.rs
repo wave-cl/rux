@@ -269,10 +269,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
             if sock.sock_type == SOCK_STREAM {
                 let max_iters = if nonblock { 10u32 } else { 30_000u32 };
                 for iter in 0..max_iters {
-                    // Poll multiple times to process both ingress and egress
-                    for _ in 0..10 {
-                        rux_net::poll(crate::arch::Arch::ticks());
-                    }
+                    rux_net::poll(crate::arch::Arch::ticks());
                     // Check if socket can receive
                     if rux_net::tcp_can_recv(handle) {
                         let mut kbuf = [0u8; 4096];

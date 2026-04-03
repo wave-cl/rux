@@ -146,11 +146,20 @@ pub unsafe fn tcp_alloc() -> Option<SocketHandle> {
 
     let rx_slice: &mut [u8] = &mut *(&raw mut TCP_RX_BUFS[idx]);
     let tx_slice: &mut [u8] = &mut *(&raw mut TCP_TX_BUFS[idx]);
+
+    // Verify buffer sizes (diagnostic)
+    if rx_slice.len() != TCP_RX_BUF_SIZE || tx_slice.len() != TCP_TX_BUF_SIZE {
+        return None; // Buffer creation failed
+    }
+
     let rx_buf = tcp::SocketBuffer::new(rx_slice);
     let tx_buf = tcp::SocketBuffer::new(tx_slice);
     let mut socket = tcp::Socket::new(rx_buf, tx_buf);
-    // Ensure Nagle is disabled for better interactivity
     socket.set_nagle_enabled(false);
+
+    // Verify buffer capacity
+    debug_assert!(socket.recv_capacity() == TCP_RX_BUF_SIZE);
+
     Some(sockets.add(socket))
 }
 
