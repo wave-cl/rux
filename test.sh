@@ -120,7 +120,7 @@ CMDS
     -chardev stdio,id=char0,logfile=/tmp/rux_serial_x86_64.log \
     -serial chardev:char0 -display none \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-    -no-reboot -monitor none -m 128M 2>&1 || true )
+    -no-reboot -monitor none -net none -m 128M 2>&1 || true )
 
 echo "$OUTPUT" > /tmp/rux_test_x86_64.log
 
