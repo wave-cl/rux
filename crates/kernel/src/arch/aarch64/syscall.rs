@@ -38,8 +38,20 @@ pub fn handle_syscall(frame: *mut u8) {
         let a3 = *regs.add(3);   // x3
         let a4 = *regs.add(4);   // x4
         let a5 = *regs.add(5);   // x5 (6th arg, used by mmap for offset)
-        // Save a5 for mmap dispatch (generic dispatch only passes 5 args)
         SAVED_SYSCALL_A5 = a5;
+        // Debug: trace first 20 syscalls for Alpine debugging
+        static mut SC_COUNT: u32 = 0;
+        SC_COUNT += 1;
+        if SC_COUNT <= 20 {
+            use rux_arch::ConsoleOps;
+            crate::arch::Arch::write_str("sc#");
+            let mut buf = [0u8; 10];
+            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, nr as u32));
+            crate::arch::Arch::write_str("(");
+            let mut hb = [0u8; 16];
+            crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, a0 as usize));
+            crate::arch::Arch::write_str(")\n");
+        }
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {

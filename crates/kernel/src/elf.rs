@@ -73,9 +73,40 @@ pub unsafe fn load_elf_from_inode(
     // Load segments + map stack via rux-elf generic loader
     let mut reader = VfsReader { ino };
     let mut pt_adapter = PtAdapter { pt: &mut upt };
-    let (stack_top, max_end) = rux_elf::load_elf_to_pt(
-        &elf_info, &mut reader, &mut pt_adapter, alloc, 32,
-    );
+
+    // PIE (ET_DYN with first segment at VA 0): load at a base address
+    // so it doesn't collide with the null guard page at VA 0.
+    let is_pie = elf_info.e_type == 3 && elf_info.segments.iter()
+        .any(|s| s.vaddr == 0);
+    let pie_base: u64 = if is_pie { 0x400000 } else { 0 }; // 4MB base for PIE
+
+    let (stack_top, max_end) = if is_pie {
+        let end = rux_elf::load_elf_to_pt_at_base(
+            &elf_info, &mut reader, &mut pt_adapter, alloc, pie_base,
+        );
+        // Map user stack separately (load_elf_to_pt_at_base doesn't map stack)
+        let stack_pages = 32u64;
+        let stack_flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::USER);
+        let stack_base = 0x80000000u64 - stack_pages * 4096;
+        for p in 0..stack_pages {
+            let sp_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("stack page");
+            let _ = upt.map_4k(
+                rux_klib::VirtAddr::new((stack_base + p * 4096) as usize),
+                sp_frame, stack_flags, alloc,
+            );
+        }
+        // Unmap guard page below stack
+        let _ = upt.unmap_4k(rux_klib::VirtAddr::new((stack_base - 4096) as usize));
+        // Unmap page 0
+        let _ = upt.unmap_4k(rux_klib::VirtAddr::new(0));
+        (stack_base + stack_pages * 4096, end.max(stack_base + stack_pages * 4096))
+    } else {
+        rux_elf::load_elf_to_pt(
+            &elf_info, &mut reader, &mut pt_adapter, alloc, 32,
+        )
+    };
 
     // Set program break and mmap base for brk/mmap syscalls
     crate::syscall::PROCESS.program_brk = max_end as usize;
@@ -92,11 +123,11 @@ pub unsafe fn load_elf_from_inode(
     let entry_point;
     if elf_info.is_dynamic {
         entry_point = load_dynamic_interp(
-            &elf_info, &mut upt, alloc, fs, ino, &hdr_buf,
+            &elf_info, &mut upt, alloc, fs, ino, &hdr_buf, pie_base,
         );
     } else {
         rux_proc::execargs::clear_dynamic_auxv();
-        entry_point = elf_info.entry as usize;
+        entry_point = (elf_info.entry as u64 + pie_base) as usize;
     }
 
     // Activate page table + flush TLB (exec replaces the entire address space)
@@ -139,6 +170,7 @@ unsafe fn load_dynamic_interp(
     fs: &mut impl rux_fs::FileSystem,
     main_ino: u64,
     main_hdr: &[u8],
+    pie_base: u64,
 ) -> usize {
     use rux_arch::ConsoleOps;
 
@@ -208,12 +240,12 @@ unsafe fn load_dynamic_interp(
     // 5. Set auxv for ld.so
     // phdr_vaddr: if PT_PHDR was mapped by PT_LOAD, use its vaddr.
     // Otherwise, use e_phoff offset from the first segment's base.
+    // For PIE binaries, add pie_base to the PHDR and entry addresses.
     let phdr_addr = if main_elf.phdr_vaddr != 0 {
-        main_elf.phdr_vaddr as usize
+        main_elf.phdr_vaddr as usize + pie_base as usize
     } else {
-        // Program headers are at e_phoff from start of ELF file.
-        // If the first LOAD segment starts at VA 0 (PIE), phdr is at e_phoff.
-        main_elf.segments[0].vaddr as usize + main_elf.e_phoff as usize
+        main_elf.segments[0].vaddr as usize + pie_base as usize
+            + main_elf.e_phoff as usize
             - main_elf.segments[0].file_offset as usize
     };
 
@@ -221,7 +253,7 @@ unsafe fn load_dynamic_interp(
         phdr_addr,
         main_elf.e_phentsize as usize,
         main_elf.e_phnum as usize,
-        main_elf.entry as usize,
+        main_elf.entry as usize + pie_base as usize,
         interp_base as usize,
     );
 
