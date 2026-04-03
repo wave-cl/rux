@@ -244,7 +244,9 @@ pub unsafe fn load_elf_to_pt(
     for i in 0..info.num_segments {
         let seg = &info.segments[i];
         let vaddr_base = seg.vaddr & !0xFFF;
-        let vaddr_end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+        let vaddr_end_base = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+        let extra: u64 = 0; // TODO: demand paging for BSS beyond memsz
+        let vaddr_end = vaddr_end_base + extra as u64;
         let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
 
         if vaddr_end > max_end { max_end = vaddr_end; }
@@ -334,7 +336,12 @@ pub unsafe fn load_elf_to_pt_at_base(
     for i in 0..info.num_segments {
         let seg = &info.segments[i];
         let vaddr_base = (base + seg.vaddr) & !0xFFF;
-        let vaddr_end = ((base + seg.vaddr + seg.memsz) + 0xFFF) & !0xFFF;
+        let vaddr_end_base = ((base + seg.vaddr + seg.memsz) + 0xFFF) & !0xFFF;
+        // For writable data segments, extend mapping by 256KB to cover
+        // dynamic linker's internal allocations (struct dso, TLS, etc.)
+        // that access just beyond the nominal segment end.
+        let extra: u64 = 0; // TODO: demand paging for BSS beyond memsz
+        let vaddr_end = vaddr_end_base + extra as u64;
         let num_pages = ((vaddr_end - vaddr_base) / 4096) as usize;
 
         if vaddr_end > max_end { max_end = vaddr_end; }
