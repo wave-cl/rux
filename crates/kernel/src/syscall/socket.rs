@@ -6,9 +6,11 @@
 use crate::uaccess;
 
 const AF_INET: u32 = 2;
+const SOCK_STREAM: u32 = 1;
 const SOCK_DGRAM: u32 = 2;
 const SOCK_RAW: u32 = 3;
 const IPPROTO_ICMP: u32 = 1;
+const IPPROTO_TCP: u32 = 6;
 const IPPROTO_UDP: u32 = 17;
 
 const MAX_SOCKETS: usize = 8;
@@ -26,6 +28,8 @@ struct SocketSlot {
     rx_from_ip: [u8; 4],
     rx_from_port: u16,
     rx_ready: bool,
+    /// TCP connection index (for SOCK_STREAM)
+    tcp_conn: i8, // -1 = not connected
 }
 
 impl SocketSlot {
@@ -36,6 +40,7 @@ impl SocketSlot {
             rx_buf: [0; 1500], rx_len: 0,
             rx_from_ip: [0; 4], rx_from_port: 0,
             rx_ready: false,
+            tcp_conn: -1,
         }
     }
 }
@@ -46,7 +51,7 @@ static mut SOCKETS: [SocketSlot; MAX_SOCKETS] = [SocketSlot::empty(); MAX_SOCKET
 pub fn sys_socket(domain: usize, stype: usize, protocol: usize) -> isize {
     if domain as u32 != AF_INET { return crate::errno::EAFNOSUPPORT; }
     let st = stype as u32 & 0xFF; // mask out SOCK_NONBLOCK etc.
-    if st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
+    if st != SOCK_STREAM && st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
 
     unsafe {
         // Find free socket slot
@@ -107,6 +112,53 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     0
 }
 
+/// connect(fd, addr, addrlen) — TCP connect
+pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
+    let idx = match unsafe { resolve_socket(fd) } {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        let sock = &mut SOCKETS[idx];
+        if sock.sock_type != SOCK_STREAM { return 0; } // non-TCP: stub
+
+        #[cfg(feature = "net")]
+        {
+            let dst_port = u16::from_be_bytes([
+                *(addr_ptr as *const u8).add(2),
+                *(addr_ptr as *const u8).add(3),
+            ]);
+            let dst_ip: [u8; 4] = [
+                *(addr_ptr as *const u8).add(4),
+                *(addr_ptr as *const u8).add(5),
+                *(addr_ptr as *const u8).add(6),
+                *(addr_ptr as *const u8).add(7),
+            ];
+
+            let conn_idx = match rux_net::tcp::alloc_conn() {
+                Some(i) => i,
+                None => return crate::errno::ENOMEM,
+            };
+
+            let src_ip = rux_net::stack::our_ip();
+            rux_net::tcp::connect(conn_idx, dst_ip, dst_port, src_ip);
+            sock.tcp_conn = conn_idx as i8;
+
+            // Wait for connection to be established (poll for SYN+ACK)
+            for _ in 0..10_000_000u32 {
+                rux_net::stack::poll();
+                let conn = rux_net::tcp::get_conn(conn_idx);
+                if conn.state == rux_net::tcp::TcpState::Established { return 0; }
+                if conn.state == rux_net::tcp::TcpState::Closed { return crate::errno::ECONNREFUSED; }
+                core::hint::spin_loop();
+            }
+            return crate::errno::ETIMEDOUT;
+        }
+        #[cfg(not(feature = "net"))]
+        return crate::errno::ENETUNREACH;
+    }
+}
+
 /// sendto(fd, buf, len, flags, dest_addr, addrlen) — send a packet
 
 pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr: usize, _addrlen: usize) -> isize {
@@ -136,7 +188,11 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
         #[cfg(feature = "net")]
         {
             let sock = &SOCKETS[idx];
-            if sock.sock_type == SOCK_RAW && sock.protocol == IPPROTO_ICMP {
+            if sock.sock_type == SOCK_STREAM && sock.tcp_conn >= 0 {
+                // TCP send
+                let r = rux_net::tcp::send(sock.tcp_conn as usize, &kbuf[..send_len]);
+                return if r >= 0 { r as isize } else { crate::errno::EIO };
+            } else if sock.sock_type == SOCK_RAW && sock.protocol == IPPROTO_ICMP {
                 rux_net::stack::send_ip(dst_ip, rux_net::ipv4::PROTO_ICMP, &kbuf[..send_len]);
             } else if sock.sock_type == SOCK_DGRAM {
                 let mut udp_buf = [0u8; 1408];
@@ -159,10 +215,28 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
         None => return crate::errno::EBADF,
     };
     unsafe {
+        // TCP recv: read from connection buffer
+        #[cfg(feature = "net")]
+        if SOCKETS[idx].sock_type == SOCK_STREAM && SOCKETS[idx].tcp_conn >= 0 {
+            let ci = SOCKETS[idx].tcp_conn as usize;
+            for _ in 0..10_000_000u32 {
+                rux_net::stack::poll();
+                let conn = rux_net::tcp::get_conn(ci);
+                let avail = conn.rx_available();
+                if avail > 0 {
+                    let mut kbuf = [0u8; 4096];
+                    let n = conn.rx_read(&mut kbuf[..len.min(4096)]);
+                    core::ptr::copy_nonoverlapping(kbuf.as_ptr(), buf_ptr as *mut u8, n);
+                    return n as isize;
+                }
+                if conn.fin_received { return 0; } // EOF
+                core::hint::spin_loop();
+            }
+            return crate::errno::EAGAIN;
+        }
 
-        // Poll until a packet arrives (with timeout)
+        // UDP/raw: poll until a packet arrives (with timeout)
         for _ in 0..10_000_000u32 {
-            
             #[cfg(feature = "net")]
             rux_net::stack::poll();
 

@@ -304,7 +304,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Sendto => socket::sys_sendto(a0, a1, a2, a3, a4, 0),
         Syscall::Recvfrom => socket::sys_recvfrom(a0, a1, a2, a3, a4, 0),
         Syscall::Setsockopt | Syscall::Getsockopt => 0, // stub
-        Syscall::Connect => 0, // stub
+        Syscall::Connect => socket::sys_connect(a0, a1, a2),
 
         Syscall::Rseq => crate::errno::ENOSYS,
 

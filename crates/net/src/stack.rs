@@ -1,6 +1,6 @@
 //! Network stack: processes incoming packets, dispatches to protocol handlers.
 
-use super::{eth, arp, ipv4, icmp, udp};
+use super::{eth, arp, ipv4, icmp, udp, tcp};
 
 /// Function pointers for the network driver (set during init).
 static mut NET_SEND: Option<unsafe fn(&[u8]) -> bool> = None;
@@ -110,6 +110,11 @@ pub fn process_frame(frame: &[u8]) -> Option<([u8; 1514], usize)> {
                     let len = eth::build(&mut frame_out, src, our_mac, eth::ETH_P_IP, &ip_pkt[..ip_len]);
                     Some((frame_out, len))
                 }
+                ipv4::PROTO_TCP => {
+                    let (sp, dp, seq, ack, flags, _win, payload) = tcp::parse(ip_payload)?;
+                    unsafe { tcp::handle_segment(src_ip, dst_ip, sp, dp, seq, ack, flags, payload); }
+                    None
+                }
                 ipv4::PROTO_UDP => {
                     let (src_port, dst_port, data) = udp::parse(ip_payload)?;
                     unsafe {
@@ -127,6 +132,11 @@ pub fn process_frame(frame: &[u8]) -> Option<([u8; 1514], usize)> {
 }
 
 /// Send an IP packet to a destination. Handles ARP resolution.
+/// Send a raw IP packet (used by TCP which builds its own IP payload).
+pub unsafe fn send_ip_raw(dst_ip: [u8; 4], protocol: u8, payload: &[u8]) -> bool {
+    send_ip(dst_ip, protocol, payload)
+}
+
 pub unsafe fn send_ip(dst_ip: [u8; 4], protocol: u8, payload: &[u8]) -> bool {
     let our_ip = CONFIG.ip;
     let our_mac = CONFIG.mac;

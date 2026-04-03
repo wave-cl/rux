@@ -25,6 +25,8 @@ pub const ENOMEM: isize = -12;     // Cannot allocate memory
 pub const ENOSYS: isize = -38;     // Function not implemented
 pub const EAFNOSUPPORT: isize = -97;  // Address family not supported
 pub const EPROTONOSUPPORT: isize = -93; // Protocol not supported
+pub const ECONNREFUSED: isize = -111;  // Connection refused
+pub const ETIMEDOUT: isize = -110;     // Connection timed out
 pub const ENETUNREACH: isize = -101;   // Network is unreachable
 
 // ── Signal numbers (POSIX) ──────────────────────────────────────────

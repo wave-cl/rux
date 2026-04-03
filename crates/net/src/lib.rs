@@ -5,6 +5,7 @@ pub mod arp;
 pub mod ipv4;
 pub mod icmp;
 pub mod udp;
+pub mod tcp;
 pub mod stack;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

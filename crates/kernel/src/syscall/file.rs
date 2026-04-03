@@ -5,6 +5,10 @@ use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 /// read(fd, buf, count) — POSIX.1
 pub fn read(fd: usize, buf: usize, len: usize) -> isize {
+    // Socket read → recvfrom
+    if super::socket::is_socket(fd) {
+        return super::socket::sys_recvfrom(fd, buf, len, 0, 0, 0);
+    }
     if fd == 0 && fdt::is_console_fd(0) {
         // stdin from console — route through TTY line discipline
         unsafe {
@@ -40,6 +44,10 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
 
 /// write(fd, buf, count) — POSIX.1
 pub fn write(fd: usize, buf: usize, len: usize) -> isize {
+    // Socket write → sendto
+    if super::socket::is_socket(fd) {
+        return super::socket::sys_sendto(fd, buf, len, 0, 0, 0);
+    }
     if fd <= 2 && fdt::is_console_fd(fd) {
         // Write raw bytes to console without \n→\r\n conversion.
         // User programs handle their own line endings.
