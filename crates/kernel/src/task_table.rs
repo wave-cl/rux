@@ -132,11 +132,16 @@ pub static mut KSTACKS: KStackArray = KStackArray([[0; KSTACK_SIZE]; MAX_PROCS])
 
 /// Per-task signal handler tables. Raw bytes to avoid linker alignment shifts.
 const SIGNAL_COLD_SIZE: usize = core::mem::size_of::<rux_proc::signal::SignalCold>();
-static mut SIGNAL_COLD_BYTES: [u8; SIGNAL_COLD_SIZE * MAX_PROCS] = [0; SIGNAL_COLD_SIZE * MAX_PROCS];
+/// Aligned storage for SignalCold instances. The `#[repr(align(8))]` wrapper
+/// ensures proper alignment even when BSS layout changes (e.g., adding new
+/// static variables shifts addresses).
+#[repr(C, align(8))]
+struct AlignedSignalColdBytes([u8; SIGNAL_COLD_SIZE * MAX_PROCS]);
+static mut SIGNAL_COLD_BYTES: AlignedSignalColdBytes = AlignedSignalColdBytes([0; SIGNAL_COLD_SIZE * MAX_PROCS]);
 
 #[inline(always)]
 pub unsafe fn signal_cold_mut(idx: usize) -> &'static mut rux_proc::signal::SignalCold {
-    &mut *((*(&raw mut SIGNAL_COLD_BYTES)).as_mut_ptr().add(idx * SIGNAL_COLD_SIZE) as *mut rux_proc::signal::SignalCold)
+    &mut *((*(&raw mut SIGNAL_COLD_BYTES)).0.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE) as *mut rux_proc::signal::SignalCold)
 }
 
 /// Raw byte pointer to a task's signal_cold slot. Avoids creating a
@@ -144,7 +149,7 @@ pub unsafe fn signal_cold_mut(idx: usize) -> &'static mut rux_proc::signal::Sign
 /// in the signal delivery hot path).
 #[inline(always)]
 pub unsafe fn signal_cold_raw_ptr(idx: usize) -> *mut u8 {
-    (*(&raw mut SIGNAL_COLD_BYTES)).as_mut_ptr().add(idx * SIGNAL_COLD_SIZE)
+    (*(&raw mut SIGNAL_COLD_BYTES)).0.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE)
 }
 
 
