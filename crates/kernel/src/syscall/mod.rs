@@ -269,7 +269,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Rename => posix::rename(a0, a1),
         Syscall::Renameat => posix::rename_at(a0, a1, a2, a3),
         Syscall::Symlink => posix::symlink(a0, a1),
-        Syscall::Symlinkat => posix::symlink(a0, a2), // symlinkat(target, dirfd, linkpath)
+        Syscall::Symlinkat => posix::symlink_at(a0, a1, a2),
 
         // ── Permissions ───────────────────────────────────────────
         Syscall::Link => posix::link(a0, a1),
@@ -278,8 +278,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Fchmodat => posix::chmod(a1, a2),      // fchmodat(dirfd, path, mode)
         Syscall::Fchmod => posix::fchmod(a0, a1),       // fchmod(fd, mode)
         Syscall::Chown => posix::chown(a0, a1, a2),     // chown(path, uid, gid)
-        Syscall::Fchownat => posix::chown(a1, a2, a3),  // fchownat(dirfd, path, uid, gid, flags)
-        Syscall::Fchown => posix::fchown(a0, a1, a2),   // fchown(fd, uid, gid)
+        Syscall::Fchownat => posix::fchownat(a0, a1, a2, a3),
+        Syscall::Fchown => posix::fchown(a0, a1, a2),
         Syscall::Utimensat => posix::utimensat(a0, a1, a2, a3),
 
         // ── Memory ─────────────────────────────────────────────────

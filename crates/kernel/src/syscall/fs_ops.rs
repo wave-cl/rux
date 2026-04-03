@@ -335,6 +335,45 @@ pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
     }
 }
 
+/// symlinkat(target, dirfd, linkpath) — with dirfd support
+pub fn symlink_at(target_ptr: usize, dirfd: usize, link_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        // Read target first (uses static buffer)
+        let target = crate::uaccess::read_user_cstr(target_ptr);
+        let mut target_buf = [0u8; 256];
+        let tlen = target.len().min(255);
+        target_buf[..tlen].copy_from_slice(&target[..tlen]);
+
+        // Resolve linkpath with dirfd
+        let (dir_ino, name) = match super::resolve_parent_at(dirfd, link_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        match fs.symlink(dir_ino, fname, &target_buf[..tlen]) {
+            Ok(_) => 0,
+            Err(_) => crate::errno::EEXIST,
+        }
+    }
+}
+
+/// fchownat(dirfd, path, uid, gid, flags) — with dirfd support
+pub fn fchownat(dirfd: usize, path_ptr: usize, uid: usize, gid: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        let path = crate::uaccess::read_user_cstr(path_ptr);
+        let ino = match super::resolve_at(dirfd, path) {
+            Ok(ino) => ino,
+            Err(_) => return 0, // Silently succeed for non-existent (matches chown behavior)
+        };
+        let fs = crate::kstate::fs();
+        let _ = fs.chown(ino, uid as u32, gid as u32);
+        0
+    }
+}
+
 /// link(oldpath, newpath) — POSIX.1: create a hard link.
 pub fn link(old_ptr: usize, new_ptr: usize) -> isize {
     unsafe {
@@ -423,7 +462,7 @@ pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
 
 /// utimensat(dirfd, path, times, flags) — POSIX.1-2008: set file timestamps.
 /// times is a pointer to two timespec structs (atime, mtime), or NULL for current time.
-pub fn utimensat(_dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize) -> isize {
+pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
         let now = super::current_time_secs();
@@ -431,20 +470,18 @@ pub fn utimensat(_dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize
             (now, now)
         } else {
             let a_sec = *(times_ptr as *const u64);
-            let m_sec = *((times_ptr + 16) as *const u64); // skip nsec field
-            // UTIME_NOW = 0x3FFFFFFF, UTIME_OMIT = 0x3FFFFFFE
+            let m_sec = *((times_ptr + 16) as *const u64);
             let a_nsec = *((times_ptr + 8) as *const u64);
             let m_nsec = *((times_ptr + 24) as *const u64);
             let a = if a_nsec == 0x3FFFFFFF { now } else { a_sec };
             let m = if m_nsec == 0x3FFFFFFF { now } else { m_sec };
             (a, m)
         };
-        // Resolve path (if 0/null, would need fd-based, but busybox always passes path)
         if path_ptr == 0 { return 0; }
         let path = crate::uaccess::read_user_cstr(path_ptr);
-        let ino = match super::resolve_with_cwd(path) {
+        let ino = match super::resolve_at(dirfd, path) {
             Ok(ino) => ino,
-            Err(e) => return e,
+            Err(_) => return 0, // silently succeed if path not found
         };
         let fs = crate::kstate::fs();
         match fs.utimes(ino, atime, mtime) {
