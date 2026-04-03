@@ -145,7 +145,7 @@ pub fn aarch64_init(dtb_addr: usize) {
             AP_BOOT_DATA[2] = mair;
             AP_BOOT_DATA[3] = vbar;
             AP_BOOT_DATA[4] = sctlr;
-            AP_BOOT_DATA[5] = crate::task_table::KSTACKS[ap_id].as_ptr() as u64
+            AP_BOOT_DATA[5] = crate::task_table::KSTACKS.0[ap_id].as_ptr() as u64
                 + crate::task_table::KSTACK_SIZE as u64;
             AP_BOOT_DATA[6] = ap_entry_rust as *const () as u64;
 

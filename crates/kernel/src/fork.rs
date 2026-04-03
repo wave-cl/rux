@@ -74,7 +74,7 @@ unsafe fn init_child_slot(
     child.fpu_state = parent.fpu_state;
 
     // Set up child kernel stack
-    child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
+    child.kstack_top = KSTACKS.0[child_idx].as_ptr() as usize + KSTACK_SIZE;
     {
         use rux_arch::ForkOps;
         child.saved_ksp = crate::arch::Arch::setup_child_kstack(child.kstack_top);

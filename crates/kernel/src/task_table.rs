@@ -120,8 +120,12 @@ pub static mut TASK_TABLE: [TaskSlot; MAX_PROCS] = {
 /// Kernel stack size per task.
 pub const KSTACK_SIZE: usize = 16384; // 16KB per task
 
-/// Per-task kernel stacks.
-pub static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_PROCS] = [[0; KSTACK_SIZE]; MAX_PROCS];
+/// Per-task kernel stacks. KSTACK_SIZE is 16384 (4 pages), so each
+/// stack is naturally page-aligned within the array when the array
+/// itself is page-aligned.
+#[repr(C, align(4096))]
+pub struct KStackArray(pub [[u8; KSTACK_SIZE]; MAX_PROCS]);
+pub static mut KSTACKS: KStackArray = KStackArray([[0; KSTACK_SIZE]; MAX_PROCS]);
 
 /// Per-task signal handler tables. Raw bytes to avoid linker alignment shifts.
 const SIGNAL_COLD_SIZE: usize = core::mem::size_of::<rux_proc::signal::SignalCold>();

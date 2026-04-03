@@ -12,7 +12,7 @@ use crate::{scheduler, pgtrack};
 pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
     unsafe {
         // 1. Per-CPU GDT + TSS
-        let kstack_top = crate::task_table::KSTACKS[cpu_id as usize].as_ptr() as usize
+        let kstack_top = crate::task_table::KSTACKS.0[cpu_id as usize].as_ptr() as usize
             + crate::task_table::KSTACK_SIZE;
         super::gdt::init_ap(cpu_id as usize, kstack_top as u64);
 
@@ -329,9 +329,10 @@ pub fn x86_64_init(multiboot_info: usize) {
             let _ = kpt.unmap_4k(rux_klib::VirtAddr::new(0));
             console::write_str("rux: page 0 unmapped (null guard)\n");
 
-            // Note: kernel stack guard pages deferred — KSTACKS span multiple
-            // 2MB pages (BSS at 0x148000-0x21F880). Would need to split each
-            // 2MB page containing a stack bottom.
+            // Kernel stack guard pages: deferred until KSTACK_SIZE is increased.
+            // With 16KB stacks and 4KB guard, only 12KB is usable. The dynamic
+            // linking exec path (load ELF + ld.so + page tables) exceeds 12KB.
+            // Need KSTACK_SIZE >= 24KB for guard pages to be safe.
         }
     }
 
@@ -393,7 +394,7 @@ pub fn x86_64_init(multiboot_info: usize) {
         let max_aps = 4usize.min(crate::percpu::MAX_CPUS);
         for ap_id in 1..max_aps {
             *data.add(0) = cr3;
-            *data.add(1) = crate::task_table::KSTACKS[ap_id].as_ptr() as u64
+            *data.add(1) = crate::task_table::KSTACKS.0[ap_id].as_ptr() as u64
                 + crate::task_table::KSTACK_SIZE as u64;
             *data.add(2) = ap_entry as *const () as u64;
             *data.add(3) = ap_id as u64;
