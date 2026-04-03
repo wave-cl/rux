@@ -30,10 +30,12 @@ pub fn brk(addr: usize) -> isize {
         if addr >= super::PROCESS.program_brk {
             let old_page = (super::PROCESS.program_brk + 0xFFF) & !0xFFF;
             let new_page = (addr + 0xFFF) & !0xFFF;
-            let flags = rux_mm::MappingFlags::READ
-                .or(rux_mm::MappingFlags::WRITE)
-                .or(rux_mm::MappingFlags::USER);
-            super::map_user_pages(old_page, new_page, flags);
+            if new_page > old_page {
+                let flags = rux_mm::MappingFlags::READ
+                    .or(rux_mm::MappingFlags::WRITE)
+                    .or(rux_mm::MappingFlags::USER);
+                super::map_user_pages(old_page, new_page, flags);
+            }
             super::PROCESS.program_brk = addr;
         }
         super::PROCESS.program_brk as isize

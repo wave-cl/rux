@@ -8,8 +8,8 @@ pub const MAX_BUDDY_ORDER: u8 = 11;
 pub const BUDDY_LEVELS: usize = MAX_BUDDY_ORDER as usize + 1;
 
 /// Maximum physical frames tracked.
-/// Default: 16384 frames = 64 MiB. Production kernels can increase this.
-pub const MAX_FRAMES: usize = 16384;
+/// 32768 frames = 128 MiB. x86_64 needs >64 MiB for shared library loading.
+pub const MAX_FRAMES: usize = 32768;
 
 /// Page cache size (pcplist equivalent). Order-0 alloc/dealloc goes
 /// through this cache, bypassing the buddy bitmap entirely.
