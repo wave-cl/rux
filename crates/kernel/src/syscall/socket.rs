@@ -49,27 +49,54 @@ pub fn sys_socket(domain: usize, stype: usize, protocol: usize) -> isize {
     if st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
 
     unsafe {
-        for i in 0..MAX_SOCKETS {
-            if !SOCKETS[i].active {
-                SOCKETS[i] = SocketSlot::empty();
-                SOCKETS[i].active = true;
-                SOCKETS[i].family = domain as u32;
-                SOCKETS[i].sock_type = st;
-                SOCKETS[i].protocol = protocol as u32;
-                // Return socket "fd" as 100 + index (above normal FD range)
-                return (100 + i) as isize;
-            }
-        }
+        // Find free socket slot
+        let sock_idx = match (0..MAX_SOCKETS).find(|&i| !SOCKETS[i].active) {
+            Some(i) => i,
+            None => return crate::errno::ENOMEM,
+        };
+
+        // Allocate from the normal FD table
+        let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+        let fd = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
+            .find(|&f| !fd_table[f].active)
+        {
+            Some(f) => f,
+            None => return crate::errno::ENOMEM,
+        };
+
+        SOCKETS[sock_idx] = SocketSlot::empty();
+        SOCKETS[sock_idx].active = true;
+        SOCKETS[sock_idx].family = domain as u32;
+        SOCKETS[sock_idx].sock_type = st;
+        SOCKETS[sock_idx].protocol = protocol as u32;
+
+        fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
+        fd_table[fd].active = true;
+        fd_table[fd].is_socket = true;
+        fd_table[fd].socket_idx = sock_idx as u8;
+
+        fd as isize
     }
-    crate::errno::ENOMEM
+}
+
+/// Resolve a socket FD to a socket index.
+unsafe fn resolve_socket(fd: usize) -> Option<usize> {
+    if fd >= rux_fs::fdtable::MAX_FDS { return None; }
+    let entry = &(*rux_fs::fdtable::FD_TABLE)[fd];
+    if entry.active && entry.is_socket {
+        let idx = entry.socket_idx as usize;
+        if idx < MAX_SOCKETS && SOCKETS[idx].active { return Some(idx); }
+    }
+    None
 }
 
 /// bind(fd, addr, addrlen) — bind to a local port
 pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
-    let idx = fd.wrapping_sub(100);
-    if idx >= MAX_SOCKETS { return crate::errno::EBADF; }
+    let idx = match unsafe { resolve_socket(fd) } {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
     unsafe {
-        if !SOCKETS[idx].active { return crate::errno::EBADF; }
         // Parse sockaddr_in: family(2) + port(2) + ip(4) + pad(8)
         let port = u16::from_be_bytes([
             *(addr_ptr as *const u8).add(2),
@@ -83,10 +110,11 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
 /// sendto(fd, buf, len, flags, dest_addr, addrlen) — send a packet
 #[cfg(target_arch = "aarch64")]
 pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr: usize, _addrlen: usize) -> isize {
-    let idx = fd.wrapping_sub(100);
-    if idx >= MAX_SOCKETS { return crate::errno::EBADF; }
+    let idx = match unsafe { resolve_socket(fd) } {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
     unsafe {
-        if !SOCKETS[idx].active { return crate::errno::EBADF; }
 
         // Parse destination sockaddr_in
         let dst_port = u16::from_be_bytes([
@@ -128,10 +156,11 @@ pub fn sys_sendto(_fd: usize, _buf_ptr: usize, _len: usize, _flags: usize, _addr
 
 /// recvfrom(fd, buf, len, flags, src_addr, addrlen) — receive a packet
 pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
-    let idx = fd.wrapping_sub(100);
-    if idx >= MAX_SOCKETS { return crate::errno::EBADF; }
+    let idx = match unsafe { resolve_socket(fd) } {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
     unsafe {
-        if !SOCKETS[idx].active { return crate::errno::EBADF; }
 
         // Poll until a packet arrives (with timeout)
         for _ in 0..10_000_000u32 {
@@ -170,19 +199,36 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
     }
 }
 
-/// close a socket
+/// close a socket FD — only deactivates the FD entry.
+/// The socket slot stays active until no FDs reference it.
 pub fn sys_close_socket(fd: usize) -> isize {
-    let idx = fd.wrapping_sub(100);
-    if idx >= MAX_SOCKETS { return crate::errno::EBADF; }
     unsafe {
-        SOCKETS[idx].active = false;
+        if fd >= rux_fs::fdtable::MAX_FDS { return crate::errno::EBADF; }
+        let entry = &(*rux_fs::fdtable::FD_TABLE)[fd];
+        if !entry.active || !entry.is_socket { return crate::errno::EBADF; }
+        let sock_idx = entry.socket_idx as usize;
+
+        (*rux_fs::fdtable::FD_TABLE)[fd] = rux_fs::fdtable::EMPTY_FD;
+
+        // Check if any other FD still references this socket
+        let still_referenced = (0..rux_fs::fdtable::MAX_FDS).any(|f| {
+            let e = &(*rux_fs::fdtable::FD_TABLE)[f];
+            e.active && e.is_socket && e.socket_idx as usize == sock_idx
+        });
+        if !still_referenced && sock_idx < MAX_SOCKETS {
+            SOCKETS[sock_idx].active = false;
+        }
     }
     0
 }
 
-/// Check if an fd is a socket (>= 100)
+/// Check if an fd is a socket
 pub fn is_socket(fd: usize) -> bool {
-    fd >= 100 && fd < 100 + MAX_SOCKETS
+    unsafe {
+        if fd >= rux_fs::fdtable::MAX_FDS { return false; }
+        let entry = &(*rux_fs::fdtable::FD_TABLE)[fd];
+        entry.active && entry.is_socket
+    }
 }
 
 /// Deliver an incoming UDP packet to the matching socket.
