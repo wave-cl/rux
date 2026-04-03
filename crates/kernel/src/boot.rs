@@ -19,6 +19,10 @@ pub struct BootParams {
     pub procfs: &'static mut rux_fs::procfs::ProcFs,
     /// Console write function for log messages.
     pub log: fn(&str),
+    /// Kernel command line (from multiboot or device tree), or empty.
+    pub cmdline: &'static [u8],
+    /// virtio-mmio base address for block device probe, or 0.
+    pub virtio_mmio_base: usize,
 }
 
 /// Boot the kernel: init ramfs, unpack cpio, mount procfs, exec /sbin/init.
@@ -57,11 +61,19 @@ pub unsafe fn boot(params: BootParams) -> ! {
         log("rux: no initrd found!\n");
     }
 
-    // Wrap ramfs in VFS
+    // Parse kernel command line
+    let cmdparams = crate::cmdline::parse(params.cmdline);
+
+    // Wrap ramfs in VFS (ramfs is always slot 0 initially)
     let vfs_addr = (ramfs_ptr as usize + fs_bytes + 0xFFF) & !0xFFF;
     let vfs_ptr = vfs_addr as *mut rux_fs::vfs::Vfs;
     core::ptr::write_bytes(vfs_ptr as *mut u8, 0, core::mem::size_of::<rux_fs::vfs::Vfs>());
     rux_fs::vfs::Vfs::init_at(vfs_ptr, ramfs_ptr);
+
+    // Probe for ext2 root disk if cmdline says root= or a virtio device exists
+    let has_disk_root = try_mount_ext2_root(
+        vfs_ptr, alloc_ptr, &cmdparams, params.virtio_mmio_base, log,
+    );
 
     // Mount procfs at /proc and devfs at /dev
     {
@@ -82,13 +94,129 @@ pub unsafe fn boot(params: BootParams) -> ! {
     { use rux_mm::FrameAllocator; crate::cow::init((*alloc_ptr).alloc_base()); }
     log("rux: kernel state initialized\n");
 
-    // Exec /sbin/init
+    // Exec /sbin/init (or custom init= from cmdline)
     let vfs = &mut *vfs_ptr;
-    log("rux: exec /sbin/init\n");
+    let init_path: &[u8] = if cmdparams.init_len > 0 {
+        &cmdparams.init[..cmdparams.init_len]
+    } else {
+        b"/sbin/init"
+    };
+    log("rux: exec ");
+    crate::arch::Arch::write_bytes(init_path);
+    log("\n");
     rux_proc::execargs::set(b"/bin/sh", b"");
-    let init_ino = rux_fs::path::resolve_path(vfs, b"/sbin/init").expect("/sbin/init not found");
+    let init_ino = rux_fs::path::resolve_path(vfs, init_path).expect("init not found");
     let alloc = &mut *alloc_ptr;
     crate::elf::load_elf_from_inode(init_ino as u64, alloc);
+}
+
+// ── ext2 root mount ──────────────────────────────────────────────────────
+
+/// Static storage for the ext2 filesystem and virtio-blk driver.
+/// Must live for the kernel's lifetime (boot-time allocation not possible).
+static mut EXT2_FS: core::mem::MaybeUninit<rux_fs::ext2::Ext2Fs> = core::mem::MaybeUninit::uninit();
+static mut VIRTIO_BLK: core::mem::MaybeUninit<rux_drivers::virtio::blk::VirtioBlk> = core::mem::MaybeUninit::uninit();
+
+/// Try to probe a virtio-blk device and mount ext2 as the root filesystem.
+/// Replaces VFS slot 0 (ramfs) with ext2 if successful. The ramfs remains
+/// allocated but unused. Returns true if ext2 root was mounted.
+unsafe fn try_mount_ext2_root(
+    vfs_ptr: *mut rux_fs::vfs::Vfs,
+    alloc_ptr: *mut rux_mm::frame::BuddyAllocator,
+    cmdparams: &crate::cmdline::CmdlineParams,
+    virtio_mmio_base: usize,
+    log: fn(&str),
+) -> bool {
+    // Only attempt if the virtio MMIO region is mapped (aarch64: always, x86_64: not yet)
+    if virtio_mmio_base == 0 { return false; }
+
+    // Probe for a virtio-blk device on the MMIO bus
+    let base = rux_drivers::virtio::blk::probe_virtio_blk();
+
+    let base = match base {
+        Some(b) => b,
+        None => {
+            log("rux: no virtio-blk device found\n");
+            return false;
+        }
+    };
+
+    log("rux: virtio-blk: probing at 0x");
+    { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, base)); }
+    log("\n");
+
+    // Allocate 2 pages for virtqueue
+    use rux_mm::FrameAllocator;
+    let alloc = &mut *alloc_ptr;
+    let vq_page1 = match alloc.alloc(rux_mm::PageSize::FourK) {
+        Ok(p) => p,
+        Err(_) => { log("rux: virtio-blk: no memory for virtqueue\n"); return false; }
+    };
+    let vq_page2 = match alloc.alloc(rux_mm::PageSize::FourK) {
+        Ok(p) => p,
+        Err(_) => { log("rux: virtio-blk: no memory for virtqueue\n"); return false; }
+    };
+    // Zero the pages
+    core::ptr::write_bytes(vq_page1.as_usize() as *mut u8, 0, 4096);
+    core::ptr::write_bytes(vq_page2.as_usize() as *mut u8, 0, 4096);
+
+    // Debug: print device info
+    {
+        let mmio = rux_drivers::virtio::mmio::VirtioMmio::new(base);
+        log("rux: virtio-blk: magic=0x");
+        { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, mmio.magic() as usize)); }
+        log(" ver=");
+        { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, mmio.version())); }
+        log(" devid=");
+        { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, mmio.device_id())); }
+        log("\n");
+    }
+
+    // Initialize virtio-blk
+    let blk = match rux_drivers::virtio::blk::VirtioBlk::new(base, vq_page1.as_usize()) {
+        Ok(b) => b,
+        Err(e) => {
+            log("rux: virtio-blk: init failed (");
+            log(match e {
+                rux_drivers::DriverError::ProbeFailure => "probe",
+                rux_drivers::DriverError::Unsupported => "unsupported",
+                rux_drivers::DriverError::ResourceBusy => "busy",
+                rux_drivers::DriverError::IoError => "io",
+                rux_drivers::DriverError::Timeout => "timeout",
+                rux_drivers::DriverError::InvalidState => "state",
+            });
+            log(")\n");
+            return false;
+        }
+    };
+
+    let sectors = blk.capacity_sectors();
+    log("rux: virtio-blk: ");
+    { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, (sectors / 2048) as u32)); }
+    log(" MB disk\n");
+
+    // Store in static
+    VIRTIO_BLK.write(blk);
+    let blk_ptr = VIRTIO_BLK.assume_init_ref() as *const rux_drivers::virtio::blk::VirtioBlk;
+
+    // Mount ext2
+    let ext2 = match rux_fs::ext2::Ext2Fs::mount(blk_ptr as *const dyn rux_drivers::BlockDevice) {
+        Ok(fs) => fs,
+        Err(_) => { log("rux: ext2: mount failed (bad superblock?)\n"); return false; }
+    };
+
+    log("rux: ext2: mounted as root (block_size=");
+    { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, ext2.block_size)); }
+    log(")\n");
+
+    EXT2_FS.write(ext2);
+    let ext2_ptr = EXT2_FS.assume_init_mut() as *mut rux_fs::ext2::Ext2Fs;
+
+    // Replace VFS root (slot 0) with ext2
+    let vfs = &mut *vfs_ptr;
+    vfs.set_root(rux_fs::vfs::MountedFs::Ext2(ext2_ptr));
+
+    true
 }
 
 // ── Native test harness init ──────────────────────────────────────────

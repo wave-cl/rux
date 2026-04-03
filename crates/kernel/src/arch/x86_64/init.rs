@@ -409,11 +409,11 @@ pub fn x86_64_init(multiboot_info: usize) {
             // The init code itself is in .text, so its address gives a lower bound.
             // Use the known layout: .text < .rodata < .data, all page-aligned by linker.
             let text_start = 0x101000usize;
-            let text_end_page = 0x122000usize;   // page-aligned start of .rodata
+            let text_end_page = 0x125000usize;   // page-aligned start of .rodata
             // Only protect pages that are ENTIRELY within .rodata.
             // The last page of .rodata may share with .data/.got/.relro,
             // so stop one page before .data to avoid write-protecting mutable data.
-            let rodata_end_page = 0x126000usize;  // conservative: exclude last page before .data
+            let rodata_end_page = 0x12a000usize;  // page-aligned end of .rodata (start of .data)
 
             // .text → RX
             {
@@ -544,6 +544,8 @@ pub fn x86_64_init(multiboot_info: usize) {
             initrd: initrd_info,
             procfs: &mut *(&raw mut PROCFS),
             log: console::write_str,
+            cmdline: b"",     // TODO: parse multiboot command line
+            virtio_mmio_base: 0, // x86_64 virtio-mmio not yet mapped
         });
     }
 }

@@ -106,5 +106,8 @@ unsafe impl super::KernelMapOps for Aarch64 {
             .expect("gic map");
         pt.identity_map_range(PhysAddr::new(0x09000000), 0x1000, dev_flags, alloc)
             .expect("uart map");
+        // virtio-mmio region (for ext2 root disk access from any page table)
+        pt.identity_map_range(PhysAddr::new(0x0a000000), 0x10000, dev_flags, alloc)
+            .expect("virtio-mmio map");
     }
 }

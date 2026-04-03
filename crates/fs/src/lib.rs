@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod ramfs;
+pub mod ext2;
 pub mod path;
 pub mod fdtable;
 pub mod cpio;

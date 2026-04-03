@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 rux-klib = { path = "../klib" }
 rux-mm = { path = "../mm" }
+rux-drivers = { path = "../drivers" }
 
 [features]
 alloc = []

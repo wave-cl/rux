@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod virtio;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DeviceType {

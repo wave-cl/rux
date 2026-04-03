@@ -113,6 +113,11 @@ pub fn aarch64_init(dtb_addr: usize) {
         kpt.identity_map_range(
             rux_klib::PhysAddr::new(0x09000000), 0x1000, dev_flags, alloc,
         ).expect("uart map");
+        // virtio-mmio region: 32 devices × 0x200 bytes each at 0x0a000000
+        // Map full 64KB to ensure all device slots are covered
+        kpt.identity_map_range(
+            rux_klib::PhysAddr::new(0x0a000000), 0x10000, dev_flags, alloc,
+        ).expect("virtio-mmio map");
 
         super::paging::activate(&kpt);
         pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
@@ -217,6 +222,8 @@ pub fn aarch64_init(dtb_addr: usize) {
             initrd,
             procfs: &mut *(&raw mut PROCFS),
             log: console::write_str,
+            cmdline: b"",      // TODO: parse DTB bootargs
+            virtio_mmio_base: 0x0a000000, // QEMU virt machine virtio-mmio base
         });
     }
 }

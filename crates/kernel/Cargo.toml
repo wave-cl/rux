@@ -16,3 +16,4 @@ rux-proc = { path = "../proc" }
 rux-fs = { path = "../fs" }
 rux-elf = { path = "../elf" }
 rux-ipc = { path = "../ipc" }
+rux-drivers = { path = "../drivers" }

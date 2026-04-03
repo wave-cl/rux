@@ -28,6 +28,7 @@ pub const MAX_MOUNTS: usize = 8;
 /// A mounted filesystem — enum to avoid trait objects in no_std.
 pub enum MountedFs {
     Ram(*mut crate::ramfs::RamFs),
+    Ext2(*mut crate::ext2::Ext2Fs),
     Proc(*mut crate::procfs::ProcFs),
     Dev(*mut crate::devfs::DevFs),
     None,
@@ -73,6 +74,13 @@ impl Vfs {
         // Mount 0 = root filesystem
         vfs.mounts[0].fs = MountedFs::Ram(root_fs);
         vfs.mounts[0].active = true;
+    }
+
+    /// Replace the root filesystem (mount slot 0).
+    /// Used to switch from initial ramfs to a real root (e.g., ext2).
+    pub fn set_root(&mut self, fs: MountedFs) {
+        self.mounts[0].fs = fs;
+        self.mounts[0].active = true;
     }
 
     /// Mount a filesystem at a directory. The directory must exist in
@@ -121,6 +129,7 @@ impl Vfs {
         if !entry.active { return Err(VfsError::NoDevice); }
         match &entry.fs {
             MountedFs::Ram(ptr) => Ok(unsafe { &**ptr }),
+            MountedFs::Ext2(ptr) => Ok(unsafe { &**ptr }),
             MountedFs::Proc(ptr) => Ok(unsafe { &**ptr }),
             MountedFs::Dev(ptr) => Ok(unsafe { &**ptr }),
             MountedFs::None => Err(VfsError::NoDevice),
@@ -132,6 +141,7 @@ impl Vfs {
         if !entry.active { return Err(VfsError::NoDevice); }
         match &mut entry.fs {
             MountedFs::Ram(ptr) => Ok(unsafe { &mut **ptr }),
+            MountedFs::Ext2(ptr) => Ok(unsafe { &mut **ptr }),
             MountedFs::Proc(ptr) => Ok(unsafe { &mut **ptr }),
             MountedFs::Dev(ptr) => Ok(unsafe { &mut **ptr }),
             MountedFs::None => Err(VfsError::NoDevice),
