@@ -477,11 +477,13 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[110] = Syscall::Getppid;   t[231] = Syscall::ExitGroup;
     // Directory / path ops
     t[79] = Syscall::Getcwd;     t[80] = Syscall::Chdir;
-    t[82] = Syscall::Rename;     t[264] = Syscall::Rename;
+    t[82] = Syscall::Rename;     t[264] = Syscall::Renameat;
     t[83] = Syscall::Mkdir;      t[86] = Syscall::Link;
     t[265] = Syscall::Linkat;    t[87] = Syscall::Unlink;
-    t[88] = Syscall::Symlink;    t[266] = Syscall::Symlink;
-    t[89] = Syscall::Readlink;   t[267] = Syscall::Readlink;
+    t[88] = Syscall::Symlink;    t[266] = Syscall::Symlinkat;
+    t[89] = Syscall::Readlink;   t[267] = Syscall::Readlinkat;
+    t[258] = Syscall::Mkdirat;   t[263] = Syscall::Unlinkat;
+    t[260] = Syscall::Fchownat;  t[268] = Syscall::Fchmodat;
     t[257] = Syscall::OpenAt;    t[262] = Syscall::FstatAt;
     t[269] = Syscall::Faccessat; t[280] = Syscall::Utimensat;
     // Permissions
