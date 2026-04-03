@@ -329,10 +329,23 @@ pub fn x86_64_init(multiboot_info: usize) {
             let _ = kpt.unmap_4k(rux_klib::VirtAddr::new(0));
             console::write_str("rux: page 0 unmapped (null guard)\n");
 
-            // Kernel stack guard pages: deferred until KSTACK_SIZE is increased.
-            // With 16KB stacks and 4KB guard, only 12KB is usable. The dynamic
-            // linking exec path (load ELF + ld.so + page tables) exceeds 12KB.
-            // Need KSTACK_SIZE >= 24KB for guard pages to be safe.
+            // Guard pages at bottom of each kernel stack (catches overflow).
+            // KSTACKS is page-aligned; each 32KB stack starts on a page boundary.
+            // Unmapping the bottom page gives 28KB usable per stack.
+            for i in 0..crate::task_table::MAX_PROCS {
+                let stack_bottom = crate::task_table::KSTACKS.0[i].as_ptr() as usize;
+                let guard_page = stack_bottom & !0xFFF;
+                // Split the 2MB page containing this guard if not already split
+                let huge_base = guard_page & !0x1FFFFF;
+                if huge_base != 0 { // page at 0 already split above
+                    let _ = kpt.split_huge_page(
+                        rux_klib::VirtAddr::new(huge_base),
+                        rux_mm::PageLevel::L1, alloc,
+                    );
+                }
+                let _ = kpt.unmap_4k(rux_klib::VirtAddr::new(guard_page));
+            }
+            console::write_str("rux: kernel stack guard pages active\n");
         }
     }
 

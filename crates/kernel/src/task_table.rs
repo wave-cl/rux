@@ -117,8 +117,9 @@ pub static mut TASK_TABLE: [TaskSlot; MAX_PROCS] = {
     [EMPTY; MAX_PROCS]
 };
 
-/// Kernel stack size per task.
-pub const KSTACK_SIZE: usize = 16384; // 16KB per task
+/// Kernel stack size per task. 32KB allows 28KB usable with a 4KB guard page.
+/// The dynamic linking exec path (load ELF + ld.so + page tables) needs >12KB.
+pub const KSTACK_SIZE: usize = 32768; // 32KB per task
 
 /// Per-task kernel stacks. KSTACK_SIZE is 16384 (4 pages), so each
 /// stack is naturally page-aligned within the array when the array
