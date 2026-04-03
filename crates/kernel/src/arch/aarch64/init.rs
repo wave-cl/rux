@@ -61,8 +61,11 @@ pub fn aarch64_init(dtb_addr: usize) {
         rux_arch::cpu::set_cpu_features(features);
         if features.has(ATOMICS) { console::write_str("rux: LSE atomics detected\n"); }
         if features.has(PAN) {
-            crate::uaccess::enable_smap_guards();
-            console::write_str("rux: PAN enabled\n");
+            // PAN detected but enforcement deferred: not all kernel user-memory
+            // accesses are wrapped in user_access_begin/end yet. Enabling PAN
+            // would cause data aborts on unwrapped accesses (e.g., exec stack
+            // setup, signal frame writes). Full PAN audit needed first.
+            console::write_str("rux: PAN detected (enforcement deferred)\n");
         }
     }
 

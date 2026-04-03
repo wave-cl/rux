@@ -155,8 +155,15 @@ pub fn x86_64_init(multiboot_info: usize) {
         if features.has(FSGSBASE) { cr4 |= 1 << 16; console::write_str("rux: FSGSBASE enabled\n"); }
         if features.has(UMIP) { cr4 |= 1 << 11; console::write_str("rux: UMIP enabled\n"); }
         if features.has(SMAP) {
-            cr4 |= 1 << 21;
-            console::write_str("rux: SMAP enabled\n");
+            if super::syscall::GS_PERCPU_ACTIVE {
+                // KVM: enable SMAP (real stac/clac + pushfq/popfq both work)
+                cr4 |= 1 << 21;
+                console::write_str("rux: SMAP enabled (KVM)\n");
+            } else {
+                // TCG: SMAP detected but not all kernel user-memory accesses are
+                // wrapped in stac/clac yet. Enable guards for future enforcement.
+                console::write_str("rux: SMAP detected (TCG: enforcement deferred)\n");
+            }
         }
         // Must set CR4 before enabling stac/clac guards
 

@@ -21,7 +21,7 @@ rust-objcopy --output-target=elf32-i386 ${KERNEL} ${KERNEL}.elf32
 
 # Run
 exec ${QEMU} \
-  -cpu Haswell -smp 2 \
+  -cpu max -smp 2 \
   -kernel ${KERNEL}.elf32 \
   -initrd ${INITRD} \
   -serial mon:stdio \

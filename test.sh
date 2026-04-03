@@ -114,7 +114,7 @@ cat /proc/$$/stat | cut -d" " -f5
 exit
 CMDS
 } | \
-    "$QEMU_X86" -cpu Haswell -smp 2 \
+    "$QEMU_X86" -cpu max -smp 2 \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -initrd initramfs/initramfs_x86_64.cpio \
     -chardev stdio,id=char0,logfile=/tmp/rux_serial_x86_64.log \
@@ -286,7 +286,7 @@ cat /proc/$$/stat | cut -d" " -f5
 exit
 CMDS
 } | \
-    "$QEMU_AA64" -machine virt -cpu cortex-a72 -smp 2 \
+    "$QEMU_AA64" -machine virt -cpu max -smp 2 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -device loader,file=initramfs/initramfs_aarch64.cpio,addr=0x45000000,force-raw=on \
     -chardev stdio,id=char0,logfile=/tmp/rux_serial_aarch64.log \
