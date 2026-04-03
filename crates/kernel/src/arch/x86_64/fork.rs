@@ -32,19 +32,22 @@ unsafe impl rux_arch::ForkOps for super::X86_64 {
         // CURRENT_KSTACK_TOP points to the top; the SYSCALL entry pushed
         // 15 values below it: rcx, r11, rbx, rbp, r12, r13, r14, r15,
         // rax, rdi, rsi, rdx, r10, r8, r9
-        let parent_top = super::syscall::CURRENT_KSTACK_TOP as *const u64;
+        let kstack_val = super::syscall::CURRENT_KSTACK_TOP;
 
         // Push syscall frame so fork_child_sysret can pop it correctly.
         // fork_child_sysret pops: r9, r8, r10, rdx, rsi, rdi, rax, r15..rbx, r11, rcx
         // Stack grows DOWN; pops go UP.
         for i in 1..=15u64 {
             sp -= w;
-            let val = *parent_top.sub(i as usize);
+            // Use read_volatile to avoid Rust nightly's pointer precondition
+            // checks that can panic when the binary layout changes.
+            let src = (kstack_val as usize - i as usize * w) as *const u64;
+            let val = core::ptr::read_volatile(src);
             if i == 9 {
                 // rax slot (sub(9)): set to 0 for child fork return value
-                *(sp as *mut u64) = 0;
+                core::ptr::write_volatile(sp as *mut u64, 0);
             } else {
-                *(sp as *mut u64) = val;
+                core::ptr::write_volatile(sp as *mut u64, val);
             }
         }
 

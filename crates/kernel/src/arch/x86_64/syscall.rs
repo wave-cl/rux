@@ -8,7 +8,9 @@ use super::console;
 
 /// Kernel stack for syscall entry. For multi-process, each task will have
 /// its own stack in KSTACKS; CURRENT_KSTACK_TOP selects which is active.
-static mut SYSCALL_STACK: [u8; 65536] = [0; 65536];
+#[repr(C, align(16))]
+struct AlignedStack([u8; 65536]);
+static mut SYSCALL_STACK: AlignedStack = AlignedStack([0; 65536]);
 
 /// Points to the top of the current task's kernel stack.
 /// Used by SignalOps and VforkContext to access the saved register frame.
@@ -17,7 +19,7 @@ pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
 /// Get the top address of the default SYSCALL_STACK.
 pub fn syscall_stack_top() -> u64 {
-    (&raw const SYSCALL_STACK) as *const u8 as u64 + 65536
+    unsafe { (&raw const SYSCALL_STACK).cast::<u8>() as u64 + 65536 }
 }
 
 /// Saved user RSP during syscall (single-process, no swapgs needed).
@@ -363,9 +365,9 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         blocked_mask: u64, restorer: usize, signum: u8,
     ) {
         // Read saved RCX (user RIP) and R11 (RFLAGS) from kernel stack
-        let stack_top = CURRENT_KSTACK_TOP as *const u64;
-        let saved_rip = *stack_top.sub(1);
-        let saved_rflags = *stack_top.sub(2);
+        let kt = CURRENT_KSTACK_TOP as usize;
+        let saved_rip = core::ptr::read_volatile((kt - 8) as *const u64);
+        let saved_rflags = core::ptr::read_volatile((kt - 16) as *const u64);
 
         let frame = frame_addr as *mut SignalFrameX86;
         (*frame).restorer = restorer as u64;
@@ -379,9 +381,9 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
-        let stack_top_mut = CURRENT_KSTACK_TOP as *mut u64;
-        *stack_top_mut.sub(1) = handler as u64;   // RCX = handler address → RIP via sysretq
-        *stack_top_mut.sub(10) = signum as u64;    // RDI = signum (1st arg to handler)
+        let kt = CURRENT_KSTACK_TOP as usize;
+        core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);   // RCX → RIP
+        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);   // RDI = signum
     }
 
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
@@ -398,9 +400,9 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         SAVED_USER_RSP = orig_user_sp;
 
         // Restore RCX (user RIP) and R11 (RFLAGS) on kernel stack
-        let stack_top_mut = CURRENT_KSTACK_TOP as *mut u64;
-        *stack_top_mut.sub(1) = saved_rip;
-        *stack_top_mut.sub(2) = saved_rflags;
+        let kt = CURRENT_KSTACK_TOP as usize;
+        core::ptr::write_volatile((kt - 8) as *mut u64, saved_rip);
+        core::ptr::write_volatile((kt - 16) as *mut u64, saved_rflags);
 
         (saved_rax as i64, saved_mask)
     }
@@ -639,9 +641,9 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
     const CHILD_STACK_VA: usize = 0x7FFE_0000;
 
     unsafe fn save_regs() {
-        let stack_top = CURRENT_KSTACK_TOP as *const u64;
+        let kt = CURRENT_KSTACK_TOP as usize;
         for i in 0..15 {
-            VFORK_PARENT_REGS[i] = *stack_top.sub(i + 1);
+            VFORK_PARENT_REGS[i] = core::ptr::read_volatile((kt - (i + 1) * 8) as *const u64);
         }
     }
 
@@ -684,15 +686,15 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
 
     unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> ! {
         // Write saved regs back to kernel stack
-        let stack_top = CURRENT_KSTACK_TOP as *mut u64;
+        let kt = CURRENT_KSTACK_TOP as usize;
         for i in 0..15 {
-            *stack_top.sub(i + 1) = VFORK_PARENT_REGS[i];
+            core::ptr::write_volatile((kt - (i + 1) * 8) as *mut u64, VFORK_PARENT_REGS[i]);
         }
         // Override RAX slot with child PID (return value)
-        *stack_top.sub(9) = return_val as u64; // index 8 = RAX slot
+        core::ptr::write_volatile((kt - 9 * 8) as *mut u64, return_val as u64);
         SAVED_USER_RSP = user_sp as u64;
 
-        let pop_rsp = stack_top.sub(15) as u64;
+        let pop_rsp = (kt - 15 * 8) as u64;
         core::arch::asm!(
             "mov rsp, {rsp}",
             "pop r9", "pop r8", "pop r10", "pop rdx", "pop rsi", "pop rdi", "pop rax",
