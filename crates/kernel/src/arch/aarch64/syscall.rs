@@ -259,6 +259,7 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     // Additional
     t[278] = Syscall::Getrandom; t[114] = Syscall::ClockGetres;
     t[24] = Syscall::Dup3;       t[156] = Syscall::Sysctl;
+    t[32] = Syscall::Flock;
     // Sockets
     t[198] = Syscall::Socket;    t[200] = Syscall::Bind;
     t[203] = Syscall::Connect;   t[206] = Syscall::Sendto;

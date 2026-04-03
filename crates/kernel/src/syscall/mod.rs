@@ -164,7 +164,7 @@ pub enum Syscall {
     Socket, Bind, Sendto, Recvfrom, Setsockopt, Getsockopt, Connect,
     Getsockname, Getpeername, Sendmsg, Recvmsg, Shutdown, Sendmmsg, Recvmmsg,
     // Additional syscalls for musl/Alpine
-    Getrandom, ClockGetres, Dup3, Sysctl,
+    Getrandom, ClockGetres, Dup3, Sysctl, Flock,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -334,6 +334,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::ClockGetres => 0, // stub — musl queries but doesn't need real value
         Syscall::Dup3 => posix::dup3(a0, a1, a2),
         Syscall::Sysctl => 0, // stub — OpenRC queries kernel params
+        Syscall::Flock => 0, // stub — single-process, locking is a no-op
 
         Syscall::Rseq => crate::errno::ENOSYS,
 

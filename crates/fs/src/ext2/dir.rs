@@ -84,12 +84,11 @@ pub(crate) unsafe fn readdir(
     let size = raw.size as usize;
     let bs = fs.block_size as usize;
 
-    if offset >= size {
-        return Ok(false);
-    }
-
+    // offset is a sequential index (0, 1, 2...), not a byte offset.
+    // Walk from byte 0 and skip `offset` valid entries to find the one we want.
     let mut buf = [0u8; 4096];
-    let mut pos = offset;
+    let mut pos = 0usize;
+    let mut idx = 0usize;
 
     while pos < size {
         let file_block = (pos / bs) as u32;
@@ -108,12 +107,15 @@ pub(crate) unsafe fn readdir(
         if rec_len == 0 { return Ok(false); }
 
         if d_ino != 0 && name_len > 0 {
-            entry.ino = d_ino as InodeId;
-            entry.kind = file_type_to_inode_type(file_type);
-            entry.name_len = name_len.min(255) as u8;
-            entry.name[..entry.name_len as usize]
-                .copy_from_slice(&buf[off + 8..off + 8 + entry.name_len as usize]);
-            return Ok(true);
+            if idx == offset {
+                entry.ino = d_ino as InodeId;
+                entry.kind = file_type_to_inode_type(file_type);
+                entry.name_len = name_len.min(255) as u8;
+                entry.name[..entry.name_len as usize]
+                    .copy_from_slice(&buf[off + 8..off + 8 + entry.name_len as usize]);
+                return Ok(true);
+            }
+            idx += 1;
         }
 
         pos += rec_len;

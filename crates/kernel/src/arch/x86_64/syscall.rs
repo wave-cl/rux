@@ -453,6 +453,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     // Additional
     t[318] = Syscall::Getrandom; t[229] = Syscall::ClockGetres;
     t[292] = Syscall::Dup3;      t[156] = Syscall::Sysctl;
+    t[73] = Syscall::Flock;
     // Sockets
     t[41] = Syscall::Socket;     t[42] = Syscall::Connect;
     t[44] = Syscall::Sendto;     t[45] = Syscall::Recvfrom;

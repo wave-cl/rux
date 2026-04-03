@@ -49,19 +49,29 @@ const PID_STAT_BASE: InodeId = 1000;
 const PID_CMDLINE_BASE: InodeId = 2000;
 const PID_STATM_BASE: InodeId = 3000;
 const PID_STATUS_BASE: InodeId = 4000;
+const PID_EXE_BASE: InodeId = 5000;    // /proc/[pid]/exe symlink
+const PID_MAPS_BASE: InodeId = 6000;   // /proc/[pid]/maps
+const PID_FD_DIR_BASE: InodeId = 7000; // /proc/[pid]/fd directory
 
-const PID_SUBENTRIES: [(&[u8], InodeId); 4] = [
+const PID_SUBENTRIES: [(&[u8], InodeId); 7] = [
     (b"stat", PID_STAT_BASE),
     (b"cmdline", PID_CMDLINE_BASE),
     (b"statm", PID_STATM_BASE),
     (b"status", PID_STATUS_BASE),
+    (b"exe", PID_EXE_BASE),
+    (b"maps", PID_MAPS_BASE),
+    (b"fd", PID_FD_DIR_BASE),
 ];
 
 fn is_pid_dir(ino: InodeId) -> bool { ino >= PID_DIR_BASE && ino < PID_STAT_BASE }
-fn is_pid_file(ino: InodeId) -> bool { ino >= PID_STAT_BASE }
+fn is_pid_fd_dir(ino: InodeId) -> bool { ino >= PID_FD_DIR_BASE && ino < PID_FD_DIR_BASE + 100 }
+fn is_pid_exe(ino: InodeId) -> bool { ino >= PID_EXE_BASE && ino < PID_MAPS_BASE }
+fn is_pid_file(ino: InodeId) -> bool { ino >= PID_STAT_BASE && !is_pid_fd_dir(ino) }
 fn pid_from_dir(ino: InodeId) -> u64 { ino - PID_DIR_BASE }
 fn pid_from_file(ino: InodeId) -> u64 {
-    if ino >= PID_STATUS_BASE { ino - PID_STATUS_BASE }
+    if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE { ino - PID_MAPS_BASE }
+    else if ino >= PID_EXE_BASE { ino - PID_EXE_BASE }
+    else if ino >= PID_STATUS_BASE { ino - PID_STATUS_BASE }
     else if ino >= PID_STATM_BASE { ino - PID_STATM_BASE }
     else if ino >= PID_CMDLINE_BASE { ino - PID_CMDLINE_BASE }
     else { ino - PID_STAT_BASE }
@@ -83,9 +93,9 @@ impl ProcFs {
         Self { get_ticks, get_total_frames, get_free_frames }
     }
 
-    /// Check if a PID exists (for now: only PID 1).
+    /// Check if a PID exists. Accept PIDs 1..64 (single-user stub).
     fn pid_exists(&self, pid: u64) -> bool {
-        pid == 1
+        pid >= 1 && pid < 64
     }
 
     /// Generate content for a virtual file into a buffer.
@@ -136,10 +146,14 @@ impl ProcFs {
                 buf[0] = b'\n';
                 1
             }
+            _ if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE => {
+                // /proc/[pid]/maps — stub empty file
+                0
+            }
             _ if is_pid_file(ino) => {
                 let pid = pid_from_file(ino);
                 if !self.pid_exists(pid) { return 0; }
-                if ino >= PID_STATUS_BASE {
+                if ino >= PID_STATUS_BASE && ino < PID_EXE_BASE {
                     self.gen_pid_status(pid, buf)
                 } else if ino >= PID_STATM_BASE {
                     self.gen_pid_statm(buf)
@@ -242,13 +256,32 @@ impl FileSystem for ProcFs {
             return Ok(());
         }
 
-        if ino == INO_ROOT || is_pid_dir(ino) {
-            let pid = if is_pid_dir(ino) { pid_from_dir(ino) } else { 0 };
-            if is_pid_dir(ino) && !self.pid_exists(pid) {
+        // /proc/[pid]/exe — symlink to executable
+        if is_pid_exe(ino) {
+            buf.mode = crate::S_IFLNK | 0o777;
+            buf.nlink = 1;
+            buf.size = 7; // "/bin/sh"
+            return Ok(());
+        }
+
+        // Directories: /proc, /proc/[pid], /proc/[pid]/fd
+        if ino == INO_ROOT || is_pid_dir(ino) || is_pid_fd_dir(ino) {
+            let pid = if is_pid_dir(ino) { pid_from_dir(ino) }
+                     else if is_pid_fd_dir(ino) { ino - PID_FD_DIR_BASE }
+                     else { 0 };
+            if (is_pid_dir(ino) || is_pid_fd_dir(ino)) && !self.pid_exists(pid) {
                 return Err(VfsError::NotFound);
             }
             buf.mode = S_IFDIR | 0o555;
             buf.nlink = 2;
+            return Ok(());
+        }
+
+        // /proc/[pid]/fd/N — symlinks
+        if ino >= 10000 {
+            buf.mode = crate::S_IFLNK | 0o777;
+            buf.nlink = 1;
+            buf.size = 12; // "/dev/console"
             return Ok(());
         }
 
@@ -311,6 +344,18 @@ impl FileSystem for ProcFs {
             return Err(VfsError::NotFound);
         }
 
+        // /proc/[pid]/fd/N — each FD is a symlink
+        if is_pid_fd_dir(dir) {
+            if let Some(fd_num) = parse_u64(name_bytes) {
+                if fd_num < 64 {
+                    // Use a high inode range for fd symlinks: 10000 + pid*64 + fd
+                    let pid = dir - PID_FD_DIR_BASE;
+                    return Ok(10000 + pid * 64 + fd_num);
+                }
+            }
+            return Err(VfsError::NotFound);
+        }
+
         Err(VfsError::NotADirectory)
     }
 
@@ -343,9 +388,23 @@ impl FileSystem for ProcFs {
             if offset >= PID_SUBENTRIES.len() { return Ok(false); }
             let (name, base) = PID_SUBENTRIES[offset];
             buf.ino = base + pid;
-            buf.kind = InodeType::File;
+            buf.kind = if base == PID_EXE_BASE { InodeType::Symlink }
+                       else if base == PID_FD_DIR_BASE { InodeType::Directory }
+                       else { InodeType::File };
             buf.name_len = name.len() as u8;
             buf.name[..name.len()].copy_from_slice(name);
+            return Ok(true);
+        }
+
+        // /proc/[pid]/fd — list open FDs (0, 1, 2 always)
+        if is_pid_fd_dir(dir) {
+            if offset >= 3 { return Ok(false); } // just 0, 1, 2
+            let pid = dir - PID_FD_DIR_BASE;
+            let fd_num = offset as u64;
+            buf.ino = 10000 + pid * 64 + fd_num;
+            buf.kind = InodeType::Symlink;
+            buf.name_len = 1;
+            buf.name[0] = b'0' + offset as u8;
             return Ok(true);
         }
 
@@ -364,6 +423,23 @@ impl FileSystem for ProcFs {
         if ino == INO_SELF && !buf.is_empty() {
             buf[0] = b'1';
             return Ok(1);
+        }
+        // /proc/[pid]/exe → path to executable
+        if is_pid_exe(ino) {
+            let s = b"/bin/sh";
+            let len = s.len().min(buf.len());
+            buf[..len].copy_from_slice(&s[..len]);
+            return Ok(len);
+        }
+        // /proc/[pid]/fd/N → /dev/console (or similar)
+        if ino >= 10000 {
+            let fd = ino % 64;
+            if fd <= 2 {
+                let s = b"/dev/console";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                return Ok(len);
+            }
         }
         Err(VfsError::NotSupported)
     }

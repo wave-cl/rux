@@ -90,6 +90,18 @@ CONF
     sed -i '' 's|^root:.*|root:::0:::::|' "$STAGING/etc/shadow" 2>/dev/null || \
     sed -i 's|^root:.*|root:::0:::::|' "$STAGING/etc/shadow"
 
+    # APK repository configuration
+    mkdir -p "$STAGING/etc/apk"
+    cat > "$STAGING/etc/apk/repositories" << CONF
+https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main
+https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community
+CONF
+
+    # APK needs these directories
+    mkdir -p "$STAGING/var/lib/apk"
+    mkdir -p "$STAGING/var/cache/apk"
+    mkdir -p "$STAGING/tmp"
+
     # Disable services that need features we don't have yet
     for svc in hwclock modules sysctl bootmisc hostname networking; do
         rm -f "$STAGING/etc/runlevels/boot/$svc" 2>/dev/null

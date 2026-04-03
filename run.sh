@@ -14,17 +14,21 @@ INITRD="initramfs/initramfs_x86_64.cpio"
 [ -f "${INITRD}" ] || bash initramfs/build.sh
 
 # Build with nightly toolchain
-rustup run nightly cargo build -p rux-kernel --target ${TARGET}
+FEATURES="${FEATURES:-net}"
+rustup run nightly cargo build -p rux-kernel --target ${TARGET} --features "${FEATURES}"
 
 # Convert to 32-bit ELF for QEMU multiboot
 rust-objcopy --output-target=elf32-i386 ${KERNEL} ${KERNEL}.elf32
 
 # Optional ext2 root disk
 DISK_ARGS=""
-ROOTFS="rootfs/rootfs_x86_64.img"
+ROOTFS="${ROOTFS:-rootfs/rootfs_x86_64.img}"
 if [ -f "${ROOTFS}" ]; then
   DISK_ARGS="-drive file=${ROOTFS},format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0"
 fi
+
+# Networking (virtio-net PCI) — QEMU user-mode NAT
+NET_ARGS="-netdev user,id=net0 -device virtio-net-pci,netdev=net0"
 
 # Run
 exec ${QEMU} \
@@ -32,6 +36,7 @@ exec ${QEMU} \
   -kernel ${KERNEL}.elf32 \
   -initrd ${INITRD} \
   ${DISK_ARGS} \
+  ${NET_ARGS} \
   -serial mon:stdio \
   -display none \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
