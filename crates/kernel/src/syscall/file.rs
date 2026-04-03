@@ -298,7 +298,15 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
                 }
             }
         }
-        4 => 0,  // F_SETFL
+        4 => {
+            // F_SETFL — store the flags (O_NONBLOCK, O_APPEND, etc.)
+            unsafe {
+                if fd < 64 && (*fdt::FD_TABLE)[fd].active {
+                    (*fdt::FD_TABLE)[fd].flags = arg as u32;
+                }
+            }
+            0
+        }
         _ => 0,
     }
 }

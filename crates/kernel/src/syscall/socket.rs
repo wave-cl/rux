@@ -253,7 +253,10 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
         #[cfg(feature = "net")]
         if SOCKETS[idx].sock_type == SOCK_STREAM && SOCKETS[idx].tcp_conn >= 0 {
             let ci = SOCKETS[idx].tcp_conn as usize;
-            for _ in 0..10_000_000u32 {
+            let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & 0x800) != 0; // O_NONBLOCK = 0x800
+
+            let max_iters = if nonblock { 100u32 } else { 10_000_000u32 };
+            for _ in 0..max_iters {
                 rux_net::stack::poll();
                 let conn = rux_net::tcp::get_conn(ci);
                 let avail = conn.rx_available();
@@ -266,6 +269,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
                     return n as isize;
                 }
                 if conn.fin_received { return 0; } // EOF
+                if nonblock { return crate::errno::EAGAIN; }
                 core::hint::spin_loop();
             }
             return crate::errno::EAGAIN;
