@@ -108,7 +108,7 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
 }
 
 /// sendto(fd, buf, len, flags, dest_addr, addrlen) — send a packet
-#[cfg(target_arch = "aarch64")]
+
 pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     let idx = match unsafe { resolve_socket(fd) } {
         Some(i) => i,
@@ -133,25 +133,23 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
         let mut kbuf = [0u8; 1400];
         core::ptr::copy_nonoverlapping(buf_ptr as *const u8, kbuf.as_mut_ptr(), send_len);
 
-        let sock = &SOCKETS[idx];
-        if sock.sock_type == SOCK_RAW && sock.protocol == IPPROTO_ICMP {
-            // Raw ICMP: kbuf is the ICMP payload, wrap in IP
-            rux_net::stack::send_ip(dst_ip, rux_net::ipv4::PROTO_ICMP, &kbuf[..send_len]);
-        } else if sock.sock_type == SOCK_DGRAM {
-            // UDP
-            let mut udp_buf = [0u8; 1408];
-            let src_port = if sock.bound_port != 0 { sock.bound_port } else { 49152 + (idx as u16) };
-            let udp_len = rux_net::udp::build(&mut udp_buf, src_port, dst_port, &kbuf[..send_len]);
-            rux_net::stack::send_ip(dst_ip, rux_net::ipv4::PROTO_UDP, &udp_buf[..udp_len]);
+        #[cfg(feature = "net")]
+        {
+            let sock = &SOCKETS[idx];
+            if sock.sock_type == SOCK_RAW && sock.protocol == IPPROTO_ICMP {
+                rux_net::stack::send_ip(dst_ip, rux_net::ipv4::PROTO_ICMP, &kbuf[..send_len]);
+            } else if sock.sock_type == SOCK_DGRAM {
+                let mut udp_buf = [0u8; 1408];
+                let src_port = if sock.bound_port != 0 { sock.bound_port } else { 49152 + (idx as u16) };
+                let udp_len = rux_net::udp::build(&mut udp_buf, src_port, dst_port, &kbuf[..send_len]);
+                rux_net::stack::send_ip(dst_ip, rux_net::ipv4::PROTO_UDP, &udp_buf[..udp_len]);
+            }
         }
+        #[cfg(not(feature = "net"))]
+        { let _ = (dst_ip, dst_port, &kbuf); return crate::errno::ENETUNREACH; }
 
         send_len as isize
     }
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-pub fn sys_sendto(_fd: usize, _buf_ptr: usize, _len: usize, _flags: usize, _addr_ptr: usize, _addrlen: usize) -> isize {
-    crate::errno::ENETUNREACH
 }
 
 /// recvfrom(fd, buf, len, flags, src_addr, addrlen) — receive a packet
@@ -164,7 +162,8 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
 
         // Poll until a packet arrives (with timeout)
         for _ in 0..10_000_000u32 {
-            #[cfg(target_arch = "aarch64")]
+            
+            #[cfg(feature = "net")]
             rux_net::stack::poll();
 
             if SOCKETS[idx].rx_ready {
@@ -232,7 +231,7 @@ pub fn is_socket(fd: usize) -> bool {
 }
 
 /// Deliver an incoming UDP packet to the matching socket.
-#[cfg(target_arch = "aarch64")]
+
 pub unsafe fn deliver_udp(src_ip: [u8; 4], src_port: u16, dst_port: u16, data: &[u8]) {
     for sock in SOCKETS.iter_mut() {
         if sock.active && sock.sock_type == SOCK_DGRAM && sock.bound_port == dst_port {
@@ -248,7 +247,7 @@ pub unsafe fn deliver_udp(src_ip: [u8; 4], src_port: u16, dst_port: u16, data: &
 }
 
 /// Deliver an incoming ICMP packet to a raw socket.
-#[cfg(target_arch = "aarch64")]
+
 pub unsafe fn deliver_icmp(src_ip: [u8; 4], data: &[u8]) {
     for sock in SOCKETS.iter_mut() {
         if sock.active && sock.sock_type == SOCK_RAW && sock.protocol == IPPROTO_ICMP {

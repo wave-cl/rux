@@ -99,10 +99,14 @@ impl VirtioPci {
     // ── Device-specific config ─────────────────────────────────────
 
     /// Read virtio-blk capacity (sectors) from device config.
-    /// Config offset 0 = capacity (u64 LE).
     pub unsafe fn blk_capacity(&self) -> u64 {
         let lo = self.inl(DEVICE_CONFIG) as u64;
         let hi = self.inl(DEVICE_CONFIG + 4) as u64;
         lo | (hi << 32)
+    }
+
+    /// Read a single byte from device-specific config space.
+    pub unsafe fn inb_config(&self, offset: u16) -> u8 {
+        self.inb(DEVICE_CONFIG + offset)
     }
 }

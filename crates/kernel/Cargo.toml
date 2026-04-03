@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 native = []
+net = ["rux-net"]
 
 [dependencies]
 rux-klib = { path = "../klib" }
@@ -18,5 +19,4 @@ rux-elf = { path = "../elf" }
 rux-ipc = { path = "../ipc" }
 rux-drivers = { path = "../drivers" }
 
-[target.'cfg(target_arch = "aarch64")'.dependencies]
-rux-net = { path = "../net" }
+rux-net = { path = "../net", optional = true }

@@ -2,10 +2,24 @@
 
 use super::{eth, arp, ipv4, icmp, udp};
 
-/// Callback to deliver packets to the kernel socket layer.
-/// Set by the kernel during init.
+/// Function pointers for the network driver (set during init).
+static mut NET_SEND: Option<unsafe fn(&[u8]) -> bool> = None;
+static mut NET_RECV: Option<unsafe fn(&mut [u8]) -> Option<usize>> = None;
+
+/// Callbacks to deliver packets to the kernel socket layer.
 static mut DELIVER_UDP: Option<unsafe fn([u8; 4], u16, u16, &[u8])> = None;
 static mut DELIVER_ICMP: Option<unsafe fn([u8; 4], &[u8])> = None;
+
+/// Register network driver send/recv functions.
+pub fn set_driver(
+    send_fn: unsafe fn(&[u8]) -> bool,
+    recv_fn: unsafe fn(&mut [u8]) -> Option<usize>,
+) {
+    unsafe {
+        NET_SEND = Some(send_fn);
+        NET_RECV = Some(recv_fn);
+    }
+}
 
 /// Register socket delivery callbacks.
 pub fn set_callbacks(
@@ -15,6 +29,22 @@ pub fn set_callbacks(
     unsafe {
         DELIVER_UDP = Some(udp_cb);
         DELIVER_ICMP = Some(icmp_cb);
+    }
+}
+
+/// Send a raw ethernet frame via the registered driver.
+unsafe fn driver_send(frame: &[u8]) -> bool {
+    match NET_SEND {
+        Some(f) => f(frame),
+        None => false,
+    }
+}
+
+/// Receive a raw ethernet frame via the registered driver.
+unsafe fn driver_recv(buf: &mut [u8]) -> Option<usize> {
+    match NET_RECV {
+        Some(f) => f(buf),
+        None => None,
     }
 }
 
@@ -43,6 +73,7 @@ pub fn configure(ip: [u8; 4], gateway: [u8; 4], netmask: [u8; 4], mac: [u8; 6]) 
     }
 }
 
+pub fn is_configured() -> bool { unsafe { NET_SEND.is_some() } }
 pub fn our_ip() -> [u8; 4] { unsafe { CONFIG.ip } }
 pub fn our_mac() -> [u8; 6] { unsafe { CONFIG.mac } }
 pub fn gateway() -> [u8; 4] { unsafe { CONFIG.gateway } }
@@ -112,13 +143,13 @@ pub unsafe fn send_ip(dst_ip: [u8; 4], protocol: u8, payload: &[u8]) -> bool {
         None => {
             // Send ARP request and wait briefly for reply
             let (req_frame, req_len) = arp::send_request(next_hop, our_ip, &our_mac);
-            rux_drivers::virtio::net::send(&req_frame[..req_len]);
+            driver_send(&req_frame[..req_len]);
             // Poll for ARP reply (up to ~100ms)
             let mut rx_buf = [0u8; 1514];
             for _ in 0..100_000 {
-                if let Some(n) = rux_drivers::virtio::net::recv(&mut rx_buf) {
+                if let Some(n) = driver_recv(&mut rx_buf) {
                     if let Some((resp, rlen)) = process_frame(&rx_buf[..n]) {
-                        rux_drivers::virtio::net::send(&resp[..rlen]);
+                        driver_send(&resp[..rlen]);
                     }
                 }
                 if let Some(m) = arp::lookup(next_hop) {
@@ -146,7 +177,7 @@ unsafe fn send_ip_with_mac(
 
     let mut frame = [0u8; 1514];
     let frame_len = eth::build(&mut frame, dst_mac, src_mac, eth::ETH_P_IP, &ip_pkt[..ip_len]);
-    rux_drivers::virtio::net::send(&frame[..frame_len])
+    driver_send(&frame[..frame_len])
 }
 
 fn same_subnet(a: [u8; 4], b: [u8; 4], mask: [u8; 4]) -> bool {
@@ -159,9 +190,9 @@ fn same_subnet(a: [u8; 4], b: [u8; 4], mask: [u8; 4]) -> bool {
 /// Poll for incoming packets and process them. Call periodically.
 pub unsafe fn poll() {
     let mut buf = [0u8; 1514];
-    while let Some(n) = rux_drivers::virtio::net::recv(&mut buf) {
+    while let Some(n) = driver_recv(&mut buf) {
         if let Some((resp, rlen)) = process_frame(&buf[..n]) {
-            rux_drivers::virtio::net::send(&resp[..rlen]);
+            driver_send(&resp[..rlen]);
         }
     }
 }

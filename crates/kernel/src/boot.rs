@@ -75,32 +75,27 @@ pub unsafe fn boot(params: BootParams) -> ! {
         vfs_ptr, alloc_ptr, &cmdparams, params.virtio_mmio_base, log,
     );
 
-    // Probe for virtio-net device (aarch64 only for now)
-    #[cfg(target_arch = "aarch64")]
+    // Probe for virtio-net device
+    #[cfg(all(target_arch = "aarch64", feature = "net"))]
     {
         use rux_mm::FrameAllocator;
         let alloc = &mut *alloc_ptr;
         if let Some(net_base) = rux_drivers::virtio::net::probe_mmio() {
-            let rx_pg = alloc.alloc_order(1).ok(); // 2 pages = 8KB
+            let rx_pg = alloc.alloc_order(1).ok();
             let tx_pg = alloc.alloc_order(1).ok();
             if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
                 core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 8192);
                 core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 8192);
                 if rux_drivers::virtio::net::init_mmio(net_base, rx.as_usize(), tx.as_usize()) {
                     let mac = rux_drivers::virtio::net::mac();
-                    rux_net::stack::configure(
-                        [10, 0, 2, 15],   // default QEMU user-mode IP
-                        [10, 0, 2, 2],    // QEMU gateway
-                        [255, 255, 255, 0],
-                        mac,
+                    rux_net::stack::set_driver(
+                        |frame| rux_drivers::virtio::net::send(frame),
+                        |buf| rux_drivers::virtio::net::recv(buf),
                     );
+                    rux_net::stack::configure([10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0], mac);
                     rux_net::stack::set_callbacks(
-                        |src_ip, src_port, dst_port, data| {
-                            crate::syscall::socket::deliver_udp(src_ip, src_port, dst_port, data);
-                        },
-                        |src_ip, data| {
-                            crate::syscall::socket::deliver_icmp(src_ip, data);
-                        },
+                        |s, sp, dp, d| crate::syscall::socket::deliver_udp(s, sp, dp, d),
+                        |s, d| crate::syscall::socket::deliver_icmp(s, d),
                     );
                     log("rux: virtio-net: MAC=");
                     let mut hb = [0u8; 3];

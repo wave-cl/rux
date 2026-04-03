@@ -13,3 +13,5 @@ pub mod net;
 pub mod pci;
 #[cfg(target_arch = "x86_64")]
 pub mod blk_pci;
+#[cfg(target_arch = "x86_64")]
+pub mod net_pci;
