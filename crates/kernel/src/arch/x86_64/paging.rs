@@ -62,6 +62,10 @@ impl ArchPaging for X86Paging {
 
     fn huge_page_flags() -> u64 { pte::HUGE | pte::GLOBAL }
 
+    fn supports_1g_pages() -> bool {
+        rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::GBPAGES)
+    }
+
     fn cow_bit() -> u64 { pte::COW }
 }
 

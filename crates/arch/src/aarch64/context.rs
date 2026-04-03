@@ -64,6 +64,17 @@ pub struct PageFaultInfo {
     pub el: u8,
 }
 
+#[derive(Clone, Copy)]
+#[repr(C, align(16))]
+pub struct FpuState {
+    pub vregs: [u128; 32],
+    pub fpcr: u64,
+    pub fpsr: u64,
+}
+impl FpuState {
+    pub const fn new() -> Self { Self { vregs: [0u128; 32], fpcr: 0, fpsr: 0 } }
+}
+
 /// Save the current interrupt state and disable IRQs.
 /// Returns true if IRQs were enabled before disabling.
 #[cfg(target_arch = "aarch64")]

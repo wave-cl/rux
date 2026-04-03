@@ -205,6 +205,36 @@ impl<A: ArchPaging> PageTable4Level<A> {
         }
     }
 
+    /// Map a single 1GB huge page: virt → phys.
+    ///
+    /// Writes a huge PTE at L2 (PDPT level). Both addresses must be 1GB-aligned.
+    pub fn map_1g(
+        &mut self,
+        virt: VirtAddr,
+        phys: PhysAddr,
+        flags: MappingFlags,
+        alloc: &mut dyn FrameAllocator,
+    ) -> Result<(), MemoryError> {
+        if virt.as_usize() & 0x3FFFFFFF != 0 || phys.as_usize() & 0x3FFFFFFF != 0 {
+            return Err(MemoryError::MisalignedAddress);
+        }
+        let pte_flags = A::mapping_to_pte_flags(flags);
+
+        let l3_entry = self.ensure_table(self.root, virt, PageLevel::L3, alloc)?;
+        let l2_phys = A::Pte::phys_addr(l3_entry);
+
+        let idx = pt_index(virt, PageLevel::L2);
+        unsafe {
+            let page = l2_phys.as_usize() as *mut PageTablePage;
+            let existing = (*page).entries[idx];
+            if A::Pte::is_present(existing) {
+                return Err(MemoryError::AlreadyMapped);
+            }
+            (*page).entries[idx] = A::Pte::encode(phys, pte_flags | A::huge_page_flags());
+        }
+        Ok(())
+    }
+
     /// Map a single 2MB huge page: virt → phys.
     ///
     /// Writes a huge PTE at L1 (PD level). Both addresses must be 2MB-aligned.
@@ -236,7 +266,7 @@ impl<A: ArchPaging> PageTable4Level<A> {
         Ok(())
     }
 
-    /// Identity map a range using 2MB huge pages where possible, 4K for the rest.
+    /// Identity map a range using 1GB/2MB/4K pages where possible.
     pub fn identity_map_range_huge(
         &mut self,
         start: PhysAddr,
@@ -247,15 +277,42 @@ impl<A: ArchPaging> PageTable4Level<A> {
         let mut addr = start.as_usize() & !0xFFF;
         let end = (start.as_usize() + size + 0xFFF) & !0xFFF;
         const TWO_MB: usize = 2 * 1024 * 1024;
+        const ONE_GB: usize = 1024 * 1024 * 1024;
+        let use_1g = A::supports_1g_pages();
 
-        // Lead-in: 4K pages until 2MB-aligned
-        let aligned_start = (addr + TWO_MB - 1) & !( TWO_MB - 1);
-        while addr < aligned_start.min(end) {
+        // Lead-in: 4K pages until 2MB-aligned (or 1GB-aligned if using 1G)
+        let min_align = if use_1g { ONE_GB } else { TWO_MB };
+        let aligned_start = (addr + min_align - 1) & !(min_align - 1);
+
+        // 4K until first large-page boundary
+        let first_2m = (addr + TWO_MB - 1) & !(TWO_MB - 1);
+        while addr < first_2m.min(end) {
             let virt = VirtAddr::new(addr);
             if self.translate(virt).is_err() {
                 let _ = self.map_4k(virt, PhysAddr::new(addr), flags, alloc);
             }
             addr += 4096;
+        }
+
+        // 2MB pages until 1GB-aligned (if using 1G pages)
+        if use_1g {
+            let first_1g = (addr + ONE_GB - 1) & !(ONE_GB - 1);
+            while addr + TWO_MB <= first_1g.min(end) {
+                let virt = VirtAddr::new(addr);
+                if self.translate(virt).is_err() {
+                    let _ = self.map_2m(virt, PhysAddr::new(addr), flags, alloc);
+                }
+                addr += TWO_MB;
+            }
+
+            // Core: 1GB huge pages
+            while addr + ONE_GB <= end {
+                let virt = VirtAddr::new(addr);
+                if self.translate(virt).is_err() {
+                    let _ = self.map_1g(virt, PhysAddr::new(addr), flags, alloc);
+                }
+                addr += ONE_GB;
+            }
         }
 
         // Core: 2MB huge pages

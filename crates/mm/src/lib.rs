@@ -153,6 +153,9 @@ pub trait ArchPaging {
     /// aarch64: block descriptor flags (AF, shareability, memory type).
     fn huge_page_flags() -> u64;
 
+    /// Whether the architecture supports 1GB huge pages.
+    fn supports_1g_pages() -> bool { false }
+
     /// Software-defined COW bit in the PTE (arch-specific location).
     fn cow_bit() -> u64;
 }

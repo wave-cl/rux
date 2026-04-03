@@ -36,4 +36,62 @@ unsafe impl rux_arch::TaskSwitchOps for super::Aarch64 {
             options(nostack),
         );
     }
+
+    unsafe fn save_fpu(buf: *mut u8) {
+        core::arch::asm!(
+            "stp q0,  q1,  [{buf}]",
+            "stp q2,  q3,  [{buf}, #32]",
+            "stp q4,  q5,  [{buf}, #64]",
+            "stp q6,  q7,  [{buf}, #96]",
+            "stp q8,  q9,  [{buf}, #128]",
+            "stp q10, q11, [{buf}, #160]",
+            "stp q12, q13, [{buf}, #192]",
+            "stp q14, q15, [{buf}, #224]",
+            "stp q16, q17, [{buf}, #256]",
+            "stp q18, q19, [{buf}, #288]",
+            "stp q20, q21, [{buf}, #320]",
+            "stp q22, q23, [{buf}, #352]",
+            "stp q24, q25, [{buf}, #384]",
+            "stp q26, q27, [{buf}, #416]",
+            "stp q28, q29, [{buf}, #448]",
+            "stp q30, q31, [{buf}, #480]",
+            "mrs {tmp1}, fpcr",
+            "mrs {tmp2}, fpsr",
+            "str {tmp1}, [{buf}, #512]",
+            "str {tmp2}, [{buf}, #520]",
+            buf = in(reg) buf,
+            tmp1 = out(reg) _,
+            tmp2 = out(reg) _,
+            options(nostack),
+        );
+    }
+
+    unsafe fn restore_fpu(buf: *const u8) {
+        core::arch::asm!(
+            "ldp q0,  q1,  [{buf}]",
+            "ldp q2,  q3,  [{buf}, #32]",
+            "ldp q4,  q5,  [{buf}, #64]",
+            "ldp q6,  q7,  [{buf}, #96]",
+            "ldp q8,  q9,  [{buf}, #128]",
+            "ldp q10, q11, [{buf}, #160]",
+            "ldp q12, q13, [{buf}, #192]",
+            "ldp q14, q15, [{buf}, #224]",
+            "ldp q16, q17, [{buf}, #256]",
+            "ldp q18, q19, [{buf}, #288]",
+            "ldp q20, q21, [{buf}, #320]",
+            "ldp q22, q23, [{buf}, #352]",
+            "ldp q24, q25, [{buf}, #384]",
+            "ldp q26, q27, [{buf}, #416]",
+            "ldp q28, q29, [{buf}, #448]",
+            "ldp q30, q31, [{buf}, #480]",
+            "ldr {tmp1}, [{buf}, #512]",
+            "ldr {tmp2}, [{buf}, #520]",
+            "msr fpcr, {tmp1}",
+            "msr fpsr, {tmp2}",
+            buf = in(reg) buf,
+            tmp1 = out(reg) _,
+            tmp2 = out(reg) _,
+            options(nostack),
+        );
+    }
 }

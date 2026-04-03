@@ -70,6 +70,9 @@ unsafe fn init_child_slot(
     child.saved_user_sp = parent.saved_user_sp;
     child.tls = parent.tls;
 
+    // Copy parent's FPU/SIMD state
+    child.fpu_state = parent.fpu_state;
+
     // Set up child kernel stack
     child.kstack_top = KSTACKS[child_idx].as_ptr() as usize + KSTACK_SIZE;
     {

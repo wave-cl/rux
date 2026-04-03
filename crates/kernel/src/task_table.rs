@@ -75,6 +75,12 @@ pub struct TaskSlot {
     pub clone_flags: u32,       // CLONE_* flags used to create this task
     pub clear_child_tid: usize, // address to write 0 + futex wake on exit
     pub futex_addr: usize,      // address being waited on (WaitingForFutex)
+
+    // ── FPU/SIMD state ──────────────────────────────────────────────
+    #[cfg(target_arch = "x86_64")]
+    pub fpu_state: rux_arch::x86_64::context::FpuState,
+    #[cfg(target_arch = "aarch64")]
+    pub fpu_state: rux_arch::aarch64::context::FpuState,
 }
 
 impl TaskSlot {
@@ -96,6 +102,10 @@ impl TaskSlot {
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
             waiting_pipe_id: 0,
+            #[cfg(target_arch = "x86_64")]
+            fpu_state: rux_arch::x86_64::context::FpuState::new(),
+            #[cfg(target_arch = "aarch64")]
+            fpu_state: rux_arch::aarch64::context::FpuState::new(),
         }
     }
 }
@@ -280,6 +290,9 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     // Save hardware state (user SP, TLS)
     crate::arch::Arch::save_task_hw(&mut old.saved_user_sp, &mut old.tls);
 
+    // Save FPU/SIMD state
+    crate::arch::Arch::save_fpu(&mut old.fpu_state as *mut _ as *mut u8);
+
     // ── Load new slot → globals ──────────────────────────────────────
     let new = &(*tt_ptr)[new_idx];
     (*proc_ptr).program_brk = new.program_brk;
@@ -296,6 +309,9 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
 
     // Restore hardware state (user SP, TLS, kernel stack top)
     crate::arch::Arch::restore_task_hw(new.saved_user_sp, new.tls, new.kstack_top);
+
+    // Restore FPU/SIMD state
+    crate::arch::Arch::restore_fpu(&new.fpu_state as *const _ as *const u8);
 
     // Switch page table with ASID/PCID to avoid full TLB flush.
     if new.pt_root != 0 && new.pt_root != old.pt_root {

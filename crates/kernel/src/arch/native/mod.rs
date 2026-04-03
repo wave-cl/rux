@@ -211,6 +211,8 @@ unsafe impl rux_arch::TaskSwitchOps for NativeArch {
     #[inline(always)]
     unsafe fn restore_task_hw(_saved_user_sp: usize, _tls: u64, _kstack_top: usize) {}
     unsafe fn switch_page_table(_new_root: u64, _asid: u16) {}
+    unsafe fn save_fpu(_buf: *mut u8) {}
+    unsafe fn restore_fpu(_buf: *const u8) {}
 }
 
 // ── ForkOps ──────────────────────────────────────────────────────────

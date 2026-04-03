@@ -357,6 +357,12 @@ pub unsafe trait TaskSwitchOps {
 
     /// Switch page tables with ASID/PCID tagging to avoid full TLB flush.
     unsafe fn switch_page_table(new_root: u64, asid: u16);
+
+    /// Save the current FPU/SIMD state to the given buffer.
+    unsafe fn save_fpu(buf: *mut u8);
+
+    /// Restore FPU/SIMD state from the given buffer.
+    unsafe fn restore_fpu(buf: *const u8);
 }
 
 /// Process fork: arch-specific kernel stack setup and hardware state snapshot.

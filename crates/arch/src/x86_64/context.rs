@@ -62,6 +62,15 @@ pub struct PageFaultInfo {
     pub instruction_fetch: bool,
 }
 
+#[derive(Clone, Copy)]
+#[repr(C, align(64))]
+pub struct FpuState {
+    pub data: [u8; 512],
+}
+impl FpuState {
+    pub const fn new() -> Self { Self { data: [0u8; 512] } }
+}
+
 /// Save the current interrupt state and disable interrupts.
 /// Returns true if interrupts were enabled before disabling.
 #[inline(always)]

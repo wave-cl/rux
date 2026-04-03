@@ -15,6 +15,7 @@ pub const SMAP: u64          = 1 << 11;
 pub const X2APIC: u64        = 1 << 12;
 pub const SSE2: u64          = 1 << 13;
 pub const XSAVE: u64         = 1 << 14;
+pub const UMIP: u64          = 1 << 15;
 
 /// Parse CPUID leaf 1 ECX/EDX into CpuFeatures.
 #[inline]
@@ -30,15 +31,16 @@ pub const fn parse_cpuid_01(ecx: u32, edx: u32) -> CpuFeatures {
     CpuFeatures(f)
 }
 
-/// Parse CPUID leaf 7 subleaf 0 EBX into CpuFeatures.
+/// Parse CPUID leaf 7 subleaf 0 EBX+ECX into CpuFeatures.
 #[inline]
-pub const fn parse_cpuid_07(ebx: u32) -> CpuFeatures {
+pub const fn parse_cpuid_07(ebx: u32, ecx: u32) -> CpuFeatures {
     let mut f: u64 = 0;
     if ebx & (1 << 0) != 0 { f |= FSGSBASE; }
     if ebx & (1 << 3) != 0 { f |= BMI1; }
     if ebx & (1 << 7) != 0 { f |= SMEP; }
     if ebx & (1 << 8) != 0 { f |= BMI2; }
     if ebx & (1 << 20) != 0 { f |= SMAP; }
+    if ecx & (1 << 2) != 0 { f |= UMIP; }
     CpuFeatures(f)
 }
 

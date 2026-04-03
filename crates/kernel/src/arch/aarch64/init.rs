@@ -53,11 +53,17 @@ pub fn aarch64_init(dtb_addr: usize) {
         use rux_arch::aarch64::cpu::*;
         let isar0: u64;
         let pfr0: u64;
+        let mmfr1: u64;
         core::arch::asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0, options(nostack));
         core::arch::asm!("mrs {}, id_aa64pfr0_el1", out(reg) pfr0, options(nostack));
-        let features = parse_isar0(isar0).or(parse_pfr0(pfr0));
+        core::arch::asm!("mrs {}, id_aa64mmfr1_el1", out(reg) mmfr1, options(nostack));
+        let features = parse_isar0(isar0).or(parse_pfr0(pfr0)).or(parse_mmfr1(mmfr1));
         rux_arch::cpu::set_cpu_features(features);
         if features.has(ATOMICS) { console::write_str("rux: LSE atomics detected\n"); }
+        if features.has(PAN) {
+            crate::uaccess::enable_smap_guards();
+            console::write_str("rux: PAN enabled\n");
+        }
     }
 
     unsafe { super::exception::init(); }

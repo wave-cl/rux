@@ -66,14 +66,15 @@ unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
 
     // Leaf 7 subleaf 0: extended features
     let ebx7: u64;
+    let ecx7_out: u32;
     core::arch::asm!(
         "push rbx", "cpuid", "mov {out}, rbx", "pop rbx",
         out = out(reg) ebx7,
-        inout("eax") 7u32 => _, inout("ecx") 0u32 => _, lateout("edx") _,
+        inout("eax") 7u32 => _, inout("ecx") 0u32 => ecx7_out, lateout("edx") _,
         options(nostack)
     );
     let ebx7 = ebx7 as u32;
-    let f7 = parse_cpuid_07(ebx7);
+    let f7 = parse_cpuid_07(ebx7, ecx7_out);
 
     // Extended leaf 0x80000001: NX, GBPAGES
     let edx_ext1: u32;
@@ -151,6 +152,7 @@ pub fn x86_64_init(multiboot_info: usize) {
         if features.has(PCID)     { cr4 |= 1 << 17; console::write_str("rux: PCID enabled\n"); }
         if features.has(SMEP)     { cr4 |= 1 << 20; console::write_str("rux: SMEP enabled\n"); }
         if features.has(FSGSBASE) { cr4 |= 1 << 16; console::write_str("rux: FSGSBASE enabled\n"); }
+        if features.has(UMIP) { cr4 |= 1 << 11; console::write_str("rux: UMIP enabled\n"); }
         if features.has(SMAP) {
             // SMAP requires hardware support for stac/clac instructions.
             // QEMU TCG (software emulation) does not support SMAP — stac/clac

@@ -59,4 +59,12 @@ unsafe impl rux_arch::TaskSwitchOps for super::X86_64 {
             core::arch::asm!("mov cr3, {}", in(reg) new_root, options(nostack));
         }
     }
+
+    unsafe fn save_fpu(buf: *mut u8) {
+        core::arch::asm!("fxsave64 [{}]", in(reg) buf, options(nostack));
+    }
+
+    unsafe fn restore_fpu(buf: *const u8) {
+        core::arch::asm!("fxrstor64 [{}]", in(reg) buf, options(nostack));
+    }
 }
