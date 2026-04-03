@@ -156,6 +156,7 @@ pub unsafe fn tcp_alloc() -> Option<SocketHandle> {
     let tx_buf = tcp::SocketBuffer::new(tx_slice);
     let mut socket = tcp::Socket::new(rx_buf, tx_buf);
     socket.set_nagle_enabled(false);
+    socket.set_ack_delay(None); // Disable delayed ACKs — our tick counter may not advance between polls
 
     // Verify buffer capacity
     debug_assert!(socket.recv_capacity() == TCP_RX_BUF_SIZE);

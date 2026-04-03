@@ -269,8 +269,8 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
             if sock.sock_type == SOCK_STREAM {
                 let max_iters = if nonblock { 10u32 } else { 30_000u32 };
                 for iter in 0..max_iters {
+                    // Poll with interrupts disabled (we own smoltcp exclusively)
                     rux_net::poll(crate::arch::Arch::ticks());
-                    // Check if socket can receive
                     if rux_net::tcp_can_recv(handle) {
                         let mut kbuf = [0u8; 4096];
                         match rux_net::tcp_recv(handle, &mut kbuf[..len.min(4096)]) {
@@ -278,14 +278,13 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
                                 core::ptr::copy_nonoverlapping(kbuf.as_ptr(), buf_ptr as *mut u8, n);
                                 return n as isize;
                             }
-                            Ok(_) => return 0, // EOF
-                            Err(0) => return 0, // Finished
-                            Err(_) => return 0, // Error → EOF
+                            Ok(_) => return 0,
+                            Err(0) => return 0,
+                            Err(_) => return 0,
                         }
                     }
-                    // Check if connection is done (FIN received, no more data)
                     if !rux_net::tcp_is_active(handle) && !rux_net::tcp_can_recv(handle) {
-                        return 0; // EOF
+                        return 0;
                     }
                     if nonblock { return crate::errno::EAGAIN; }
                     use rux_arch::HaltOps;
