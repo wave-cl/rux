@@ -201,13 +201,16 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
 #[inline]
 fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
     use crate::syscall::Syscall;
-    SYSCALL_TABLE_AA64.get(nr).copied().unwrap_or(Syscall::Unknown(nr))
+    match SYSCALL_TABLE_AA64.get(nr).copied() {
+        Some(Syscall::Unknown(_)) | None => Syscall::Unknown(nr),
+        Some(sc) => sc,
+    }
 }
 
 /// Compile-time syscall number → Syscall enum table for aarch64 Linux.
 const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     use crate::syscall::Syscall;
-    let u = Syscall::Unknown(0);
+    let u = Syscall::Unknown(9999); // sentinel — overwritten for valid entries
     let mut t = [u; 294];
     // File I/O
     t[56] = Syscall::OpenAt;     t[57] = Syscall::Close;
@@ -260,6 +263,9 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[278] = Syscall::Getrandom; t[114] = Syscall::ClockGetres;
     t[24] = Syscall::Dup3;       t[156] = Syscall::Sysctl;
     t[32] = Syscall::Flock;
+    t[103] = Syscall::SetItimer;
+    t[72] = Syscall::Pselect6;
+    t[46] = Syscall::Flock; // ftruncate → stub as no-op (same as flock)
     // Sockets
     t[198] = Syscall::Socket;    t[200] = Syscall::Bind;
     t[203] = Syscall::Connect;   t[206] = Syscall::Sendto;

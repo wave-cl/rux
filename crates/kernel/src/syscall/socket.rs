@@ -223,9 +223,10 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
             let handle = to_handle(sock.smol_handle_raw);
 
             if sock.sock_type == SOCK_STREAM {
+                // Ensure connection is established before sending
+                rux_net::poll(crate::arch::Arch::ticks());
                 match rux_net::tcp_send(handle, &kbuf[..send_len]) {
                     Ok(n) => {
-                        // Drive egress
                         rux_net::poll(crate::arch::Arch::ticks());
                         return n as isize;
                     }
@@ -267,22 +268,24 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
 
             if sock.sock_type == SOCK_STREAM {
                 let max_iters = if nonblock { 10u32 } else { 30_000u32 };
-                for _ in 0..max_iters {
+                for iter in 0..max_iters {
                     rux_net::poll(crate::arch::Arch::ticks());
-                    let mut kbuf = [0u8; 4096];
-                    match rux_net::tcp_recv(handle, &mut kbuf[..len.min(4096)]) {
-                        Ok(n) if n > 0 => {
-                            core::ptr::copy_nonoverlapping(kbuf.as_ptr(), buf_ptr as *mut u8, n);
-                            return n as isize;
-                        }
-                        Ok(_) => return 0, // EOF
-                        Err(0) => return 0, // Finished (EOF signal)
-                        Err(_) => {
-                            // No data yet — check if connection closed
-                            if !rux_net::tcp_is_active(handle) && !rux_net::tcp_can_recv(handle) {
-                                return 0; // EOF
+                    // Check if socket can receive
+                    if rux_net::tcp_can_recv(handle) {
+                        let mut kbuf = [0u8; 4096];
+                        match rux_net::tcp_recv(handle, &mut kbuf[..len.min(4096)]) {
+                            Ok(n) if n > 0 => {
+                                core::ptr::copy_nonoverlapping(kbuf.as_ptr(), buf_ptr as *mut u8, n);
+                                return n as isize;
                             }
+                            Ok(_) => return 0, // EOF
+                            Err(0) => return 0, // Finished
+                            Err(_) => return 0, // Error → EOF
                         }
+                    }
+                    // Check if connection is done (FIN received, no more data)
+                    if !rux_net::tcp_is_active(handle) && !rux_net::tcp_can_recv(handle) {
+                        return 0; // EOF
                     }
                     if nonblock { return crate::errno::EAGAIN; }
                     use rux_arch::HaltOps;

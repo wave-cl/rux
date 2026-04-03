@@ -142,6 +142,82 @@ pub fn futex_wake(uaddr: usize, max_wake: usize) -> isize {
     }
 }
 
+/// pselect6(nfds, readfds, writefds, exceptfds, timeout, sigmask) — POSIX.1
+/// Minimal implementation: checks socket FDs for readiness.
+pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds_ptr: usize, timeout_ptr: usize) -> isize {
+    let nfds = nfds.min(64);
+
+    // Parse timeout
+    let timeout_ms = if timeout_ptr >= 0x10000 && timeout_ptr < 0x8000_0000_0000 {
+        unsafe {
+            let sec: u64 = crate::uaccess::get_user(timeout_ptr);
+            let nsec: u64 = crate::uaccess::get_user(timeout_ptr + 8);
+            let ms = sec * 1000 + nsec / 1_000_000;
+            if ms > 30_000 { 30_000 } else { ms as usize }
+        }
+    } else { 5_000 };
+
+    let read_set = if readfds_ptr != 0 { unsafe { *(readfds_ptr as *const u64) } } else { 0 };
+    let write_set = if writefds_ptr != 0 { unsafe { *(writefds_ptr as *const u64) } } else { 0 };
+
+    let has_sockets = unsafe {
+        (0..nfds).any(|fd| {
+            ((read_set | write_set) & (1u64 << fd)) != 0
+                && fd < 64
+                && super::socket::is_socket(fd)
+        })
+    };
+
+    let max_iters = if has_sockets && timeout_ms > 0 { timeout_ms.min(30_000) } else { 1 };
+
+    for _ in 0..max_iters {
+        #[cfg(feature = "net")]
+        if has_sockets {
+            unsafe {
+                use rux_arch::TimerOps;
+                rux_net::poll(crate::arch::Arch::ticks());
+            }
+        }
+
+        let mut ready = 0i32;
+        let mut out_read: u64 = 0;
+        let mut out_write: u64 = 0;
+
+        for fd in 0..nfds {
+            let bit = 1u64 << fd;
+            if read_set & bit != 0 {
+                if fd <= 2 || !super::socket::is_socket(fd) {
+                    // Console/file FDs are always ready
+                    out_read |= bit;
+                    ready += 1;
+                } else if super::socket::socket_has_data(fd) {
+                    out_read |= bit;
+                    ready += 1;
+                }
+            }
+            if write_set & bit != 0 {
+                if !super::socket::is_socket(fd) || super::socket::socket_can_write(fd) {
+                    out_write |= bit;
+                    ready += 1;
+                }
+            }
+        }
+
+        if ready > 0 {
+            if readfds_ptr != 0 { unsafe { *(readfds_ptr as *mut u64) = out_read; } }
+            if writefds_ptr != 0 { unsafe { *(writefds_ptr as *mut u64) = out_write; } }
+            return ready as isize;
+        }
+
+        unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
+    }
+
+    // Timeout: clear all sets
+    if readfds_ptr != 0 { unsafe { *(readfds_ptr as *mut u64) = 0; } }
+    if writefds_ptr != 0 { unsafe { *(writefds_ptr as *mut u64) = 0; } }
+    0
+}
+
 /// mprotect(addr, len, prot) — POSIX.1: change page protection.
 pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
     if addr & 0xFFF != 0 { return crate::errno::EINVAL; }
