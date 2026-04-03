@@ -161,6 +161,13 @@ pub unsafe fn boot(params: BootParams) -> ! {
     crate::kstate::init(vfs_ptr, alloc_ptr);
     crate::task_table::init_pid1();
     { use rux_mm::FrameAllocator; crate::cow::init((*alloc_ptr).alloc_base()); }
+    // Set CWD to VFS root (ext2 root if mounted, otherwise ramfs root)
+    {
+        use rux_fs::FileSystem;
+        let root_ino = (*vfs_ptr).root_inode();
+        crate::syscall::PROCESS.fs_ctx.cwd = root_ino;
+        crate::syscall::PROCESS.fs_ctx.root = root_ino;
+    }
     log("rux: kernel state initialized\n");
 
     // Exec /sbin/init (or custom init= from cmdline)
