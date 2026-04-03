@@ -164,6 +164,7 @@ pub trait FrameAllocator {
     fn alloc(&mut self, size: PageSize) -> Result<PhysAddr, MemoryError>;
     fn dealloc(&mut self, addr: PhysAddr, size: PageSize);
     fn available_frames(&self, size: PageSize) -> usize;
+    fn total_frames(&self) -> usize;
     /// Base physical address of the allocator's managed region.
     fn alloc_base(&self) -> PhysAddr;
 }

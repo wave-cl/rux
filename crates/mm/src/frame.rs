@@ -454,6 +454,10 @@ impl FrameAllocator for BuddyAllocator {
         self.free_frames as usize / (size.bytes() / 4096)
     }
 
+    fn total_frames(&self) -> usize {
+        self.total_frames as usize
+    }
+
     fn alloc_base(&self) -> PhysAddr {
         self.base
     }

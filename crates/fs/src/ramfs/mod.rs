@@ -1156,7 +1156,8 @@ mod tests {
             usize::MAX // unlimited for tests
         }
 
-        fn alloc_base(&self) -> PhysAddr {
+        fn total_frames(&self) -> usize { 16384 }
+    fn alloc_base(&self) -> PhysAddr {
             PhysAddr::new(0)
         }
     }

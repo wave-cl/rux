@@ -100,6 +100,10 @@ impl<'a> FrameAllocator for TrackingAllocator<'a> {
         self.inner.available_frames(size)
     }
 
+    fn total_frames(&self) -> usize {
+        self.inner.total_frames()
+    }
+
     fn alloc_base(&self) -> PhysAddr {
         self.inner.alloc_base()
     }

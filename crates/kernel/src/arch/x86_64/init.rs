@@ -309,7 +309,9 @@ pub fn x86_64_init(multiboot_info: usize) {
         };
         let alloc_size = region.size - (alloc_base - region.base.as_usize());
         let frames = (alloc_size / 4096) as u32;
-        let frames = frames.min(16384);
+        // Cap at identity-map range (128MB) or MAX_FRAMES, whichever is smaller.
+        let id_map_frames = ((0x8000000usize.saturating_sub(alloc_base)) / 4096) as u32;
+        let frames = frames.min(id_map_frames).min(rux_mm::frame::MAX_FRAMES as u32);
 
         console::write_str("rux: init allocator at ");
         { let mut __hb = [0u8; 16]; console::write_str("0x"); console::write_bytes(rux_klib::fmt::usize_to_hex(&mut __hb, alloc_base)); }
@@ -532,10 +534,11 @@ pub fn x86_64_init(multiboot_info: usize) {
         // Use computed addresses (above initrd) for allocator and ramfs
         static mut PROCFS: rux_fs::procfs::ProcFs = rux_fs::procfs::ProcFs::new(
             || super::pit::ticks(),
-            || 16384,
             || unsafe {
-                // Note: we can't capture alloc_addr in a static closure,
-                // so we read the allocator from the kstate module after init.
+                use rux_mm::FrameAllocator;
+                crate::kstate::alloc().total_frames()
+            },
+            || unsafe {
                 use rux_mm::FrameAllocator;
                 crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK)
             },

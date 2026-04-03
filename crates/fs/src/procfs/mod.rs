@@ -173,7 +173,7 @@ impl ProcFs {
     ///         itrealvalue starttime vsize rss rsslim ...
     fn gen_pid_stat(&self, pid: u64, buf: &mut [u8]) -> usize {
         let ticks = (self.get_ticks)();
-        let used_frames = (self.get_total_frames)() - (self.get_free_frames)();
+        let used_frames = (self.get_total_frames)().saturating_sub((self.get_free_frames)());
         let vsize = used_frames * 4096;
         let rss = used_frames;
         let mut pos = 0;
@@ -208,7 +208,7 @@ impl ProcFs {
     /// Generate /proc/[pid]/statm — memory in pages
     /// Format: size resident shared text lib data dt
     fn gen_pid_statm(&self, buf: &mut [u8]) -> usize {
-        let used = (self.get_total_frames)() - (self.get_free_frames)();
+        let used = (self.get_total_frames)().saturating_sub((self.get_free_frames)());
         let mut pos = 0;
         pos += fmt_u64(&mut buf[pos..], used as u64); // size
         buf[pos] = b' '; pos += 1;
@@ -223,7 +223,7 @@ impl ProcFs {
 
     /// Generate /proc/[pid]/status — human-readable
     fn gen_pid_status(&self, pid: u64, buf: &mut [u8]) -> usize {
-        let used_kb = ((self.get_total_frames)() - (self.get_free_frames)()) * 4;
+        let used_kb = (self.get_total_frames)().saturating_sub((self.get_free_frames)()) * 4;
         let mut pos = 0;
         pos += copy_str(&mut buf[pos..], b"Name:\tsh\n");
         pos += copy_str(&mut buf[pos..], b"State:\tS (sleeping)\n");
