@@ -245,16 +245,30 @@ pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
 pub fn nanosleep(req_ptr: usize) -> isize {
     if req_ptr == 0 { return crate::errno::EFAULT; }
     unsafe {
-        use rux_arch::HaltOps;
         let tv_sec: u64 = crate::uaccess::get_user(req_ptr);
         let tv_nsec: u64 = crate::uaccess::get_user(req_ptr + 8);
         let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
-        // Ensure timer is running for accurate sleep
-        use rux_arch::TimerControl;
-        Arch::start_timer();
-        let target = Arch::ticks() + ms;
-        while Arch::ticks() < target {
-            Arch::halt_until_interrupt();
+        if ms == 0 { return 0; }
+
+        use rux_arch::TimerOps;
+        let idx = crate::task_table::current_task_idx();
+        let deadline = Arch::ticks() + ms;
+
+        // Set sleep deadline and mark task as sleeping
+        crate::task_table::TASK_TABLE[idx].wake_at = deadline;
+        crate::task_table::TASK_TABLE[idx].state = crate::task_table::TaskState::Sleeping;
+
+        // Yield to scheduler — we'll be woken by the timer tick
+        // handler when wake_at is reached, or by a signal.
+        let sched = crate::scheduler::get();
+        sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
+        sched.schedule();
+
+        // Woke up — check why
+        let now = Arch::ticks();
+        if now < deadline {
+            // Woken early (by signal) — return EINTR
+            return crate::errno::EINTR;
         }
     }
     0

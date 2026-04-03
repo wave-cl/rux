@@ -396,7 +396,8 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             super::pit::tick();
             unsafe { super::pit::ack(); }
             unsafe {
-                // Network poll: deferred until rux-net is wired for x86_64
+                // Wake sleeping tasks whose deadlines have passed
+                crate::task_table::wake_sleepers();
 
                 let sched = crate::scheduler::get();
                 sched.tick(1_000_000);

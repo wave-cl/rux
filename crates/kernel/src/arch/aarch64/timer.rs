@@ -25,6 +25,9 @@ pub fn handle_tick() {
     unsafe {
         core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval, options(nostack));
 
+        // Wake sleeping tasks whose deadlines have passed
+        crate::task_table::wake_sleepers();
+
         #[cfg(feature = "net")]
         if rux_net::stack::is_configured() { rux_net::stack::poll(); }
 

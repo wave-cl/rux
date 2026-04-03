@@ -227,6 +227,21 @@ pub unsafe fn notify_parent_child_exit(child_ppid: u32, exit_status: i32) {
     }
 }
 
+/// Wake sleeping tasks whose deadlines have passed.
+/// Called from timer tick interrupt handler.
+pub unsafe fn wake_sleepers() {
+    use rux_arch::TimerOps;
+    let now = crate::arch::Arch::ticks();
+    for i in 0..MAX_PROCS {
+        let t = &mut TASK_TABLE[i];
+        if t.active && t.state == TaskState::Sleeping && t.wake_at > 0 && now >= t.wake_at {
+            t.wake_at = 0;
+            t.state = TaskState::Ready;
+            crate::scheduler::get().wake_task(i);
+        }
+    }
+}
+
 /// Initialize task slot 0 as PID 1 (init).
 /// Called from boot.rs after kstate::init().
 pub unsafe fn init_pid1() {
