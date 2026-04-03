@@ -126,6 +126,32 @@ INITSCRIPT
     dd if=/dev/zero of="$OUTPUT" bs=1M count=$IMG_SIZE_MB 2>/dev/null
     "$MKE2FS" -t ext2 -b 1024 -d "$STAGING" -L alpine-root "$OUTPUT" 2>/dev/null
 
+    # Fix file ownership: mke2fs -d preserves host UIDs (e.g., 501 on macOS).
+    # Patch all inodes to uid=0, gid=0 so the kernel can access everything.
+    echo "  Fixing file ownership..."
+    python3 -c "
+import struct, sys
+with open('$OUTPUT', 'r+b') as f:
+    f.seek(1024)
+    sb = f.read(1024)
+    log_bs = struct.unpack_from('<I', sb, 24)[0]
+    bs = 1024 << log_bs
+    ipg = struct.unpack_from('<I', sb, 40)[0]
+    ino_sz = struct.unpack_from('<H', sb, 88)[0]
+    n_ino = struct.unpack_from('<I', sb, 0)[0]
+    n_bg = (n_ino + ipg - 1) // ipg
+    for bg in range(n_bg):
+        f.seek(2 * bs + bg * 32)
+        bgd = f.read(32)
+        it_block = struct.unpack_from('<I', bgd, 8)[0]
+        for i in range(ipg):
+            off = it_block * bs + i * ino_sz
+            f.seek(off + 2)  # uid field at offset 2
+            f.write(struct.pack('<H', 0))
+            f.seek(off + 24) # gid field at offset 24
+            f.write(struct.pack('<H', 0))
+" 2>/dev/null
+
     local SIZE=$(wc -c < "$OUTPUT" | tr -d ' ')
     echo "  → $OUTPUT ($SIZE bytes)"
 
