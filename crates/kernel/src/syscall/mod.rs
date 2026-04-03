@@ -119,7 +119,6 @@ pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, i
     if path.first() == Some(&b'/') || dirfd == at_fdcwd {
         return resolve_with_cwd(path);
     }
-    // Relative path with dirfd: resolve relative to that directory
     if dirfd < 64 {
         if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
             let fs = crate::kstate::fs();
@@ -127,6 +126,31 @@ pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, i
         }
     }
     resolve_with_cwd(path)
+}
+
+/// Resolve (dirfd, path_ptr) to a parent inode + basename, handling *at semantics.
+pub unsafe fn resolve_parent_at(dirfd: usize, path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
+    let path = crate::uaccess::read_user_cstr(path_ptr);
+    let at_fdcwd = (-100i32) as usize;
+    if path.first() == Some(&b'/') || dirfd == at_fdcwd {
+        return resolve_parent_and_name(path_ptr);
+    }
+    // Relative path with dirfd
+    if dirfd < 64 {
+        if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
+            let fs = crate::kstate::fs();
+            if let Some(slash) = path.iter().rposition(|&b| b == b'/') {
+                let parent = rux_fs::path::resolve_path_at(fs, dir_ino, &path[..slash]).map_err(|_| -2isize)?;
+                Ok((parent, &path[slash + 1..]))
+            } else {
+                Ok((dir_ino, path))
+            }
+        } else {
+            Err(crate::errno::EBADF)
+        }
+    } else {
+        resolve_parent_and_name(path_ptr)
+    }
 }
 
 /// Resolve a user path pointer to (parent_inode, basename).
@@ -236,14 +260,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Directory / path ops ──────────────────────────────────
         Syscall::Getcwd => posix::getcwd(a0, a1),
         Syscall::Creat => posix::creat(a0),
-        Syscall::Mknodat => posix::creat(a1),      // mknodat(dirfd, path, mode, dev)
+        Syscall::Mknodat => posix::creat_at(a0, a1),
         Syscall::Mkdir => posix::mkdir(a0),
-        Syscall::Mkdirat => posix::mkdir(a1),       // mkdirat(dirfd, path, mode)
+        Syscall::Mkdirat => posix::mkdir_at(a0, a1),
         Syscall::Unlink => posix::unlink(a0),
-        Syscall::Unlinkat => posix::unlink(a1),     // unlinkat(dirfd, path, flags)
+        Syscall::Unlinkat => posix::unlink_at(a0, a1),
         Syscall::Chdir => posix::chdir(a0),
         Syscall::Rename => posix::rename(a0, a1),
-        Syscall::Renameat => posix::rename(a1, a3),  // renameat(olddirfd, old, newdirfd, new)
+        Syscall::Renameat => posix::rename_at(a0, a1, a2, a3),
         Syscall::Symlink => posix::symlink(a0, a1),
         Syscall::Symlinkat => posix::symlink(a0, a2), // symlinkat(target, dirfd, linkpath)
 

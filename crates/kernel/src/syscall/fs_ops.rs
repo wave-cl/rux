@@ -208,22 +208,107 @@ pub fn creat(path_ptr: usize) -> isize {
     }
 }
 
+/// mkdir_at(dirfd, path) — mkdirat with dirfd support
+pub fn mkdir_at(dirfd: usize, path_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        match fs.mkdir(dir_ino, fname, 0o755) {
+            Ok(ino) => { let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs()); 0 }
+            Err(_) => crate::errno::EEXIST,
+        }
+    }
+}
+
+/// unlink_at(dirfd, path) — unlinkat with dirfd support
+pub fn unlink_at(dirfd: usize, path_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        match fs.unlink(dir_ino, fname) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::ENOENT,
+        }
+    }
+}
+
+/// creat_at(dirfd, path) — mknodat/openat O_CREAT with dirfd support
+pub fn creat_at(dirfd: usize, path_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        match fs.create(dir_ino, fname, 0o644) {
+            Ok(ino) => { let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs()); 0 }
+            Err(_) => crate::errno::EEXIST,
+        }
+    }
+}
+
 // ── Path operations ─────────────────────────────────────────────────
+
+/// rename_at(olddirfd, old, newdirfd, new) — renameat with dirfd support
+pub fn rename_at(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        // Resolve old path first, copy name to local buffer (avoid static buffer reuse)
+        let (old_dir, old_name_ref) = match super::resolve_parent_at(old_dirfd, old_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let mut old_name_buf = [0u8; 256];
+        let old_name_len = old_name_ref.len().min(255);
+        old_name_buf[..old_name_len].copy_from_slice(&old_name_ref[..old_name_len]);
+
+        // Now resolve new path (this overwrites the static buffer)
+        let (new_dir, new_name) = match super::resolve_parent_at(new_dirfd, new_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let old_fname = match FileName::new(&old_name_buf[..old_name_len]) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        match fs.rename(old_dir, old_fname, new_dir, new_fname) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::ENOENT,
+        }
+    }
+}
 
 /// rename(oldpath, newpath) — POSIX.1
 pub fn rename(old_ptr: usize, new_ptr: usize) -> isize {
     unsafe {
         use rux_fs::{FileSystem, FileName};
-        let (old_dir, old_name) = match super::resolve_parent_and_name(old_ptr) {
+        let (old_dir, old_name_ref) = match super::resolve_parent_and_name(old_ptr) {
             Ok(v) => v,
             Err(e) => return e,
         };
+        // Copy old name to local buffer before resolving new path
+        // (both use the same static read_user_cstr buffer)
+        let mut old_name_buf = [0u8; 256];
+        let old_name_len = old_name_ref.len().min(255);
+        old_name_buf[..old_name_len].copy_from_slice(&old_name_ref[..old_name_len]);
+
         let (new_dir, new_name) = match super::resolve_parent_and_name(new_ptr) {
             Ok(v) => v,
             Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let old_fname = match FileName::new(old_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        let old_fname = match FileName::new(&old_name_buf[..old_name_len]) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         match fs.rename(old_dir, old_fname, new_dir, new_fname) {
             Ok(()) => 0,
