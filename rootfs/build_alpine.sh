@@ -1,0 +1,126 @@
+#!/bin/sh
+# Build Alpine Linux rootfs images for rux.
+# Downloads Alpine minirootfs and packages it into ext2 images.
+# Requires: e2fsprogs (mke2fs), wget or curl
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUT_DIR="$ROOT/rootfs"
+ALPINE_VERSION="3.21"
+ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases"
+
+# Find mke2fs
+MKE2FS=""
+for p in mke2fs /opt/local/sbin/mke2fs /usr/local/sbin/mke2fs /usr/sbin/mke2fs; do
+    if command -v "$p" >/dev/null 2>&1; then
+        MKE2FS="$p"
+        break
+    fi
+done
+if [ -z "$MKE2FS" ]; then
+    echo "ERROR: mke2fs not found. Install e2fsprogs."
+    exit 1
+fi
+
+build_alpine() {
+    local ARCH="$1"
+    local ALPINE_ARCH="$2"  # Alpine arch name (x86_64 or aarch64)
+    local OUTPUT="$OUT_DIR/alpine_${ARCH}.img"
+    local IMG_SIZE_MB=64
+    local STAGING="$OUT_DIR/alpine_staging_${ARCH}"
+    local TARBALL="$OUT_DIR/alpine-minirootfs-${ALPINE_VERSION}.0-${ALPINE_ARCH}.tar.gz"
+
+    echo "Building Alpine rootfs for $ARCH..."
+
+    # Download minirootfs if not cached
+    if [ ! -f "$TARBALL" ]; then
+        echo "  Downloading Alpine minirootfs..."
+        curl -L -o "$TARBALL" \
+            "${ALPINE_MIRROR}/${ALPINE_ARCH}/alpine-minirootfs-${ALPINE_VERSION}.0-${ALPINE_ARCH}.tar.gz" \
+            2>/dev/null || {
+            echo "ERROR: Failed to download Alpine minirootfs"
+            echo "URL: ${ALPINE_MIRROR}/${ALPINE_ARCH}/alpine-minirootfs-${ALPINE_VERSION}.0-${ALPINE_ARCH}.tar.gz"
+            exit 1
+        }
+    fi
+
+    rm -rf "$STAGING"
+    mkdir -p "$STAGING"
+
+    # Extract minirootfs
+    echo "  Extracting..."
+    tar xzf "$TARBALL" -C "$STAGING"
+
+    # Configure for rux
+    # Console on serial
+    cat > "$STAGING/etc/inittab" << 'CONF'
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+::respawn:/sbin/getty 0 console
+::shutdown:/sbin/openrc shutdown
+CONF
+
+    # Hostname
+    echo "rux" > "$STAGING/etc/hostname"
+
+    # Network (QEMU user-mode defaults)
+    mkdir -p "$STAGING/etc/network"
+    cat > "$STAGING/etc/network/interfaces" << 'CONF'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet static
+    address 10.0.2.15
+    netmask 255.255.255.0
+    gateway 10.0.2.2
+CONF
+
+    # DNS resolver (QEMU user-mode DNS)
+    echo "nameserver 10.0.2.3" > "$STAGING/etc/resolv.conf"
+
+    # Enable serial console
+    echo "console" >> "$STAGING/etc/securetty"
+
+    # Set root password to empty (login without password)
+    sed -i '' 's|^root:.*|root::0:0:root:/root:/bin/sh|' "$STAGING/etc/passwd" 2>/dev/null || \
+    sed -i 's|^root:.*|root::0:0:root:/root:/bin/sh|' "$STAGING/etc/passwd"
+    sed -i '' 's|^root:.*|root:::0:::::|' "$STAGING/etc/shadow" 2>/dev/null || \
+    sed -i 's|^root:.*|root:::0:::::|' "$STAGING/etc/shadow"
+
+    # Disable services that need features we don't have yet
+    for svc in hwclock modules sysctl bootmisc hostname networking; do
+        rm -f "$STAGING/etc/runlevels/boot/$svc" 2>/dev/null
+    done
+    for svc in crond; do
+        rm -f "$STAGING/etc/runlevels/default/$svc" 2>/dev/null
+    done
+
+    # Simple /sbin/init fallback: just spawn a shell
+    cat > "$STAGING/sbin/rux-init" << 'INITSCRIPT'
+#!/bin/sh
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sys /sys 2>/dev/null
+mount -t devtmpfs dev /dev 2>/dev/null
+echo "Alpine Linux on rux"
+exec /bin/sh
+INITSCRIPT
+    chmod 755 "$STAGING/sbin/rux-init"
+
+    # Create ext2 image
+    rm -f "$OUTPUT"
+    dd if=/dev/zero of="$OUTPUT" bs=1M count=$IMG_SIZE_MB 2>/dev/null
+    "$MKE2FS" -t ext2 -b 1024 -d "$STAGING" -L alpine-root "$OUTPUT" 2>/dev/null
+
+    local SIZE=$(wc -c < "$OUTPUT" | tr -d ' ')
+    echo "  → $OUTPUT ($SIZE bytes)"
+
+    rm -rf "$STAGING"
+}
+
+build_alpine x86_64 x86_64
+build_alpine aarch64 aarch64
+
+echo "Done."
