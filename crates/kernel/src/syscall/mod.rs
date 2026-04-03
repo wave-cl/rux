@@ -84,12 +84,17 @@ pub unsafe fn map_user_pages(
     let alloc = crate::kstate::alloc();
     let mut upt = current_user_page_table();
 
-    let upt_ptr = &mut upt as *mut crate::arch::PageTable;
-    rux_mm::map_zeroed_pages(
-        alloc, start_va as u64, end_va as u64, flags,
-        &mut |va, phys, f, a| { let _ = (*upt_ptr).map_4k(va, phys, f, a); },
-        &mut |va| { let _ = (*upt_ptr).unmap_4k(va); },
-    );
+    // Inline loop instead of map_zeroed_pages with closures —
+    // the dyn FnMut closures caused page faults on x86_64 when
+    // the binary layout changed (closure vtable dispatch issue).
+    for pa in (start_va as u64..end_va as u64).step_by(4096) {
+        use rux_mm::FrameAllocator;
+        let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("mmap page");
+        core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
+        let va = rux_klib::VirtAddr::new(pa as usize);
+        let _ = upt.unmap_4k(va);
+        let _ = upt.map_4k(va, frame, flags, alloc);
+    }
 }
 
 // ── Path resolution helper (used by both POSIX and Linux) ───────────

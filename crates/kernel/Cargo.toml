@@ -4,6 +4,7 @@ version = "0.8.0"
 edition = "2021"
 
 [features]
+default = ["net"]
 native = []
 net = ["rux-net"]
 
