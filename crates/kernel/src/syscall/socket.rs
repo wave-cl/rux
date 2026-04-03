@@ -385,7 +385,7 @@ pub fn sys_recvmsg(fd: usize, msghdr_ptr: usize) -> isize {
 pub fn sys_sendmmsg(fd: usize, msgvec_ptr: usize, vlen: usize) -> isize {
     let mut sent = 0isize;
     unsafe {
-        let entry_size = 64; // sizeof(mmsghdr) on aarch64: msghdr(56) + msg_len(4) + pad(4)
+        let entry_size = 64; // sizeof(mmsghdr) on 64-bit: msghdr(56) + msg_len(4) + pad(4)
         for i in 0..vlen.min(8) {
             let mhdr = msgvec_ptr + i * entry_size;
             let r = sys_sendmsg(fd, mhdr);

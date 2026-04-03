@@ -43,6 +43,7 @@ if $RUN_X86; then
 printf "\n\033[1m── x86_64 ──\033[0m\n"
 
 OUTPUT=$( { sleep 8; cat <<'CMDS'
+true
 uname -a
 cat /etc/passwd
 cat /etc/os-release

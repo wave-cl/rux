@@ -172,13 +172,16 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
 /// Returns number of fds with events, or 0 on timeout.
 /// ppoll wrapper: reads timeout from timespec pointer
 pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -> isize {
-    let timeout_ms = if timeout_ptr != 0 {
+    // timeout_ptr: NULL = wait forever, valid pointer = read timespec
+    // Guard against invalid pointers (0xFFFFFFFF, low addresses in null guard)
+    let timeout_ms = if timeout_ptr >= 0x10000 && timeout_ptr < 0x8000_0000_0000 {
         unsafe {
             let sec: u64 = crate::uaccess::get_user(timeout_ptr);
             let nsec: u64 = crate::uaccess::get_user(timeout_ptr + 8);
-            (sec * 1000 + nsec / 1_000_000) as usize
+            let ms = sec * 1000 + nsec / 1_000_000;
+            if ms > 30_000 { 30_000 } else { ms as usize }
         }
-    } else { 30_000 }; // default 30s if no timeout
+    } else { 5_000 }; // no timeout / invalid → 5s default (responsive enough for DNS)
     poll(fds_ptr, nfds, timeout_ms)
 }
 
