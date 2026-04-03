@@ -10,7 +10,8 @@ use rux_proc::signal::SignalHot;
 use rux_fs::fdtable::{OpenFile, EMPTY_FD, MAX_FDS};
 
 /// Maximum number of concurrent processes.
-pub const MAX_PROCS: usize = 16;
+/// 32 slots allows ~15 concurrent pipe commands before exhaustion.
+pub const MAX_PROCS: usize = 32;
 
 /// Process lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

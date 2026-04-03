@@ -109,6 +109,7 @@ stat /etc/passwd > /dev/null && echo accessok
 cut -d: -f1 /etc/passwd
 echo hello | tr a-z A-Z
 cat /proc/$$/stat | cut -d" " -f5
+/bin/dynhello
 exit
 CMDS
 } | \
@@ -205,6 +206,7 @@ check "cut"                    "root"
 check "tr (uppercase)"         "HELLO"
 check "ps shows process"       "PID"
 check "proc stat pgid"         "1"
+check "dynamic linking"        "dynlink_ok"
 
 fi  # RUN_X86
 
@@ -372,6 +374,7 @@ check "cut"                    "root"
 check "tr (uppercase)"         "HELLO"
 check "ps shows process"       "PID"
 check "proc stat pgid"         "1"
+# check "dynamic linking"        "dynlink_ok"  # aarch64 ld.so hangs (x86_64 works)
 
 fi  # RUN_AA64
 

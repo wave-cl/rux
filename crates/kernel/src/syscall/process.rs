@@ -37,6 +37,23 @@ pub fn exit(status: i32) -> ! {
                 // Thread doesn't become zombie — just free the slot
                 TASK_TABLE[idx].active = false;
                 TASK_TABLE[idx].state = TaskState::Free;
+            } else if TASK_TABLE[idx].ppid == 1 {
+                // Parent is init (PID 1): auto-reap immediately.
+                // Init doesn't explicitly waitpid for every shell pipeline
+                // child, so zombies would accumulate and exhaust slots.
+                notify_parent_child_exit(1, status);
+                // Free the child's address space (COW pages + page tables)
+                let child_pt_root = TASK_TABLE[idx].pt_root;
+                if child_pt_root != 0 {
+                    let alloc = crate::kstate::alloc();
+                    let child_pt = crate::arch::PageTable::from_root(
+                        rux_klib::PhysAddr::new(child_pt_root as usize)
+                    );
+                    child_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
+                }
+                TASK_TABLE[idx].active = false;
+                TASK_TABLE[idx].state = TaskState::Free;
+                TASK_TABLE[idx].pt_root = 0;
             } else {
                 TASK_TABLE[idx].state = TaskState::Zombie;
                 notify_parent_child_exit(TASK_TABLE[idx].ppid, status);
