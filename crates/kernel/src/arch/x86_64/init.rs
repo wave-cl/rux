@@ -405,15 +405,17 @@ pub fn x86_64_init(multiboot_info: usize) {
             // The .data start is the conservative .rodata end.
             // These addresses are stable across builds (sections don't overlap).
 
-            // Detect .text end and .rodata boundaries dynamically:
-            // The init code itself is in .text, so its address gives a lower bound.
-            // Use the known layout: .text < .rodata < .data, all page-aligned by linker.
-            let text_start = 0x101000usize;
-            let text_end_page = 0x129000usize;   // page-aligned start of .rodata
-            // Only protect pages that are ENTIRELY within .rodata.
-            // The last page of .rodata may share with .data/.got/.relro,
-            // so stop one page before .data to avoid write-protecting mutable data.
-            let rodata_end_page = 0x12e000usize;  // page-aligned end of .rodata (start of .data)
+            // Use linker-exported symbols for section boundaries.
+            // These are defined in linker-x86_64.ld and update automatically.
+            extern "C" {
+                static __text_start: u8;
+                static __text_end: u8;
+                static __rodata_end: u8;
+                static __data_start: u8;
+            }
+            let text_start = (&__text_start as *const u8 as usize) & !0xFFF;
+            let text_end_page = ((&__text_end as *const u8 as usize) + 0xFFF) & !0xFFF;
+            let rodata_end_page = (&__data_start as *const u8 as usize) & !0xFFF;
 
             // .text → RX
             {

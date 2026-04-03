@@ -9,15 +9,20 @@ SECTIONS {
     }
 
     .text : ALIGN(4096) {
+        __text_start = .;
         *(.text .text.*)
+        __text_end = .;
     }
 
     .rodata : ALIGN(4096) {
+        __rodata_start = .;
         *(.rodata .rodata.*)
         *(.eh_frame_hdr)
+        __rodata_end = .;
     }
 
     .data : ALIGN(4096) {
+        __data_start = .;
         *(.got .got.*)
         *(.data .data.*)
     }
