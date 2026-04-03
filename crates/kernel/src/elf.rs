@@ -79,7 +79,13 @@ pub unsafe fn load_elf_from_inode(
 
     // Set program break and mmap base for brk/mmap syscalls
     crate::syscall::PROCESS.program_brk = max_end as usize;
-    crate::syscall::PROCESS.mmap_base = 0x10000000;
+    // Randomize mmap_base for basic ASLR (0x10000000 + random 0-1MB offset)
+    {
+        use rux_arch::TimerOps;
+        let entropy = crate::arch::Arch::ticks() as usize;
+        let random_offset = (entropy & 0xFF) << 12; // 0-1MB, page-aligned
+        crate::syscall::PROCESS.mmap_base = 0x10000000 + random_offset;
+    }
     rux_fs::fdtable::reset();
 
     // Dynamic linking: if PT_INTERP exists, load the interpreter alongside

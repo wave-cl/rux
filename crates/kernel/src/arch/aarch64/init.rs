@@ -113,9 +113,20 @@ pub fn aarch64_init(dtb_addr: usize) {
         pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
         console::write_str("rux: MMU enabled, kernel page tables active!\n");
 
-        // Note: kernel stack guard pages deferred — the identity map uses
-        // 2MB huge pages, so unmap_4k can't punch holes in them without
-        // splitting. Guard pages would require 4K mapping for the stack region.
+        // Split 2MB pages containing KSTACKS, then unmap guard pages
+        for i in 0..crate::task_table::MAX_PROCS {
+            let stack_bottom = crate::task_table::KSTACKS.0[i].as_ptr() as usize;
+            let guard_page = stack_bottom & !0xFFF;
+            let huge_base = guard_page & !0x1FFFFF;
+            // split_huge_page is idempotent if already split
+            let _ = kpt.split_huge_page(
+                rux_klib::VirtAddr::new(huge_base),
+                rux_mm::PageLevel::L1,
+                alloc,
+            );
+            let _ = kpt.unmap_4k(rux_klib::VirtAddr::new(guard_page));
+        }
+        console::write_str("rux: kernel stack guard pages active\n");
     }
 
     // ── Init scheduler (needed for vfork/exec) ──────────────────────

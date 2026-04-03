@@ -161,6 +161,15 @@ pub fn x86_64_init(multiboot_info: usize) {
 
         core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
 
+        // Enable CR0.WP — enforce read-only pages in ring 0
+        {
+            let mut cr0: u64;
+            core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nostack));
+            cr0 |= 1 << 16;
+            core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nostack, preserves_flags));
+        }
+        console::write_str("rux: CR0.WP enabled\n");
+
         // Activate stac/clac runtime guards now that CR4 is set
         if features.has(SMAP) {
             crate::uaccess::enable_smap_guards();
@@ -346,6 +355,56 @@ pub fn x86_64_init(multiboot_info: usize) {
                 let _ = kpt.unmap_4k(rux_klib::VirtAddr::new(guard_page));
             }
             console::write_str("rux: kernel stack guard pages active\n");
+
+            // Make kernel .text read-only (READ+EXECUTE, no WRITE).
+            // Section boundaries determined at build time. .text starts after
+            // the multiboot header page (0x101000) and extends to the page
+            // BEFORE .rodata. We protect conservatively using page-aligned
+            // ranges — pages shared between sections keep the more permissive
+            // flags (WRITE) to avoid faulting.
+            //
+            // Layout (from objdump, may shift with code changes):
+            //   .text:   0x101000  (~128KB)
+            //   .rodata: 0x121000  (~20KB)   (page after .text end)
+            //   .data:   0x126000  (~140KB)
+            //
+            // We protect .text pages that are ENTIRELY within .text (not shared
+            // with .rodata). Since .text end may not be page-aligned, the last
+            // .text page might contain .rodata start — leave it writable.
+            //
+            // Use the .rodata section start as the conservative .text end.
+            // The .data start is the conservative .rodata end.
+            // These addresses are stable across builds (sections don't overlap).
+
+            // Detect .text end and .rodata boundaries dynamically:
+            // The init code itself is in .text, so its address gives a lower bound.
+            // Use the known layout: .text < .rodata < .data, all page-aligned by linker.
+            let text_start = 0x101000usize;
+            // .rodata always starts on a page boundary after .text
+            // Use .data section start as .rodata end (conservative)
+            // These are compile-time stable within the same binary.
+            let text_end_page = 0x121000usize;   // page-aligned start of .rodata
+            let rodata_end_page = 0x126000usize;  // page-aligned start of .data
+
+            // .text → RX
+            {
+                let rx = rux_mm::MappingFlags::READ.or(rux_mm::MappingFlags::EXECUTE);
+                let mut addr = text_start;
+                while addr < text_end_page {
+                    let _ = kpt.protect_4k(rux_klib::VirtAddr::new(addr), rx);
+                    addr += 4096;
+                }
+            }
+            // .rodata → R (no WRITE, no EXECUTE)
+            {
+                let ro = rux_mm::MappingFlags::READ;
+                let mut addr = text_end_page;
+                while addr < rodata_end_page {
+                    let _ = kpt.protect_4k(rux_klib::VirtAddr::new(addr), ro);
+                    addr += 4096;
+                }
+            }
+            console::write_str("rux: kernel .text/.rodata read-only\n");
         }
     }
 

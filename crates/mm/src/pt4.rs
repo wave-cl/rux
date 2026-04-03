@@ -205,6 +205,40 @@ impl<A: ArchPaging> PageTable4Level<A> {
         }
     }
 
+    /// Change the permissions of an existing 4K page mapping.
+    /// Preserves the physical address, only updates flags.
+    pub unsafe fn protect_4k(
+        &mut self,
+        virt: VirtAddr,
+        flags: MappingFlags,
+    ) -> Result<(), MemoryError> {
+        let pte_flags = A::mapping_to_pte_flags(flags) | A::leaf_extra_flags();
+
+        let l3 = self.root.as_usize() as *mut PageTablePage;
+        let l3e = (*l3).entries[pt_index(virt, PageLevel::L3)];
+        if !A::Pte::is_present(l3e) { return Err(MemoryError::NotMapped); }
+
+        let l2 = A::Pte::phys_addr(l3e).as_usize() as *mut PageTablePage;
+        let l2e = (*l2).entries[pt_index(virt, PageLevel::L2)];
+        if !A::Pte::is_present(l2e) { return Err(MemoryError::NotMapped); }
+        if A::Pte::is_huge(l2e) { return Err(MemoryError::InvalidSize); }
+
+        let l1 = A::Pte::phys_addr(l2e).as_usize() as *mut PageTablePage;
+        let l1e = (*l1).entries[pt_index(virt, PageLevel::L1)];
+        if !A::Pte::is_present(l1e) { return Err(MemoryError::NotMapped); }
+        if A::Pte::is_huge(l1e) { return Err(MemoryError::InvalidSize); }
+
+        let l0 = A::Pte::phys_addr(l1e).as_usize() as *mut PageTablePage;
+        let idx = pt_index(virt, PageLevel::L0);
+        let l0e = (*l0).entries[idx];
+        if !A::Pte::is_present(l0e) { return Err(MemoryError::NotMapped); }
+
+        let phys = A::Pte::phys_addr(l0e);
+        (*l0).entries[idx] = A::Pte::encode(phys, pte_flags);
+        A::flush_tlb(virt);
+        Ok(())
+    }
+
     /// Map a single 1GB huge page: virt → phys.
     ///
     /// Writes a huge PTE at L2 (PDPT level). Both addresses must be 1GB-aligned.

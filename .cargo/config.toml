@@ -35,6 +35,7 @@ rustflags = [
     "-C", "link-arg=-z", "-C", "link-arg=max-page-size=4096",
     "-C", "link-arg=--icf=all",
     "-C", "link-arg=--gc-sections",
+    "-Z", "stack-protector=strong",
 ]
 
 # ── aarch64 ───────────────────────────────────────────────────────────────
@@ -52,4 +53,5 @@ rustflags = [
     "-C", "link-arg=-z", "-C", "link-arg=max-page-size=16384",
     "-C", "link-arg=--icf=all",
     "-C", "link-arg=--gc-sections",
+    "-Z", "stack-protector=strong",
 ]
