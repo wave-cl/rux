@@ -254,6 +254,11 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[113] = Syscall::ClockGettime; t[101] = Syscall::Nanosleep;
     t[124] = Syscall::SchedYield;   t[169] = Syscall::Gettimeofday;
     t[163] = Syscall::Getrlimit;
+    // Sockets
+    t[198] = Syscall::Socket;    t[200] = Syscall::Bind;
+    t[203] = Syscall::Connect;   t[206] = Syscall::Sendto;
+    t[207] = Syscall::Recvfrom;  t[208] = Syscall::Setsockopt;
+    t[209] = Syscall::Getsockopt;
     // Linux extensions
     t[61] = Syscall::Getdents64; t[43] = Syscall::Statfs;
     t[44] = Syscall::Statfs;     t[179] = Syscall::Sysinfo;

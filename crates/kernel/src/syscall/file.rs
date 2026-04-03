@@ -149,6 +149,10 @@ pub fn openat(_dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isiz
 
 /// close(fd) — POSIX.1
 pub fn close(fd: usize) -> isize {
+    // Socket close
+    if super::socket::is_socket(fd) {
+        return super::socket::sys_close_socket(fd);
+    }
     unsafe {
         // If closing a pipe end, wake any tasks blocked on that pipe so they
         // can see the new EOF / EPIPE condition.

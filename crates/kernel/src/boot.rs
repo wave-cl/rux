@@ -94,6 +94,14 @@ pub unsafe fn boot(params: BootParams) -> ! {
                         [255, 255, 255, 0],
                         mac,
                     );
+                    rux_net::stack::set_callbacks(
+                        |src_ip, src_port, dst_port, data| {
+                            crate::syscall::socket::deliver_udp(src_ip, src_port, dst_port, data);
+                        },
+                        |src_ip, data| {
+                            crate::syscall::socket::deliver_icmp(src_ip, data);
+                        },
+                    );
                     log("rux: virtio-net: MAC=");
                     let mut hb = [0u8; 3];
                     for i in 0..6 {

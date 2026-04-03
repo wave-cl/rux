@@ -10,6 +10,7 @@ mod fs_ops;
 mod process;
 pub(crate) mod signal;
 mod memory;
+pub(crate) mod socket;
 
 // ── Shared process state ────────────────────────────────────────────
 
@@ -151,6 +152,8 @@ pub enum Syscall {
     Prctl, Alarm, Access, Link, Linkat, Sysinfo, Statfs,
     // Signals (additional)
     Sigreturn,
+    // Sockets
+    Socket, Bind, Sendto, Recvfrom, Setsockopt, Getsockopt, Connect,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -294,6 +297,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // Dispatched by arch entry point, never reaches generic dispatch
         Syscall::Vfork | Syscall::Execve | Syscall::Sigreturn => 0,
+
+        // ── Sockets ────────────────────────────────────────────────
+        Syscall::Socket => socket::sys_socket(a0, a1, a2),
+        Syscall::Bind => socket::sys_bind(a0, a1, a2),
+        Syscall::Sendto => socket::sys_sendto(a0, a1, a2, a3, a4, 0),
+        Syscall::Recvfrom => socket::sys_recvfrom(a0, a1, a2, a3, a4, 0),
+        Syscall::Setsockopt | Syscall::Getsockopt => 0, // stub
+        Syscall::Connect => 0, // stub
 
         Syscall::Rseq => crate::errno::ENOSYS,
 

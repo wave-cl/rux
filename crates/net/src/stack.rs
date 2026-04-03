@@ -2,6 +2,22 @@
 
 use super::{eth, arp, ipv4, icmp, udp};
 
+/// Callback to deliver packets to the kernel socket layer.
+/// Set by the kernel during init.
+static mut DELIVER_UDP: Option<unsafe fn([u8; 4], u16, u16, &[u8])> = None;
+static mut DELIVER_ICMP: Option<unsafe fn([u8; 4], &[u8])> = None;
+
+/// Register socket delivery callbacks.
+pub fn set_callbacks(
+    udp_cb: unsafe fn([u8; 4], u16, u16, &[u8]),
+    icmp_cb: unsafe fn([u8; 4], &[u8]),
+) {
+    unsafe {
+        DELIVER_UDP = Some(udp_cb);
+        DELIVER_ICMP = Some(icmp_cb);
+    }
+}
+
 /// Network configuration.
 pub struct NetConfig {
     pub ip: [u8; 4],
@@ -51,15 +67,25 @@ pub fn process_frame(frame: &[u8]) -> Option<([u8; 1514], usize)> {
 
             match proto {
                 ipv4::PROTO_ICMP => {
+                    // Deliver to raw ICMP socket if registered
+                    unsafe {
+                        if let Some(cb) = DELIVER_ICMP {
+                            cb(src_ip, ip_payload);
+                        }
+                    }
+                    // Also send kernel-level echo reply
                     let (ip_pkt, ip_len) = icmp::handle(src_ip, dst_ip, ip_payload)?;
-                    // Wrap in ethernet
                     let mut frame_out = [0u8; 1514];
                     let len = eth::build(&mut frame_out, src, our_mac, eth::ETH_P_IP, &ip_pkt[..ip_len]);
                     Some((frame_out, len))
                 }
                 ipv4::PROTO_UDP => {
-                    let (_src_port, _dst_port, _data) = udp::parse(ip_payload)?;
-                    // TODO: deliver to socket
+                    let (src_port, dst_port, data) = udp::parse(ip_payload)?;
+                    unsafe {
+                        if let Some(cb) = DELIVER_UDP {
+                            cb(src_ip, src_port, dst_port, data);
+                        }
+                    }
                     None
                 }
                 _ => None,

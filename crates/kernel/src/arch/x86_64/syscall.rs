@@ -445,6 +445,11 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     // Signals
     t[13] = Syscall::Sigaction;  t[14] = Syscall::Sigprocmask;
     t[15] = Syscall::Sigreturn;  t[131] = Syscall::Sigaltstack;
+    // Sockets
+    t[41] = Syscall::Socket;     t[42] = Syscall::Connect;
+    t[44] = Syscall::Sendto;     t[45] = Syscall::Recvfrom;
+    t[49] = Syscall::Bind;       t[54] = Syscall::Setsockopt;
+    t[55] = Syscall::Getsockopt;
     // Process
     t[24] = Syscall::SchedYield; t[35] = Syscall::Nanosleep;
     t[37] = Syscall::Alarm;      t[39] = Syscall::Getpid;
