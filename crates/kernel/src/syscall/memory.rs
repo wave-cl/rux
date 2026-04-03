@@ -104,8 +104,23 @@ fn futex_wait(uaddr: usize, expected: u32) -> isize {
     unsafe {
         use crate::task_table::*;
 
+        // Validate user pointer
+        if uaddr < 0x1000 || uaddr >= 0x8000_0000_0000 {
+            return crate::errno::EAGAIN;
+        }
+
+        // Check if the page is mapped before reading. If not, return EAGAIN
+        // (the caller will retry after the page is faulted in).
+        let upt = crate::syscall::current_user_page_table();
+        if upt.translate(rux_klib::VirtAddr::new(uaddr & !0xFFF)).is_err() {
+            return crate::errno::EAGAIN;
+        }
+
         // Atomic check: if value changed since caller checked, return EAGAIN
-        if uaddr == 0 || *(uaddr as *const u32) != expected {
+        let p = uaddr as *const u8;
+        let val: u32 = (*p.add(0) as u32) | ((*p.add(1) as u32) << 8)
+                      | ((*p.add(2) as u32) << 16) | ((*p.add(3) as u32) << 24);
+        if val != expected {
             return crate::errno::EAGAIN;
         }
 
