@@ -329,6 +329,45 @@ pub fn sys_close_socket(fd: usize) -> isize {
     0
 }
 
+/// sendmsg(fd, msghdr*, flags) — send via message header
+pub fn sys_sendmsg(fd: usize, msghdr_ptr: usize) -> isize {
+    if msghdr_ptr == 0 { return crate::errno::EINVAL; }
+    unsafe {
+        // Parse msghdr: name(8), namelen(4), pad(4), iov(8), iovlen(8), control(8), controllen(8), flags(4)
+        let msg_name: usize = crate::uaccess::get_user(msghdr_ptr);
+        let msg_namelen: u32 = crate::uaccess::get_user(msghdr_ptr + 8);
+        let msg_iov: usize = crate::uaccess::get_user(msghdr_ptr + 16);
+        let msg_iovlen: usize = crate::uaccess::get_user(msghdr_ptr + 24);
+
+        if msg_iovlen == 0 || msg_iov == 0 { return 0; }
+
+        // Read first iov entry
+        let iov_base: usize = crate::uaccess::get_user(msg_iov);
+        let iov_len: usize = crate::uaccess::get_user(msg_iov + 8);
+
+        // Delegate to sendto
+        sys_sendto(fd, iov_base, iov_len, 0, msg_name, msg_namelen as usize)
+    }
+}
+
+/// recvmsg(fd, msghdr*, flags) — receive via message header
+pub fn sys_recvmsg(fd: usize, msghdr_ptr: usize) -> isize {
+    if msghdr_ptr == 0 { return crate::errno::EINVAL; }
+    unsafe {
+        let msg_name: usize = crate::uaccess::get_user(msghdr_ptr);
+        let _msg_namelen: u32 = crate::uaccess::get_user(msghdr_ptr + 8);
+        let msg_iov: usize = crate::uaccess::get_user(msghdr_ptr + 16);
+        let msg_iovlen: usize = crate::uaccess::get_user(msghdr_ptr + 24);
+
+        if msg_iovlen == 0 || msg_iov == 0 { return 0; }
+
+        let iov_base: usize = crate::uaccess::get_user(msg_iov);
+        let iov_len: usize = crate::uaccess::get_user(msg_iov + 8);
+
+        sys_recvfrom(fd, iov_base, iov_len, 0, msg_name, 0)
+    }
+}
+
 /// getsockname(fd, addr, addrlen) — get local address
 pub fn sys_getsockname(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
     if addr_ptr == 0 { return 0; }

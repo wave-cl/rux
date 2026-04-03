@@ -154,18 +154,25 @@ pub unsafe fn send_ip(dst_ip: [u8; 4], protocol: u8, payload: &[u8]) -> bool {
             // Send ARP request and wait briefly for reply
             let (req_frame, req_len) = arp::send_request(next_hop, our_ip, &our_mac);
             driver_send(&req_frame[..req_len]);
-            // Poll for ARP reply (up to ~100ms)
+            // Poll for ARP reply (up to ~1s with multiple retries)
             let mut rx_buf = [0u8; 1514];
-            for _ in 0..100_000 {
-                if let Some(n) = driver_recv(&mut rx_buf) {
-                    if let Some((resp, rlen)) = process_frame(&rx_buf[..n]) {
-                        driver_send(&resp[..rlen]);
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    // Resend ARP request
+                    let (req2, rlen2) = arp::send_request(next_hop, our_ip, &our_mac);
+                    driver_send(&req2[..rlen2]);
+                }
+                for _ in 0..500_000 {
+                    if let Some(n) = driver_recv(&mut rx_buf) {
+                        if let Some((resp, rlen)) = process_frame(&rx_buf[..n]) {
+                            driver_send(&resp[..rlen]);
+                        }
                     }
+                    if let Some(m) = arp::lookup(next_hop) {
+                        return send_ip_with_mac(dst_ip, protocol, payload, &m, &our_mac, our_ip);
+                    }
+                    core::hint::spin_loop();
                 }
-                if let Some(m) = arp::lookup(next_hop) {
-                    return send_ip_with_mac(dst_ip, protocol, payload, &m, &our_mac, our_ip);
-                }
-                core::hint::spin_loop();
             }
             return false; // ARP timeout
         }

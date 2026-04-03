@@ -323,8 +323,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Connect => socket::sys_connect(a0, a1, a2),
         Syscall::Getsockname => socket::sys_getsockname(a0, a1, a2),
         Syscall::Getpeername => socket::sys_getpeername(a0, a1, a2),
-        Syscall::Sendmsg => socket::sys_sendto(a0, 0, 0, 0, 0, 0), // stub → 0
-        Syscall::Recvmsg => socket::sys_recvfrom(a0, 0, 0, 0, 0, 0), // stub
+        Syscall::Sendmsg => socket::sys_sendmsg(a0, a1),
+        Syscall::Recvmsg => socket::sys_recvmsg(a0, a1),
         Syscall::Shutdown => 0, // stub
 
         // ── Additional syscalls ────────────────────────────────────
