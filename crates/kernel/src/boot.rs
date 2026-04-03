@@ -105,117 +105,130 @@ pub unsafe fn boot(params: BootParams) -> ! {
     crate::arch::Arch::write_bytes(init_path);
     log("\n");
     rux_proc::execargs::set(b"/bin/sh", b"");
-    let init_ino = rux_fs::path::resolve_path(vfs, init_path).expect("init not found");
+    let init_ino = match rux_fs::path::resolve_path(vfs, init_path) {
+        Ok(ino) => ino,
+        Err(e) => {
+            log("rux: resolve_path failed: ");
+            log(match e {
+                rux_fs::VfsError::NotFound => "not found",
+                rux_fs::VfsError::NotADirectory => "not a dir",
+                rux_fs::VfsError::IoError => "io error",
+                _ => "other",
+            });
+            log("\n");
+            // Fallback: try /bin/sh directly
+            rux_fs::path::resolve_path(vfs, b"/bin/sh").expect("/bin/sh not found")
+        }
+    };
     let alloc = &mut *alloc_ptr;
     crate::elf::load_elf_from_inode(init_ino as u64, alloc);
 }
 
 // ── ext2 root mount ──────────────────────────────────────────────────────
 
-/// Static storage for the ext2 filesystem and virtio-blk driver.
-/// Must live for the kernel's lifetime (boot-time allocation not possible).
+/// Static storage for the ext2 filesystem and virtio-blk drivers.
 static mut EXT2_FS: core::mem::MaybeUninit<rux_fs::ext2::Ext2Fs> = core::mem::MaybeUninit::uninit();
-static mut VIRTIO_BLK: core::mem::MaybeUninit<rux_drivers::virtio::blk::VirtioBlk> = core::mem::MaybeUninit::uninit();
+static mut VIRTIO_BLK_MMIO: core::mem::MaybeUninit<rux_drivers::virtio::blk::VirtioBlk> = core::mem::MaybeUninit::uninit();
+#[cfg(target_arch = "x86_64")]
+static mut VIRTIO_BLK_PCI: core::mem::MaybeUninit<rux_drivers::virtio::blk_pci::VirtioBlkPci> = core::mem::MaybeUninit::uninit();
 
-/// Try to probe a virtio-blk device and mount ext2 as the root filesystem.
-/// Replaces VFS slot 0 (ramfs) with ext2 if successful. The ramfs remains
-/// allocated but unused. Returns true if ext2 root was mounted.
+/// Try to probe a virtio-blk device and mount ext2 as root.
+/// Tries PCI on x86_64, MMIO on aarch64. Falls back gracefully.
 unsafe fn try_mount_ext2_root(
     vfs_ptr: *mut rux_fs::vfs::Vfs,
     alloc_ptr: *mut rux_mm::frame::BuddyAllocator,
-    cmdparams: &crate::cmdline::CmdlineParams,
+    _cmdparams: &crate::cmdline::CmdlineParams,
     virtio_mmio_base: usize,
     log: fn(&str),
 ) -> bool {
-    // Only attempt if the virtio MMIO region is mapped (aarch64: always, x86_64: not yet)
-    if virtio_mmio_base == 0 { return false; }
-
-    // Probe for a virtio-blk device on the MMIO bus
-    let base = rux_drivers::virtio::blk::probe_virtio_blk();
-
-    let base = match base {
-        Some(b) => b,
-        None => {
-            log("rux: no virtio-blk device found\n");
-            return false;
-        }
-    };
-
-    log("rux: virtio-blk: probing at 0x");
-    { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, base)); }
-    log("\n");
-
-    // Allocate 2 pages for virtqueue
     use rux_mm::FrameAllocator;
     let alloc = &mut *alloc_ptr;
-    let vq_page1 = match alloc.alloc(rux_mm::PageSize::FourK) {
-        Ok(p) => p,
-        Err(_) => { log("rux: virtio-blk: no memory for virtqueue\n"); return false; }
-    };
-    let vq_page2 = match alloc.alloc(rux_mm::PageSize::FourK) {
-        Ok(p) => p,
-        Err(_) => { log("rux: virtio-blk: no memory for virtqueue\n"); return false; }
-    };
-    // Zero the pages
-    core::ptr::write_bytes(vq_page1.as_usize() as *mut u8, 0, 4096);
-    core::ptr::write_bytes(vq_page2.as_usize() as *mut u8, 0, 4096);
 
-    // Debug: print device info
-    {
-        let mmio = rux_drivers::virtio::mmio::VirtioMmio::new(base);
-        log("rux: virtio-blk: magic=0x");
-        { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, mmio.magic() as usize)); }
-        log(" ver=");
-        { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, mmio.version())); }
-        log(" devid=");
-        { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, mmio.device_id())); }
-        log("\n");
+    // Allocate 8 contiguous pages (32KB) for virtqueue — enough for queue size up to 256
+    let vq_page = match alloc.alloc(rux_mm::PageSize::FourK) {
+        Ok(p) => p,
+        Err(_) => { log("rux: virtio-blk: no memory for virtqueue\n"); return false; }
+    };
+    // Zero all 8 pages
+    core::ptr::write_bytes(vq_page.as_usize() as *mut u8, 0, 4096);
+    for _ in 1..8 {
+        if let Ok(p) = alloc.alloc(rux_mm::PageSize::FourK) {
+            core::ptr::write_bytes(p.as_usize() as *mut u8, 0, 4096);
+        }
     }
 
-    // Initialize virtio-blk
-    let blk = match rux_drivers::virtio::blk::VirtioBlk::new(base, vq_page1.as_usize()) {
-        Ok(b) => b,
-        Err(e) => {
-            log("rux: virtio-blk: init failed (");
-            log(match e {
-                rux_drivers::DriverError::ProbeFailure => "probe",
-                rux_drivers::DriverError::Unsupported => "unsupported",
-                rux_drivers::DriverError::ResourceBusy => "busy",
-                rux_drivers::DriverError::IoError => "io",
-                rux_drivers::DriverError::Timeout => "timeout",
-                rux_drivers::DriverError::InvalidState => "state",
-            });
-            log(")\n");
-            return false;
-        }
-    };
+    // ── Platform-specific probe ────────────────────────────────────
+    let blk_dev: *const dyn rux_drivers::BlockDevice;
+    let capacity: u64;
 
-    let sectors = blk.capacity_sectors();
+    #[cfg(target_arch = "x86_64")]
+    {
+        log("rux: probing PCI for virtio-blk...\n");
+
+        // Debug: show found PCI device
+        if let Some(dev) = rux_drivers::pci::find_device(
+            rux_drivers::pci::VIRTIO_VENDOR, rux_drivers::pci::VIRTIO_BLK_LEGACY,
+        ) {
+            log("rux: PCI: vendor=0x1AF4 dev=0x1001 bar0=0x");
+            { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, dev.bar0 as usize)); }
+            log(" bar1=0x");
+            { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, dev.bar1 as usize)); }
+            log("\n");
+        }
+
+        match rux_drivers::virtio::blk_pci::VirtioBlkPci::probe(vq_page.as_usize()) {
+            Ok(blk) => {
+                capacity = blk.capacity_sectors();
+                VIRTIO_BLK_PCI.write(blk);
+                blk_dev = VIRTIO_BLK_PCI.assume_init_ref() as *const rux_drivers::virtio::blk_pci::VirtioBlkPci;
+            }
+            Err(_) => {
+                log("rux: no virtio-blk-pci device found\n");
+                return false;
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if virtio_mmio_base == 0 { return false; }
+        let base = match rux_drivers::virtio::blk::probe_virtio_blk() {
+            Some(b) => b,
+            None => { log("rux: no virtio-blk device found\n"); return false; }
+        };
+        log("rux: virtio-blk: probing at 0x");
+        { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, base)); }
+        log("\n");
+        match rux_drivers::virtio::blk::VirtioBlk::new(base, vq_page.as_usize()) {
+            Ok(blk) => {
+                capacity = blk.capacity_sectors();
+                VIRTIO_BLK_MMIO.write(blk);
+                blk_dev = VIRTIO_BLK_MMIO.assume_init_ref() as *const rux_drivers::virtio::blk::VirtioBlk;
+            }
+            Err(_) => { log("rux: virtio-blk: init failed\n"); return false; }
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    { return false; }
+
     log("rux: virtio-blk: ");
-    { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, (sectors / 2048) as u32)); }
+    { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, (capacity / 2048) as u32)); }
     log(" MB disk\n");
 
-    // Store in static
-    VIRTIO_BLK.write(blk);
-    let blk_ptr = VIRTIO_BLK.assume_init_ref() as *const rux_drivers::virtio::blk::VirtioBlk;
-
     // Mount ext2
-    let ext2 = match rux_fs::ext2::Ext2Fs::mount(blk_ptr as *const dyn rux_drivers::BlockDevice) {
+    let ext2 = match rux_fs::ext2::Ext2Fs::mount(blk_dev) {
         Ok(fs) => fs,
         Err(_) => { log("rux: ext2: mount failed (bad superblock?)\n"); return false; }
     };
-
     log("rux: ext2: mounted as root (block_size=");
     { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, ext2.block_size)); }
     log(")\n");
 
     EXT2_FS.write(ext2);
     let ext2_ptr = EXT2_FS.assume_init_mut() as *mut rux_fs::ext2::Ext2Fs;
-
-    // Replace VFS root (slot 0) with ext2
     let vfs = &mut *vfs_ptr;
     vfs.set_root(rux_fs::vfs::MountedFs::Ext2(ext2_ptr));
-
     true
 }
 

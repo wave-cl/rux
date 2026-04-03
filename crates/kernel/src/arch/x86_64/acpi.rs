@@ -76,12 +76,21 @@ pub unsafe fn find_srat(rsdp_addr: usize) -> Option<usize> {
     let rsdt_len = rsdt.length as usize;
     // Sanity check: RSDT length must be reasonable (header + at most 256 entries)
     if rsdt_len < header_size || rsdt_len > header_size + 256 * 4 { return None; }
+    // Verify the entire RSDT is within mapped memory
+    let rsdt_end = rsdt_addr + rsdt_len;
+    if rsdt_end >= 128 * 1024 * 1024 { return None; }
     let entry_count = (rsdt_len - header_size) / 4;
     let entries = (rsdt_addr + header_size) as *const u32;
 
+    // Limit to avoid accessing unmapped memory. Identity map covers 0-128MB,
+    // but QEMU may place ACPI tables near the top of RAM which can shift
+    // when PCI devices are added.
+    let mem_limit = 128 * 1024 * 1024;
     for i in 0..entry_count {
-        let table_addr = *entries.add(i) as usize;
-        if table_addr == 0 || table_addr >= 128 * 1024 * 1024 { continue; }
+        let entry_ptr = entries.add(i) as usize;
+        if entry_ptr + 4 > mem_limit { break; }
+        let table_addr = core::ptr::read_unaligned(entry_ptr as *const u32) as usize;
+        if table_addr == 0 || table_addr + 36 >= mem_limit { continue; }
         let header = &*(table_addr as *const AcpiHeader);
         if &header.signature == b"SRAT" {
             return Some(table_addr);

@@ -14,10 +14,18 @@ INITRD="initramfs/initramfs_aarch64.cpio"
 
 rustup run nightly cargo build -p rux-kernel --target ${TARGET}
 
+# Optional ext2 root disk
+DISK_ARGS=""
+ROOTFS="rootfs/rootfs_aarch64.img"
+if [ -f "${ROOTFS}" ]; then
+  DISK_ARGS="-drive file=${ROOTFS},format=raw,if=none,id=disk0 -device virtio-blk-device,drive=disk0"
+fi
+
 # Load initrd to a known physical address (0x45000000) using generic loader.
 # QEMU's -initrd doesn't work reliably with bare ELF kernels on aarch64.
 exec ${QEMU} -machine virt -cpu max -smp 2 \
   -kernel ${KERNEL} \
   -device loader,file=${INITRD},addr=0x45000000,force-raw=on \
+  ${DISK_ARGS} \
   -serial mon:stdio -display none \
   -semihosting -no-reboot -m 128M

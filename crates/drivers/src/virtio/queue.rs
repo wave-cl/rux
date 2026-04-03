@@ -66,25 +66,33 @@ pub struct Virtqueue {
 }
 
 impl Virtqueue {
-    /// Initialize a virtqueue from a contiguous memory region.
-    ///
-    /// Layout: descriptors (16 * QUEUE_SIZE) | avail ring | padding | used ring
-    /// Total: ~2 pages for QUEUE_SIZE=16.
+    /// Initialize a virtqueue with the default QUEUE_SIZE (16 entries).
+    pub unsafe fn init(base: usize) -> Self {
+        Self::init_with_size(base, QUEUE_SIZE)
+    }
+
+    /// Initialize a virtqueue with a specific size (for PCI legacy where
+    /// the device dictates queue size).
     ///
     /// # Safety
-    /// `base` must point to zeroed, page-aligned memory of sufficient size.
-    pub unsafe fn init(base: usize) -> Self {
+    /// `base` must point to zeroed, page-aligned memory large enough for
+    /// the given queue size.
+    pub unsafe fn init_with_size(base: usize, size: u16) -> Self {
         let desc = base as *mut Descriptor;
-        let avail = (base + Self::avail_offset()) as *mut AvailRing;
-        let used = (base + Self::used_offset()) as *mut UsedRing;
+        let avail_off = 16 * size as usize; // sizeof(Descriptor) * size
+        let avail = (base + avail_off) as *mut AvailRing;
+        // Used ring: align to 4096 after avail ring
+        let avail_end = avail_off + 4 + 2 * size as usize + 2;
+        let used_off = (avail_end + 0xFFF) & !0xFFF;
+        let used = (base + used_off) as *mut UsedRing;
 
         // Chain free descriptors: 0→1→2→...→(N-1)
-        for i in 0..QUEUE_SIZE {
+        for i in 0..size {
             let d = &mut *desc.add(i as usize);
             d.addr = 0;
             d.len = 0;
             d.flags = 0;
-            d.next = if i + 1 < QUEUE_SIZE { i + 1 } else { 0 };
+            d.next = if i + 1 < size { i + 1 } else { 0 };
         }
 
         Self {
@@ -92,7 +100,7 @@ impl Virtqueue {
             avail,
             used,
             free_head: 0,
-            num_free: QUEUE_SIZE,
+            num_free: size,
             last_used_idx: 0,
         }
     }
