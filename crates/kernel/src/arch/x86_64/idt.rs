@@ -397,8 +397,9 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             unsafe { super::pit::ack(); }
             unsafe {
                 crate::task_table::wake_sleepers();
-                #[cfg(feature = "net")]
-                if rux_net::stack::is_configured() { rux_net::stack::poll(); }
+                // net poll disabled on x86_64 for now (causes exec crash)
+                // #[cfg(feature = "net")]
+                // if rux_net::stack::is_configured() { rux_net::stack::poll(); }
 
                 let sched = crate::scheduler::get();
                 sched.tick(1_000_000);

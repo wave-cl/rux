@@ -112,17 +112,20 @@ pub unsafe fn boot(params: BootParams) -> ! {
         }
     }
 
-    // x86_64: probe PCI for virtio-net
+    // x86_64: probe PCI for virtio-net (only allocate if device found)
     #[cfg(all(target_arch = "x86_64", feature = "net"))]
     {
         use rux_mm::FrameAllocator;
-        let alloc = &mut *alloc_ptr;
-        let rx_pg = alloc.alloc_order(2).ok();
-        let tx_pg = alloc.alloc_order(2).ok();
-        if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
-            core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 16384);
-            core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 16384);
-            if rux_drivers::virtio::net_pci::init(rx.as_usize(), tx.as_usize()) {
+        // Check for device BEFORE allocating queue pages
+        let has_net = rux_drivers::pci::find_device(rux_drivers::pci::VIRTIO_VENDOR, 0x1000).is_some();
+        if has_net {
+            let alloc = &mut *alloc_ptr;
+            let rx_pg = alloc.alloc_order(2).ok();
+            let tx_pg = alloc.alloc_order(2).ok();
+            if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
+                core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 16384);
+                core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 16384);
+                if rux_drivers::virtio::net_pci::init(rx.as_usize(), tx.as_usize()) {
                 let mac = rux_drivers::virtio::net_pci::mac();
                 rux_net::stack::set_driver(
                     |frame| rux_drivers::virtio::net_pci::send(frame),
@@ -145,6 +148,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
                 }
             }
         }
+        } // if has_net
     }
 
     // Mount procfs at /proc and devfs at /dev
