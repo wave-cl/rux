@@ -291,4 +291,65 @@ mod tests {
             assert_eq!(r, 0, "rename failed: {r}");
         }
     }
+
+    #[test]
+    fn test_pipe_multiple_writes() {
+        setup();
+        unsafe {
+            // Create pipe
+            let mut fds = [0i32; 2];
+            let r = syscall::dispatch(Syscall::Pipe2, fds.as_mut_ptr() as usize, 0, 0, 0, 0);
+            assert!(r >= 0, "pipe2 failed: {r}");
+            let rfd = fds[0] as usize;
+            let wfd = fds[1] as usize;
+            // Write 3 chunks
+            let d1 = b"aaa";
+            let d2 = b"bbb";
+            let d3 = b"ccc";
+            syscall::dispatch(Syscall::Write, wfd, d1.as_ptr() as usize, 3, 0, 0);
+            syscall::dispatch(Syscall::Write, wfd, d2.as_ptr() as usize, 3, 0, 0);
+            syscall::dispatch(Syscall::Write, wfd, d3.as_ptr() as usize, 3, 0, 0);
+            // Read all back
+            let mut buf = [0u8; 9];
+            let n = syscall::dispatch(Syscall::Read, rfd, buf.as_mut_ptr() as usize, 9, 0, 0);
+            assert_eq!(n, 9, "read returned {n}");
+            assert_eq!(&buf, b"aaabbbccc");
+            syscall::dispatch(Syscall::Close, rfd, 0, 0, 0, 0);
+            syscall::dispatch(Syscall::Close, wfd, 0, 0, 0, 0);
+        }
+    }
+
+    #[test]
+    fn test_mkdir_and_chdir_nested() {
+        setup();
+        unsafe {
+            let dir = b"/tmp/nested\0";
+            let r = syscall::dispatch(Syscall::Mkdir, dir.as_ptr() as usize, 0, 0, 0, 0);
+            assert!(r >= 0 || r == -17, "mkdir failed: {r}"); // -EEXIST ok
+            let r = syscall::dispatch(Syscall::Chdir, dir.as_ptr() as usize, 0, 0, 0, 0);
+            assert_eq!(r, 0, "chdir failed: {r}");
+            // Verify cwd changed
+            let mut buf = [0u8; 64];
+            let n = syscall::dispatch(Syscall::Getcwd, buf.as_mut_ptr() as usize, 64, 0, 0, 0);
+            assert!(n > 0);
+            let cwd = std::ffi::CStr::from_bytes_until_nul(&buf).unwrap().to_bytes();
+            assert!(cwd.ends_with(b"nested"), "cwd should end with nested, got {:?}", cwd);
+            // Restore cwd
+            syscall::dispatch(Syscall::Chdir, b"/\0".as_ptr() as usize, 0, 0, 0, 0);
+        }
+    }
+
+    #[test]
+    fn test_getdents64() {
+        setup();
+        unsafe {
+            // Open root directory
+            let fd = syscall::dispatch(Syscall::Open, b"/\0".as_ptr() as usize, 0, 0, 0, 0);
+            assert!(fd >= 0, "open / failed: {fd}");
+            let mut buf = [0u8; 512];
+            let n = syscall::dispatch(Syscall::Getdents64, fd as usize, buf.as_mut_ptr() as usize, 512, 0, 0);
+            assert!(n > 0, "getdents64 returned {n}");
+            syscall::dispatch(Syscall::Close, fd as usize, 0, 0, 0, 0);
+        }
+    }
 }
