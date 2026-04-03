@@ -101,11 +101,11 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
         Some(i) => i,
         None => return crate::errno::EBADF,
     };
+    if addr_ptr == 0 { return crate::errno::EFAULT; }
     unsafe {
-        // Parse sockaddr_in: family(2) + port(2) + ip(4) + pad(8)
         let port = u16::from_be_bytes([
-            *(addr_ptr as *const u8).add(2),
-            *(addr_ptr as *const u8).add(3),
+            crate::uaccess::get_user::<u8>(addr_ptr + 2),
+            crate::uaccess::get_user::<u8>(addr_ptr + 3),
         ]);
         SOCKETS[idx].bound_port = port;
     }
@@ -121,18 +121,19 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     unsafe {
         let sock = &mut SOCKETS[idx];
         if sock.sock_type != SOCK_STREAM { return 0; } // non-TCP: stub
+        if addr_ptr == 0 { return crate::errno::EFAULT; }
 
         #[cfg(feature = "net")]
         {
             let dst_port = u16::from_be_bytes([
-                *(addr_ptr as *const u8).add(2),
-                *(addr_ptr as *const u8).add(3),
+                crate::uaccess::get_user::<u8>(addr_ptr + 2),
+                crate::uaccess::get_user::<u8>(addr_ptr + 3),
             ]);
             let dst_ip: [u8; 4] = [
-                *(addr_ptr as *const u8).add(4),
-                *(addr_ptr as *const u8).add(5),
-                *(addr_ptr as *const u8).add(6),
-                *(addr_ptr as *const u8).add(7),
+                crate::uaccess::get_user::<u8>(addr_ptr + 4),
+                crate::uaccess::get_user::<u8>(addr_ptr + 5),
+                crate::uaccess::get_user::<u8>(addr_ptr + 6),
+                crate::uaccess::get_user::<u8>(addr_ptr + 7),
             ];
 
             let conn_idx = match rux_net::tcp::alloc_conn() {
@@ -168,17 +169,22 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
     };
     unsafe {
 
-        // Parse destination sockaddr_in
-        let dst_port = u16::from_be_bytes([
-            *(addr_ptr as *const u8).add(2),
-            *(addr_ptr as *const u8).add(3),
-        ]);
-        let dst_ip: [u8; 4] = [
-            *(addr_ptr as *const u8).add(4),
-            *(addr_ptr as *const u8).add(5),
-            *(addr_ptr as *const u8).add(6),
-            *(addr_ptr as *const u8).add(7),
-        ];
+        // Parse destination sockaddr_in (may be null for connected sockets)
+        let (dst_ip, dst_port) = if addr_ptr != 0 {
+            let p = u16::from_be_bytes([
+                crate::uaccess::get_user::<u8>(addr_ptr + 2),
+                crate::uaccess::get_user::<u8>(addr_ptr + 3),
+            ]);
+            let ip: [u8; 4] = [
+                crate::uaccess::get_user::<u8>(addr_ptr + 4),
+                crate::uaccess::get_user::<u8>(addr_ptr + 5),
+                crate::uaccess::get_user::<u8>(addr_ptr + 6),
+                crate::uaccess::get_user::<u8>(addr_ptr + 7),
+            ];
+            (ip, p)
+        } else {
+            ([0u8; 4], 0u16)
+        };
 
         // Copy user buffer to kernel
         let send_len = len.min(1400);
