@@ -158,17 +158,18 @@ impl Virtqueue {
         fence(Ordering::Release);
     }
 
-    /// Poll for completion. Returns when the device has consumed the request.
-    pub unsafe fn poll_used(&mut self) {
-        loop {
+    /// Poll for completion. Returns true if device responded, false on timeout.
+    pub unsafe fn poll_used(&mut self) -> bool {
+        for _ in 0..100_000_000u32 {
             fence(Ordering::Acquire);
             let used = &*self.used;
             if used.idx != self.last_used_idx {
                 self.last_used_idx = used.idx;
-                return;
+                return true;
             }
             core::hint::spin_loop();
         }
+        false // timeout
     }
 
     /// Free a chain of descriptors starting at `head`.

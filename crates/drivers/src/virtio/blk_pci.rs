@@ -22,13 +22,16 @@ struct BlkReqHeader {
     sector: u64,
 }
 
+/// Static request header and status byte — shared across all reads.
+/// Safe because we're single-threaded at boot time.
+static mut REQ_HEADER: BlkReqHeader = BlkReqHeader { typ: 0, _reserved: 0, sector: 0 };
+static mut STATUS_BYTE: u8 = 0xFF;
+
 /// virtio-blk device over PCI transport.
 pub struct VirtioBlkPci {
     pci_dev: VirtioPci,
-    vq: Virtqueue,
+    vq: core::cell::UnsafeCell<Virtqueue>,
     capacity: u64,
-    req_header: BlkReqHeader,
-    status_byte: u8,
 }
 
 impl VirtioBlkPci {
@@ -73,9 +76,9 @@ impl VirtioBlkPci {
             return Err(DriverError::ProbeFailure);
         }
         // Use device's queue size (legacy PCI: fixed by device, can't change)
-        let vq = Virtqueue::init_with_size(vq_pages, dev_queue_size);
+        let vq = core::cell::UnsafeCell::new(Virtqueue::init_with_size(vq_pages, dev_queue_size));
         // Legacy PCI: write PFN of queue (page frame number, 4096-byte pages)
-        pci_dev.set_queue_addr((vq.desc_addr() / 4096) as u32);
+        pci_dev.set_queue_addr(((*vq.get()).desc_addr() / 4096) as u32);
 
         // Driver OK
         pci_dev.set_status(STATUS_ACK | STATUS_DRIVER | STATUS_DRIVER_OK);
@@ -87,47 +90,51 @@ impl VirtioBlkPci {
             pci_dev,
             vq,
             capacity,
-            req_header: BlkReqHeader { typ: 0, _reserved: 0, sector: 0 },
-            status_byte: 0xFF,
         })
     }
 
     pub fn capacity_sectors(&self) -> u64 { self.capacity }
 
     pub unsafe fn read_sector(&mut self, sector: u64, buf: *mut u8) -> Result<(), DriverError> {
-        self.req_header.typ = VIRTIO_BLK_T_IN;
-        self.req_header.sector = sector;
-        self.status_byte = 0xFF;
+        REQ_HEADER.typ = VIRTIO_BLK_T_IN;
+        REQ_HEADER.sector = sector;
+        STATUS_BYTE = 0xFF;
 
-        let head = self.vq.alloc_chain(3).ok_or(DriverError::ResourceBusy)?;
+        let vq = &mut *self.vq.get();
+        let head = vq.alloc_chain(3).ok_or(DriverError::ResourceBusy)?;
 
-        // Descriptor 0: request header
-        let d0 = &mut *self.vq.desc.add(head as usize);
-        d0.addr = &self.req_header as *const BlkReqHeader as u64;
+        // Descriptor 0: request header (device reads)
+        let d0 = &mut *vq.desc.add(head as usize);
+        d0.addr = &raw const REQ_HEADER as u64;
         d0.len = 16;
         d0.flags = DESC_F_NEXT;
         let d1_idx = d0.next;
 
         // Descriptor 1: data buffer (device writes)
-        let d1 = &mut *self.vq.desc.add(d1_idx as usize);
+        let d1 = &mut *vq.desc.add(d1_idx as usize);
         d1.addr = buf as u64;
         d1.len = 512;
         d1.flags = DESC_F_WRITE | DESC_F_NEXT;
         let d2_idx = d1.next;
 
         // Descriptor 2: status byte (device writes)
-        let d2 = &mut *self.vq.desc.add(d2_idx as usize);
-        d2.addr = &self.status_byte as *const u8 as u64;
+        let d2 = &mut *vq.desc.add(d2_idx as usize);
+        d2.addr = &raw const STATUS_BYTE as u64;
         d2.len = 1;
         d2.flags = DESC_F_WRITE;
 
-        self.vq.submit(head);
+        vq.submit(head);
         self.pci_dev.notify(0);
-        self.vq.poll_used();
-        self.vq.free_chain(head);
+        if !vq.poll_used() {
+            vq.free_chain(head);
+            return Err(DriverError::Timeout);
+        }
+        vq.free_chain(head);
 
-        if self.status_byte == VIRTIO_BLK_S_OK {
+        if STATUS_BYTE == VIRTIO_BLK_S_OK {
             Ok(())
+        } else if STATUS_BYTE == 0xFF {
+            Err(DriverError::Timeout)
         } else {
             Err(DriverError::IoError)
         }
@@ -139,8 +146,45 @@ impl BlockDevice for VirtioBlkPci {
     fn block_count(&self) -> u64 { self.capacity }
 
     unsafe fn read_block(&self, block: u64, buf: *mut u8) -> Result<(), DriverError> {
-        let this = (self as *const Self as *mut Self).as_mut().unwrap();
-        this.read_sector(block, buf)
+        let vq = &mut *self.vq.get();
+        let pci = &self.pci_dev;
+
+        REQ_HEADER.typ = VIRTIO_BLK_T_IN;
+        REQ_HEADER.sector = block;
+        STATUS_BYTE = 0xFF;
+
+        let head = vq.alloc_chain(3).ok_or(DriverError::ResourceBusy)?;
+
+        let d0 = &mut *vq.desc.add(head as usize);
+        d0.addr = &raw const REQ_HEADER as u64;
+        d0.len = 16;
+        d0.flags = DESC_F_NEXT;
+        let d1_idx = d0.next;
+
+        let d1 = &mut *vq.desc.add(d1_idx as usize);
+        d1.addr = buf as u64;
+        d1.len = 512;
+        d1.flags = DESC_F_WRITE | DESC_F_NEXT;
+        let d2_idx = d1.next;
+
+        let d2 = &mut *vq.desc.add(d2_idx as usize);
+        d2.addr = &raw const STATUS_BYTE as u64;
+        d2.len = 1;
+        d2.flags = DESC_F_WRITE;
+
+        vq.submit(head);
+        pci.notify(0);
+        if !vq.poll_used() {
+            vq.free_chain(head);
+            return Err(DriverError::Timeout);
+        }
+        vq.free_chain(head);
+
+        if STATUS_BYTE == VIRTIO_BLK_S_OK {
+            Ok(())
+        } else {
+            Err(DriverError::IoError)
+        }
     }
 
     unsafe fn write_block(&mut self, _block: u64, _buf: *const u8) -> Result<(), DriverError> {

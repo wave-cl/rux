@@ -108,16 +108,22 @@ pub unsafe fn boot(params: BootParams) -> ! {
     let init_ino = match rux_fs::path::resolve_path(vfs, init_path) {
         Ok(ino) => ino,
         Err(e) => {
-            log("rux: resolve_path failed: ");
+            log("rux: resolve_path(");
+            crate::arch::Arch::write_bytes(init_path);
+            log(") failed: ");
             log(match e {
                 rux_fs::VfsError::NotFound => "not found",
                 rux_fs::VfsError::NotADirectory => "not a dir",
                 rux_fs::VfsError::IoError => "io error",
+                rux_fs::VfsError::NotSupported => "not supported",
                 _ => "other",
             });
             log("\n");
-            // Fallback: try /bin/sh directly
-            rux_fs::path::resolve_path(vfs, b"/bin/sh").expect("/bin/sh not found")
+            // Try /bin/sh as fallback
+            match rux_fs::path::resolve_path(vfs, b"/bin/sh") {
+                Ok(ino) => { log("rux: fallback to /bin/sh\n"); ino }
+                Err(_) => { log("rux: /bin/sh also failed!\n"); loop { core::hint::spin_loop(); } }
+            }
         }
     };
     let alloc = &mut *alloc_ptr;
@@ -144,18 +150,13 @@ unsafe fn try_mount_ext2_root(
     use rux_mm::FrameAllocator;
     let alloc = &mut *alloc_ptr;
 
-    // Allocate 8 contiguous pages (32KB) for virtqueue — enough for queue size up to 256
-    let vq_page = match alloc.alloc(rux_mm::PageSize::FourK) {
+    // Allocate contiguous 32KB (order 3 = 8 pages) for virtqueue.
+    // Must be contiguous: the device calculates used ring offset from PFN.
+    let vq_page = match alloc.alloc_order(3) {
         Ok(p) => p,
         Err(_) => { log("rux: virtio-blk: no memory for virtqueue\n"); return false; }
     };
-    // Zero all 8 pages
-    core::ptr::write_bytes(vq_page.as_usize() as *mut u8, 0, 4096);
-    for _ in 1..8 {
-        if let Ok(p) = alloc.alloc(rux_mm::PageSize::FourK) {
-            core::ptr::write_bytes(p.as_usize() as *mut u8, 0, 4096);
-        }
-    }
+    core::ptr::write_bytes(vq_page.as_usize() as *mut u8, 0, 32768);
 
     // ── Platform-specific probe ────────────────────────────────────
     let blk_dev: *const dyn rux_drivers::BlockDevice;
@@ -164,18 +165,6 @@ unsafe fn try_mount_ext2_root(
     #[cfg(target_arch = "x86_64")]
     {
         log("rux: probing PCI for virtio-blk...\n");
-
-        // Debug: show found PCI device
-        if let Some(dev) = rux_drivers::pci::find_device(
-            rux_drivers::pci::VIRTIO_VENDOR, rux_drivers::pci::VIRTIO_BLK_LEGACY,
-        ) {
-            log("rux: PCI: vendor=0x1AF4 dev=0x1001 bar0=0x");
-            { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, dev.bar0 as usize)); }
-            log(" bar1=0x");
-            { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, dev.bar1 as usize)); }
-            log("\n");
-        }
-
         match rux_drivers::virtio::blk_pci::VirtioBlkPci::probe(vq_page.as_usize()) {
             Ok(blk) => {
                 capacity = blk.capacity_sectors();
@@ -224,6 +213,7 @@ unsafe fn try_mount_ext2_root(
     log("rux: ext2: mounted as root (block_size=");
     { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, ext2.block_size)); }
     log(")\n");
+
 
     EXT2_FS.write(ext2);
     let ext2_ptr = EXT2_FS.assume_init_mut() as *mut rux_fs::ext2::Ext2Fs;

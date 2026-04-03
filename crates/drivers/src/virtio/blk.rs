@@ -169,7 +169,10 @@ impl VirtioBlk {
         // Submit and poll
         self.vq.submit(head);
         self.mmio.notify(0);
-        self.vq.poll_used();
+        if !self.vq.poll_used() {
+            self.vq.free_chain(head);
+            return Err(DriverError::Timeout);
+        }
         self.vq.free_chain(head);
 
         if self.status_byte == VIRTIO_BLK_S_OK {
