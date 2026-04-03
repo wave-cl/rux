@@ -233,19 +233,19 @@ pub fn x86_64_init(multiboot_info: usize) {
         console::write_str(" KiB)\n");
     }
 
-    // ── Static storage for allocator + ramfs ──────────────────────────
-    // Using static mut in BSS ensures the compiler accounts for these in
-    // the kernel binary size. QEMU places the initrd above the kernel
-    // (including BSS), avoiding the overlap that occurred with hardcoded
-    // addresses at 0x300000.
-    static mut BUDDY_ALLOC: core::mem::MaybeUninit<rux_mm::frame::BuddyAllocator> =
-        core::mem::MaybeUninit::uninit();
-    static mut RAMFS: core::mem::MaybeUninit<rux_fs::ramfs::RamFs> =
-        core::mem::MaybeUninit::uninit();
-
-    let alloc_addr = unsafe { (&raw mut BUDDY_ALLOC) as *mut u8 as usize };
-    let ramfs_addr = unsafe { (&raw mut RAMFS) as *mut u8 as usize };
+    // ── Compute addresses for BuddyAllocator + RamFs ──────────────────
+    // These must be above the initrd to avoid overwriting cpio data.
+    // Place them at a fixed base (0x600000) that's above both kernel BSS
+    // and the maximum expected initrd end, but below the frame allocator
+    // range (0x780000). If the initrd extends past 0x600000, bump up.
+    let initrd_info = unsafe { super::multiboot::get_initrd(multiboot_info) };
+    let initrd_end = match initrd_info {
+        Some((start, size)) => ((start + size) + 0xFFF) & !0xFFF,
+        None => 0,
+    };
     let alloc_size_bytes = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
+    let alloc_addr = initrd_end.max(0x600000);
+    let ramfs_addr = (alloc_addr + alloc_size_bytes + 0xFFF) & !0xFFF;
     let ramfs_end = (ramfs_addr + core::mem::size_of::<rux_fs::ramfs::RamFs>() + 0xFFF) & !0xFFF;
 
     // Log computed layout
@@ -435,7 +435,7 @@ pub fn x86_64_init(multiboot_info: usize) {
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr: alloc_addr as *mut rux_mm::frame::BuddyAllocator,
             ramfs_ptr: ramfs_addr as *mut rux_fs::ramfs::RamFs,
-            initrd: super::multiboot::get_initrd(multiboot_info),
+            initrd: initrd_info,
             procfs: &mut *(&raw mut PROCFS),
             log: console::write_str,
         });
