@@ -355,7 +355,6 @@ pub fn sys_recvmsg(fd: usize, msghdr_ptr: usize) -> isize {
     if msghdr_ptr == 0 { return crate::errno::EINVAL; }
     unsafe {
         let msg_name: usize = crate::uaccess::get_user(msghdr_ptr);
-        let _msg_namelen: u32 = crate::uaccess::get_user(msghdr_ptr + 8);
         let msg_iov: usize = crate::uaccess::get_user(msghdr_ptr + 16);
         let msg_iovlen: usize = crate::uaccess::get_user(msghdr_ptr + 24);
 
@@ -364,8 +363,58 @@ pub fn sys_recvmsg(fd: usize, msghdr_ptr: usize) -> isize {
         let iov_base: usize = crate::uaccess::get_user(msg_iov);
         let iov_len: usize = crate::uaccess::get_user(msg_iov + 8);
 
-        sys_recvfrom(fd, iov_base, iov_len, 0, msg_name, 0)
+        // Create a temp addrlen variable for recvfrom to fill
+        let mut addrlen: u32 = 16;
+        let addrlen_ptr = &mut addrlen as *mut u32 as usize;
+        let r = sys_recvfrom(fd, iov_base, iov_len, 0, msg_name, addrlen_ptr);
+
+        // Write back msg_namelen so musl knows the source address is filled
+        if r >= 0 && msg_name != 0 {
+            crate::uaccess::put_user(msghdr_ptr + 8, 16u32); // msg_namelen = sizeof(sockaddr_in)
+        }
+        // Clear msg_controllen and msg_flags
+        crate::uaccess::put_user(msghdr_ptr + 40, 0u64); // msg_controllen = 0
+        crate::uaccess::put_user(msghdr_ptr + 48, 0u32); // msg_flags = 0
+
+        r
     }
+}
+
+/// sendmmsg(fd, msgvec, vlen, flags) — send multiple messages
+/// Each mmsghdr is: { msghdr(56 bytes), msg_len(4 bytes) }
+pub fn sys_sendmmsg(fd: usize, msgvec_ptr: usize, vlen: usize) -> isize {
+    let mut sent = 0isize;
+    unsafe {
+        let entry_size = 64; // sizeof(mmsghdr) on aarch64: msghdr(56) + msg_len(4) + pad(4)
+        for i in 0..vlen.min(8) {
+            let mhdr = msgvec_ptr + i * entry_size;
+            let r = sys_sendmsg(fd, mhdr);
+            if r < 0 { return if sent > 0 { sent } else { r }; }
+            // Write msg_len field
+            let msg_len_ptr = (mhdr + 56) as *mut u32;
+            *msg_len_ptr = r as u32;
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// recvmmsg(fd, msgvec, vlen, flags, timeout) — receive multiple messages
+pub fn sys_recvmmsg(fd: usize, msgvec_ptr: usize, vlen: usize) -> isize {
+    let mut recvd = 0isize;
+    unsafe {
+        let entry_size = 64;
+        for i in 0..vlen.min(8) {
+            let mhdr = msgvec_ptr + i * entry_size;
+            let r = sys_recvmsg(fd, mhdr);
+            if r < 0 { return if recvd > 0 { recvd } else { r }; }
+            let msg_len_ptr = (mhdr + 56) as *mut u32;
+            *msg_len_ptr = r as u32;
+            recvd += 1;
+            break; // Only receive one message for now
+        }
+    }
+    recvd
 }
 
 /// getsockname(fd, addr, addrlen) — get local address

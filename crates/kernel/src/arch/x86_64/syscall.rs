@@ -461,6 +461,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[51] = Syscall::Getsockname; t[52] = Syscall::Getpeername;
     t[46] = Syscall::Sendmsg;     t[47] = Syscall::Recvmsg;
     t[48] = Syscall::Shutdown;
+    t[307] = Syscall::Sendmmsg;  t[299] = Syscall::Recvmmsg;
     // Process
     t[24] = Syscall::SchedYield; t[35] = Syscall::Nanosleep;
     t[37] = Syscall::Alarm;      t[39] = Syscall::Getpid;

@@ -195,17 +195,15 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     };
 
     let max_iters = if has_sockets && timeout_ms > 0 {
-        // Poll network for up to timeout_ms (each iter ~1 ms due to spin_loop)
-        timeout_ms.min(30_000) * 1000
+        // Each iteration: 100 net polls + check. ~1000 iters/second.
+        // Cap at 5 seconds to avoid hanging.
+        timeout_ms.min(5_000)
     } else { 1 };
 
     for _attempt in 0..max_iters {
         #[cfg(feature = "net")]
         if has_sockets {
-            // Process multiple packets per iteration
-            for _ in 0..100 {
-                unsafe { rux_net::stack::poll(); }
-            }
+            unsafe { rux_net::stack::poll(); }
         }
 
         unsafe {
@@ -243,7 +241,8 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
         if ready > 0 { return ready as isize; }
         } // unsafe
 
-        core::hint::spin_loop();
+        // Wait for next timer tick (yields CPU, allows timer ISR to process packets)
+        unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
     }
     0 // timeout
 }

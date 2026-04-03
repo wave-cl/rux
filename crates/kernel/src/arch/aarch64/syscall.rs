@@ -267,6 +267,7 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[204] = Syscall::Getsockname; t[205] = Syscall::Getpeername;
     t[211] = Syscall::Sendmsg;     t[212] = Syscall::Recvmsg;
     t[210] = Syscall::Shutdown;
+    t[269] = Syscall::Sendmmsg;  t[243] = Syscall::Recvmmsg;
     // Linux extensions
     t[61] = Syscall::Getdents64; t[43] = Syscall::Statfs;
     t[44] = Syscall::Statfs;     t[179] = Syscall::Sysinfo;

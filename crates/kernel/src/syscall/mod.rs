@@ -162,7 +162,7 @@ pub enum Syscall {
     Mount, Umount,
     // Sockets
     Socket, Bind, Sendto, Recvfrom, Setsockopt, Getsockopt, Connect,
-    Getsockname, Getpeername, Sendmsg, Recvmsg, Shutdown,
+    Getsockname, Getpeername, Sendmsg, Recvmsg, Shutdown, Sendmmsg, Recvmmsg,
     // Additional syscalls for musl/Alpine
     Getrandom, ClockGetres, Dup3, Sysctl,
     // Stubs that return specific values
@@ -325,7 +325,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Getpeername => socket::sys_getpeername(a0, a1, a2),
         Syscall::Sendmsg => socket::sys_sendmsg(a0, a1),
         Syscall::Recvmsg => socket::sys_recvmsg(a0, a1),
-        Syscall::Shutdown => 0, // stub
+        Syscall::Shutdown => 0,
+        Syscall::Sendmmsg => socket::sys_sendmmsg(a0, a1, a2),
+        Syscall::Recvmmsg => socket::sys_recvmmsg(a0, a1, a2),
 
         // ── Additional syscalls ────────────────────────────────────
         Syscall::Getrandom => posix::getrandom(a0, a1, a2),
