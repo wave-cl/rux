@@ -88,7 +88,7 @@ pub enum TcpState {
     LastAck,
 }
 
-const RX_BUF_SIZE: usize = 8192;
+const RX_BUF_SIZE: usize = 65536;
 const MAX_TCP_CONNS: usize = 4;
 
 pub struct TcpConn {
@@ -127,6 +127,11 @@ impl TcpConn {
         else { RX_BUF_SIZE - self.rx_head + self.rx_tail }
     }
 
+    /// Free space in the receive buffer (for window advertisement).
+    pub fn rx_free(&self) -> usize {
+        RX_BUF_SIZE - 1 - self.rx_available() // -1 to distinguish full from empty
+    }
+
     pub fn rx_read(&mut self, buf: &mut [u8]) -> usize {
         let avail = self.rx_available();
         let n = buf.len().min(avail);
@@ -137,11 +142,16 @@ impl TcpConn {
         n
     }
 
-    fn rx_write(&mut self, data: &[u8]) {
-        for &b in data {
-            self.rx_buf[self.rx_tail] = b;
+    /// Write data to the receive buffer. Returns number of bytes actually written
+    /// (may be less than data.len() if buffer is full).
+    fn rx_write(&mut self, data: &[u8]) -> usize {
+        let free = self.rx_free();
+        let n = data.len().min(free);
+        for i in 0..n {
+            self.rx_buf[self.rx_tail] = data[i];
             self.rx_tail = (self.rx_tail + 1) % RX_BUF_SIZE;
         }
+        n
     }
 }
 
@@ -182,10 +192,11 @@ pub unsafe fn connect(idx: usize, dst_ip: [u8; 4], dst_port: u16, src_ip: [u8; 4
     conn.snd_una = conn.snd_nxt;
     conn.state = TcpState::SynSent;
 
-    // Send SYN
+    // Send SYN with window = rx buffer size
     let mut seg = [0u8; 60];
+    let win = (RX_BUF_SIZE - 1).min(65535) as u16;
     let len = build(&mut seg, conn.local_port, dst_port,
-        conn.snd_nxt, 0, TCP_SYN, 8192, &[], src_ip, dst_ip);
+        conn.snd_nxt, 0, TCP_SYN, win, &[], src_ip, dst_ip);
     conn.snd_nxt += 1; // SYN consumes one seq
     super::stack::send_ip_raw(dst_ip, ipv4::PROTO_TCP, &seg[..len])
 }
@@ -200,8 +211,9 @@ pub unsafe fn send(idx: usize, data: &[u8]) -> isize {
         let chunk = (data.len() - sent).min(1400); // MSS-ish
         let mut seg = [0u8; 1500];
         let flags = TCP_ACK | TCP_PSH;
+        let win = conn.rx_free().min(65535) as u16;
         let len = build(&mut seg, conn.local_port, conn.remote_port,
-            conn.snd_nxt, conn.rcv_nxt, flags, 8192,
+            conn.snd_nxt, conn.rcv_nxt, flags, win,
             &data[sent..sent + chunk], conn.local_ip, conn.remote_ip);
         conn.snd_nxt = conn.snd_nxt.wrapping_add(chunk as u32);
         super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
@@ -228,6 +240,20 @@ pub unsafe fn close(idx: usize) {
             &[], conn.local_ip, conn.remote_ip);
         conn.snd_nxt += 1;
         conn.state = TcpState::LastAck;
+        super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
+    }
+}
+
+/// Send a window update ACK. Called after the user reads data from the
+/// receive buffer, so the sender knows there's more space available.
+pub unsafe fn send_window_update(idx: usize) {
+    let conn = &mut CONNS[idx];
+    if conn.state == TcpState::Established || conn.state == TcpState::CloseWait {
+        let win = conn.rx_free().min(65535) as u16;
+        let mut seg = [0u8; 60];
+        let len = build(&mut seg, conn.local_port, conn.remote_port,
+            conn.snd_nxt, conn.rcv_nxt, TCP_ACK, win,
+            &[], conn.local_ip, conn.remote_ip);
         super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
     }
 }
@@ -261,74 +287,98 @@ pub unsafe fn handle_segment(
     };
     let conn = &mut CONNS[idx];
 
+    // Helper: send ACK with current window
+    let send_ack = |conn: &mut TcpConn| {
+        let win = conn.rx_free().min(65535) as u16;
+        let mut seg = [0u8; 60];
+        let len = build(&mut seg, conn.local_port, conn.remote_port,
+            conn.snd_nxt, conn.rcv_nxt, TCP_ACK, win,
+            &[], conn.local_ip, conn.remote_ip);
+        super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
+    };
+
+    // Helper: accept incoming data, returns true if ACK should be sent
+    let accept_data = |conn: &mut TcpConn, seq: u32, payload: &[u8]| -> bool {
+        if payload.is_empty() { return false; }
+
+        // Check if this segment starts at our expected sequence number
+        let offset = seq.wrapping_sub(conn.rcv_nxt) as i32;
+        if offset == 0 {
+            // In-order data
+            let written = conn.rx_write(payload);
+            conn.rcv_nxt = conn.rcv_nxt.wrapping_add(written as u32);
+            true
+        } else if offset < 0 && (-offset as usize) < payload.len() {
+            // Partially overlapping retransmit — skip already-received bytes
+            let skip = (-offset) as usize;
+            let written = conn.rx_write(&payload[skip..]);
+            conn.rcv_nxt = conn.rcv_nxt.wrapping_add(written as u32);
+            true
+        } else if offset < 0 {
+            // Complete duplicate — ACK to stop retransmits
+            true
+        } else {
+            // Out of order (gap) — ACK with current rcv_nxt to trigger fast retransmit
+            true
+        }
+    };
+
     match conn.state {
         TcpState::SynSent => {
             if flags & TCP_SYN != 0 && flags & TCP_ACK != 0 {
-                // SYN+ACK received — complete handshake
                 conn.rcv_nxt = seq.wrapping_add(1);
                 conn.snd_una = ack;
                 conn.state = TcpState::Established;
-                // Send ACK
-                let mut seg = [0u8; 60];
-                let len = build(&mut seg, conn.local_port, conn.remote_port,
-                    conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 8192,
-                    &[], conn.local_ip, conn.remote_ip);
-                super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
+                send_ack(conn);
             }
         }
         TcpState::Established => {
-            // Process incoming data
-            if !payload.is_empty() && seq == conn.rcv_nxt {
-                conn.rx_write(payload);
-                conn.rcv_nxt = conn.rcv_nxt.wrapping_add(payload.len() as u32);
-                // Send ACK
-                let mut seg = [0u8; 60];
-                let len = build(&mut seg, conn.local_port, conn.remote_port,
-                    conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 8192,
-                    &[], conn.local_ip, conn.remote_ip);
-                super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
+            if flags & TCP_ACK != 0 {
+                conn.snd_una = ack;
             }
-            // FIN received
+            let need_ack = accept_data(conn, seq, payload);
             if flags & TCP_FIN != 0 {
                 conn.rcv_nxt = conn.rcv_nxt.wrapping_add(1);
                 conn.fin_received = true;
                 conn.state = TcpState::CloseWait;
-                let mut seg = [0u8; 60];
-                let len = build(&mut seg, conn.local_port, conn.remote_port,
-                    conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 0,
-                    &[], conn.local_ip, conn.remote_ip);
-                super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
-            }
-            // ACK of our data
-            if flags & TCP_ACK != 0 {
-                conn.snd_una = ack;
+                send_ack(conn);
+            } else if need_ack {
+                send_ack(conn);
             }
         }
         TcpState::FinWait1 => {
             if flags & TCP_ACK != 0 {
+                conn.snd_una = ack;
                 conn.state = TcpState::FinWait2;
             }
+            accept_data(conn, seq, payload);
             if flags & TCP_FIN != 0 {
                 conn.rcv_nxt = conn.rcv_nxt.wrapping_add(1);
-                let mut seg = [0u8; 60];
-                let len = build(&mut seg, conn.local_port, conn.remote_port,
-                    conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 0,
-                    &[], conn.local_ip, conn.remote_ip);
-                super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
+                conn.fin_received = true;
+                send_ack(conn);
                 conn.state = TcpState::Closed;
                 conn.active = false;
+            } else {
+                send_ack(conn);
             }
         }
         TcpState::FinWait2 => {
+            // Accept data in FIN_WAIT_2 (server may still be sending)
+            accept_data(conn, seq, payload);
             if flags & TCP_FIN != 0 {
                 conn.rcv_nxt = conn.rcv_nxt.wrapping_add(1);
-                let mut seg = [0u8; 60];
-                let len = build(&mut seg, conn.local_port, conn.remote_port,
-                    conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 0,
-                    &[], conn.local_ip, conn.remote_ip);
-                super::stack::send_ip_raw(conn.remote_ip, ipv4::PROTO_TCP, &seg[..len]);
+                conn.fin_received = true;
+                send_ack(conn);
                 conn.state = TcpState::Closed;
                 conn.active = false;
+            } else if !payload.is_empty() {
+                send_ack(conn);
+            }
+        }
+        TcpState::CloseWait => {
+            // Still accept ACKs
+            if flags & TCP_ACK != 0 {
+                conn.snd_una = ack;
             }
         }
         TcpState::LastAck => {

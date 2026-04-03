@@ -198,15 +198,17 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     };
 
     let max_iters = if has_sockets && timeout_ms > 0 {
-        // Each iteration: 100 net polls + check. ~1000 iters/second.
-        // Cap at 5 seconds to avoid hanging.
-        timeout_ms.min(5_000)
+        // Use actual timeout in ms. Each iteration with halt_until_interrupt ~1ms.
+        timeout_ms.min(30_000) // cap at 30 seconds
     } else { 1 };
 
     for _attempt in 0..max_iters {
+        // Poll network multiple times per iteration to drain queued packets
         #[cfg(feature = "net")]
         if has_sockets {
-            unsafe { rux_net::stack::poll(); }
+            for _ in 0..100 {
+                unsafe { rux_net::stack::poll(); }
+            }
         }
 
         unsafe {

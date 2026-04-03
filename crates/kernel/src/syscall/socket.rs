@@ -261,6 +261,8 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
                     let mut kbuf = [0u8; 4096];
                     let n = conn.rx_read(&mut kbuf[..len.min(4096)]);
                     core::ptr::copy_nonoverlapping(kbuf.as_ptr(), buf_ptr as *mut u8, n);
+                    // Send window update so the sender knows we have more space
+                    rux_net::tcp::send_window_update(ci);
                     return n as isize;
                 }
                 if conn.fin_received { return 0; } // EOF
