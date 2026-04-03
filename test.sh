@@ -383,6 +383,37 @@ check "dynamic linking"        "dynlink_ok"
 
 fi  # RUN_AA64
 
+# ── aarch64 networking tests (opt-in: TEST_NET=1) ─────────────────
+if $RUN_AA64 && [ "${TEST_NET:-0}" = "1" ]; then
+printf "\n\033[1m── aarch64 networking ──\033[0m\n"
+# Rebuild with net feature
+cargo build --target aarch64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
+
+OUTPUT=$( { sleep 18; cat <<'CMDS'
+true
+ping -c 1 -W 5 10.0.2.2
+echo ping_done
+exit
+CMDS
+} | \
+    "$QEMU_AA64" -machine virt -cpu max -smp 2 \
+    -kernel target/aarch64-unknown-none/debug/rux-kernel \
+    -device loader,file=initramfs/initramfs_aarch64.cpio,addr=0x45000000,force-raw=on \
+    -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
+    -chardev stdio,id=char0,logfile=/tmp/rux_serial_net.log \
+    -serial chardev:char0 -display none \
+    -semihosting -no-reboot -m 128M 2>&1 || true )
+
+echo "$OUTPUT" > /tmp/rux_test_net.log
+
+check "net: virtio-net detected"   "virtio-net: MAC="
+check "net: ping reply"            "1 packets received"
+check "net: ping done"             "ping_done"
+
+# Rebuild WITHOUT net for subsequent tests
+cargo build --target aarch64-unknown-none -p rux-kernel 2>&1 | tail -1
+fi
+
 # ── Summary ─────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then
