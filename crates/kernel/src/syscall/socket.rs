@@ -285,7 +285,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
                 // Fill in source address if requested
                 if addr_ptr != 0 {
                     let sa = addr_ptr as *mut u8;
-                    *sa.add(0) = 0; *sa.add(1) = AF_INET as u8; // sin_family
+                    *sa.add(0) = AF_INET as u8; *sa.add(1) = 0; // sin_family (LE)
                     let port_be = SOCKETS[idx].rx_from_port.to_be_bytes();
                     *sa.add(2) = port_be[0]; *sa.add(3) = port_be[1];
                     *sa.add(4) = SOCKETS[idx].rx_from_ip[0];
@@ -423,7 +423,7 @@ pub fn sys_getsockname(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
     unsafe {
         // Fill with our IP + bound port
         let sa = addr_ptr as *mut u8;
-        *sa.add(0) = 0; *sa.add(1) = 2; // AF_INET
+        *sa.add(0) = 2; *sa.add(1) = 0; // AF_INET (LE)
         let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
         let port = SOCKETS[idx].bound_port.to_be_bytes();
         *sa.add(2) = port[0]; *sa.add(3) = port[1];
@@ -445,7 +445,7 @@ pub fn sys_getpeername(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
     unsafe {
         let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
         let sa = addr_ptr as *mut u8;
-        *sa.add(0) = 0; *sa.add(1) = 2; // AF_INET
+        *sa.add(0) = 2; *sa.add(1) = 0; // AF_INET (LE)
         // For TCP, read from connection state
         #[cfg(feature = "net")]
         if SOCKETS[idx].tcp_conn >= 0 {
