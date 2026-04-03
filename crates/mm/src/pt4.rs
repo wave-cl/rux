@@ -266,6 +266,84 @@ impl<A: ArchPaging> PageTable4Level<A> {
         Ok(())
     }
 
+    /// Split a huge page into the next smaller page size.
+    ///
+    /// - L1 huge (2MB) → 512 × 4KB entries in a new L0 table.
+    /// - L2 huge (1GB) → 512 × 2MB entries in a new L1 table.
+    ///
+    /// Preserves all permissions from the huge PTE on each child entry.
+    /// After splitting, individual small pages can be unmapped or re-protected.
+    pub unsafe fn split_huge_page(
+        &mut self,
+        virt: VirtAddr,
+        level: PageLevel,
+        alloc: &mut dyn FrameAllocator,
+    ) -> Result<(), MemoryError> {
+        // Walk to the parent table containing the huge entry
+        let l3 = self.root.as_usize() as *mut PageTablePage;
+        let l3e = (*l3).entries[pt_index(virt, PageLevel::L3)];
+        if !A::Pte::is_present(l3e) { return Err(MemoryError::NotMapped); }
+
+        match level {
+            PageLevel::L1 => {
+                // Split 2MB → 512 × 4KB
+                let l2 = A::Pte::phys_addr(l3e).as_usize() as *mut PageTablePage;
+                let l2e = (*l2).entries[pt_index(virt, PageLevel::L2)];
+                if !A::Pte::is_present(l2e) { return Err(MemoryError::NotMapped); }
+
+                let l1 = A::Pte::phys_addr(l2e).as_usize() as *mut PageTablePage;
+                let idx = pt_index(virt, PageLevel::L1);
+                let huge_entry = (*l1).entries[idx];
+                if !A::Pte::is_present(huge_entry) || !A::Pte::is_huge(huge_entry) {
+                    return Err(MemoryError::NotMapped);
+                }
+
+                let huge_phys = A::Pte::phys_addr(huge_entry).as_usize() & !0x1FFFFF;
+                // Get permission flags: raw flags minus HUGE bit, plus leaf flags
+                let raw_flags = A::Pte::flags(huge_entry);
+                let child_flags = (raw_flags & !A::huge_page_flags()) | A::leaf_extra_flags();
+
+                // Allocate new L0 table
+                let new_table = alloc.alloc(PageSize::FourK)?;
+                let new_ptr = new_table.as_usize() as *mut PageTablePage;
+                for i in 0..PT_ENTRIES {
+                    let child_phys = PhysAddr::new(huge_phys + i * 4096);
+                    (*new_ptr).entries[i] = A::Pte::encode(child_phys, child_flags);
+                }
+
+                // Replace huge entry with table entry
+                (*l1).entries[idx] = A::Pte::encode(new_table, A::table_entry_flags());
+                A::flush_tlb_all();
+            }
+            PageLevel::L2 => {
+                // Split 1GB → 512 × 2MB
+                let l2 = A::Pte::phys_addr(l3e).as_usize() as *mut PageTablePage;
+                let idx = pt_index(virt, PageLevel::L2);
+                let huge_entry = (*l2).entries[idx];
+                if !A::Pte::is_present(huge_entry) || !A::Pte::is_huge(huge_entry) {
+                    return Err(MemoryError::NotMapped);
+                }
+
+                let huge_phys = A::Pte::phys_addr(huge_entry).as_usize() & !0x3FFFFFFF;
+                let raw_flags = A::Pte::flags(huge_entry);
+                // Children are 2MB huge pages — keep HUGE bit, add leaf flags
+                let child_flags = raw_flags | A::leaf_extra_flags();
+
+                let new_table = alloc.alloc(PageSize::FourK)?;
+                let new_ptr = new_table.as_usize() as *mut PageTablePage;
+                for i in 0..PT_ENTRIES {
+                    let child_phys = PhysAddr::new(huge_phys + i * 2 * 1024 * 1024);
+                    (*new_ptr).entries[i] = A::Pte::encode(child_phys, child_flags);
+                }
+
+                (*l2).entries[idx] = A::Pte::encode(new_table, A::table_entry_flags());
+                A::flush_tlb_all();
+            }
+            _ => return Err(MemoryError::InvalidSize),
+        }
+        Ok(())
+    }
+
     /// Identity map a range using 1GB/2MB/4K pages where possible.
     pub fn identity_map_range_huge(
         &mut self,

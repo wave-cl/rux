@@ -319,9 +319,19 @@ pub fn x86_64_init(multiboot_info: usize) {
             pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
             console::write_str("rux: CR3 switched to kernel page tables!\n");
 
-            // Note: kernel null guard + stack guard pages deferred — the identity
-            // map uses 2MB huge pages, so unmap_4k can't punch holes without
-            // splitting. These require 4K mapping for the affected regions.
+            // Split the first 2MB huge page into 4K pages so we can
+            // unmap individual pages for null guard and stack guards.
+            kpt.split_huge_page(
+                rux_klib::VirtAddr::new(0), rux_mm::PageLevel::L1, alloc,
+            ).expect("split first 2MB page");
+
+            // Null pointer guard: unmap page 0
+            let _ = kpt.unmap_4k(rux_klib::VirtAddr::new(0));
+            console::write_str("rux: page 0 unmapped (null guard)\n");
+
+            // Note: kernel stack guard pages deferred — KSTACKS span multiple
+            // 2MB pages (BSS at 0x148000-0x21F880). Would need to split each
+            // 2MB page containing a stack bottom.
         }
     }
 
