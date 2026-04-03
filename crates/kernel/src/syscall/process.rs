@@ -275,6 +275,67 @@ pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: us
     0
 }
 
+// ── User/group ID management ──────────────────────────────────────────
+
+/// setuid(uid) — POSIX.1
+/// If euid == 0 (root), sets all IDs. Otherwise only sets euid if uid == uid or euid.
+pub unsafe fn setuid(uid: u32) -> isize {
+    if super::PROCESS.euid == 0 {
+        super::PROCESS.uid = uid;
+        super::PROCESS.euid = uid;
+    } else if uid == super::PROCESS.uid || uid == super::PROCESS.euid {
+        super::PROCESS.euid = uid;
+    } else {
+        return crate::errno::EPERM;
+    }
+    0
+}
+
+/// setgid(gid) — POSIX.1
+pub unsafe fn setgid(gid: u32) -> isize {
+    if super::PROCESS.euid == 0 {
+        super::PROCESS.gid = gid;
+        super::PROCESS.egid = gid;
+    } else if gid == super::PROCESS.gid || gid == super::PROCESS.egid {
+        super::PROCESS.egid = gid;
+    } else {
+        return crate::errno::EPERM;
+    }
+    0
+}
+
+/// setreuid(ruid, euid) — POSIX.1
+pub unsafe fn setreuid(ruid: u32, euid: u32) -> isize {
+    let is_root = super::PROCESS.euid == 0;
+    if ruid != u32::MAX { // -1 means "don't change"
+        if is_root || ruid == super::PROCESS.uid || ruid == super::PROCESS.euid {
+            super::PROCESS.uid = ruid;
+        } else { return crate::errno::EPERM; }
+    }
+    if euid != u32::MAX {
+        if is_root || euid == super::PROCESS.uid || euid == super::PROCESS.euid {
+            super::PROCESS.euid = euid;
+        } else { return crate::errno::EPERM; }
+    }
+    0
+}
+
+/// setregid(rgid, egid) — POSIX.1
+pub unsafe fn setregid(rgid: u32, egid: u32) -> isize {
+    let is_root = super::PROCESS.euid == 0;
+    if rgid != u32::MAX {
+        if is_root || rgid == super::PROCESS.gid || rgid == super::PROCESS.egid {
+            super::PROCESS.gid = rgid;
+        } else { return crate::errno::EPERM; }
+    }
+    if egid != u32::MAX {
+        if is_root || egid == super::PROCESS.gid || egid == super::PROCESS.egid {
+            super::PROCESS.egid = egid;
+        } else { return crate::errno::EPERM; }
+    }
+    0
+}
+
 // ── Process groups ─────────────────────────────────────────────────────
 
 /// setpgid(pid, pgid) — POSIX.1

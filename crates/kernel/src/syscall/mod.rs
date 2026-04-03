@@ -33,9 +33,15 @@ pub struct ProcessState {
     pub signal_cold: rux_proc::signal::SignalCold,
     /// Per-signal sa_restorer address (x86_64 only — musl sets this for sigreturn trampoline).
     pub signal_restorer: [usize; 32],
+    /// Real user ID.
+    pub uid: u32,
+    /// Effective user ID (used for permission checks).
+    pub euid: u32,
+    /// Real group ID.
+    pub gid: u32,
+    /// Effective group ID.
+    pub egid: u32,
     /// Syscall filter bitmask (seccomp-lite infrastructure).
-    /// 0 = allow all (default). When non-zero, each bit represents a denied
-    /// syscall category. Actual enforcement is deferred to a future release.
     pub syscall_filter: u64,
 }
 
@@ -50,6 +56,7 @@ impl ProcessState {
             signal_hot: rux_proc::signal::SignalHot::new(),
             signal_cold: rux_proc::signal::SignalCold::new(),
             signal_restorer: [0; 32],
+            uid: 0, euid: 0, gid: 0, egid: 0,
             syscall_filter: 0,
         }
     }
@@ -133,6 +140,7 @@ pub enum Syscall {
     SchedYield, Nanosleep,
     // User/group IDs
     Getuid, Geteuid, Getgid, Getegid, Getgroups,
+    Setuid, Setgid, Setreuid, Setregid,
     // Process groups / sessions
     Setpgid, Getpgid, Setsid,
     // Linux extensions
@@ -244,8 +252,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Sigprocmask => posix::sigprocmask(a0, a1, a2, a3),
 
         // ── User/group IDs (single user: always root) ─────────────
-        Syscall::Getuid | Syscall::Geteuid |
-        Syscall::Getgid | Syscall::Getegid => 0, // uid=0, gid=0
+        Syscall::Getuid => unsafe { PROCESS.uid as isize },
+        Syscall::Geteuid => unsafe { PROCESS.euid as isize },
+        Syscall::Getgid => unsafe { PROCESS.gid as isize },
+        Syscall::Getegid => unsafe { PROCESS.egid as isize },
+        Syscall::Setuid => unsafe { posix::setuid(a0 as u32) },
+        Syscall::Setgid => unsafe { posix::setgid(a0 as u32) },
+        Syscall::Setreuid => unsafe { posix::setreuid(a0 as u32, a1 as u32) },
+        Syscall::Setregid => unsafe { posix::setregid(a0 as u32, a1 as u32) },
         Syscall::Gettid => unsafe { crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pid as isize },
 
         // ── Process groups ────────────────────────────────────────

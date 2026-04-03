@@ -7,6 +7,7 @@ mod scheduler;
 mod elf;
 pub mod boot;
 pub mod cmdline;
+pub mod perm;
 mod kstate;
 pub mod pipe;
 pub mod cow;

@@ -99,7 +99,24 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
         let o_creat = flags & 0x40 != 0;
 
         match super::resolve_with_cwd(path) {
-            Ok(ino) => fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs()),
+            Ok(ino) => {
+                // Permission check
+                use rux_fs::FileSystem;
+                let fs = crate::kstate::fs();
+                let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
+                if fs.stat(ino, &mut stat).is_ok() {
+                    let o_rdonly = flags & 3 == 0;
+                    let o_wronly = flags & 3 == 1;
+                    let o_rdwr = flags & 3 == 2;
+                    let mut req = 0u32;
+                    if o_rdonly || o_rdwr { req |= crate::perm::R_OK; }
+                    if o_wronly || o_rdwr { req |= crate::perm::W_OK; }
+                    if !crate::perm::check_access(stat.mode, stat.uid, stat.gid, req) {
+                        return crate::errno::EACCES;
+                    }
+                }
+                fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
+            }
             Err(_) if o_creat => {
                 use rux_fs::{FileSystem, FileName};
                 let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {

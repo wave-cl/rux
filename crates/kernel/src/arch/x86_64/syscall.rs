@@ -464,8 +464,10 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[90] = Syscall::Chmod;      t[91] = Syscall::Fchmod;
     t[92] = Syscall::Chown;      t[93] = Syscall::Fchown;
     // User/group IDs
-    t[102] = Syscall::Getuid;    t[107] = Syscall::Getuid;
-    t[104] = Syscall::Getgid;    t[108] = Syscall::Getgid;
+    t[102] = Syscall::Getuid;    t[104] = Syscall::Getgid;
+    t[107] = Syscall::Geteuid;   t[108] = Syscall::Getegid;
+    t[105] = Syscall::Setuid;    t[106] = Syscall::Setgid;
+    t[113] = Syscall::Setreuid;  t[114] = Syscall::Setregid;
     t[115] = Syscall::Getgroups; t[116] = Syscall::Getgroups;
     // Process groups
     t[109] = Syscall::Setpgid;   t[111] = Syscall::Getpgid;

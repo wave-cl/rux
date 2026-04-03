@@ -242,6 +242,8 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[158] = Syscall::Getgroups; t[159] = Syscall::Getgroups;
     t[174] = Syscall::Getuid;    t[175] = Syscall::Geteuid;
     t[176] = Syscall::Getgid;    t[177] = Syscall::Getegid;
+    t[146] = Syscall::Setuid;    t[144] = Syscall::Setgid;
+    t[145] = Syscall::Setreuid;  t[143] = Syscall::Setregid;
     // Process groups
     t[154] = Syscall::Setpgid;   t[155] = Syscall::Getpgid;
     t[157] = Syscall::Setsid;
