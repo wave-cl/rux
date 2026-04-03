@@ -301,6 +301,49 @@ pub fn sys_close_socket(fd: usize) -> isize {
     0
 }
 
+/// getsockname(fd, addr, addrlen) — get local address
+pub fn sys_getsockname(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
+    if addr_ptr == 0 { return 0; }
+    unsafe {
+        // Fill with our IP + bound port
+        let sa = addr_ptr as *mut u8;
+        *sa.add(0) = 0; *sa.add(1) = 2; // AF_INET
+        let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
+        let port = SOCKETS[idx].bound_port.to_be_bytes();
+        *sa.add(2) = port[0]; *sa.add(3) = port[1];
+        #[cfg(feature = "net")]
+        {
+            let ip = rux_net::stack::our_ip();
+            *sa.add(4) = ip[0]; *sa.add(5) = ip[1]; *sa.add(6) = ip[2]; *sa.add(7) = ip[3];
+        }
+        #[cfg(not(feature = "net"))]
+        { *sa.add(4) = 0; *sa.add(5) = 0; *sa.add(6) = 0; *sa.add(7) = 0; }
+        if addrlen_ptr != 0 { *(addrlen_ptr as *mut u32) = 16; }
+    }
+    0
+}
+
+/// getpeername(fd, addr, addrlen) — get remote address
+pub fn sys_getpeername(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
+    if addr_ptr == 0 { return 0; }
+    unsafe {
+        let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
+        let sa = addr_ptr as *mut u8;
+        *sa.add(0) = 0; *sa.add(1) = 2; // AF_INET
+        // For TCP, read from connection state
+        #[cfg(feature = "net")]
+        if SOCKETS[idx].tcp_conn >= 0 {
+            let conn = rux_net::tcp::get_conn(SOCKETS[idx].tcp_conn as usize);
+            let port = conn.remote_port.to_be_bytes();
+            *sa.add(2) = port[0]; *sa.add(3) = port[1];
+            *sa.add(4) = conn.remote_ip[0]; *sa.add(5) = conn.remote_ip[1];
+            *sa.add(6) = conn.remote_ip[2]; *sa.add(7) = conn.remote_ip[3];
+        }
+        if addrlen_ptr != 0 { *(addrlen_ptr as *mut u32) = 16; }
+    }
+    0
+}
+
 /// Check if an fd is a socket
 pub fn is_socket(fd: usize) -> bool {
     unsafe {

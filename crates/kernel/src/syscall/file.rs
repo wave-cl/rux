@@ -4,6 +4,27 @@ use rux_arch::ConsoleOps;
 use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 /// read(fd, buf, count) — POSIX.1
+/// readv(fd, iov, iovcnt) — scatter read
+pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
+    if iovcnt == 0 { return 0; }
+    unsafe {
+        // Read first iov entry and delegate to read()
+        // (simplified: only uses first buffer for now)
+        let iov = iov_ptr as *const [usize; 2];
+        let mut total: isize = 0;
+        for i in 0..iovcnt.min(16) {
+            let base = (*iov.add(i))[0];
+            let len = (*iov.add(i))[1];
+            if base == 0 || len == 0 { continue; }
+            let n = read(fd, base, len);
+            if n < 0 { return if total > 0 { total } else { n }; }
+            total += n;
+            if (n as usize) < len { break; } // short read
+        }
+        total
+    }
+}
+
 pub fn read(fd: usize, buf: usize, len: usize) -> isize {
     // Socket read → recvfrom
     if super::socket::is_socket(fd) {

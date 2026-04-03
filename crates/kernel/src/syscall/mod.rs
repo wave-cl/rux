@@ -127,7 +127,7 @@ pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeI
 pub enum Syscall {
     // File I/O
     Read, Write, Open, OpenAt, Close, Lseek, Dup, Dup2, Fcntl,
-    Writev, Sendfile, Ioctl, Pipe2,
+    Readv, Writev, Sendfile, Ioctl, Pipe2,
     // File metadata
     Stat, Lstat, Fstat, FstatAt, Faccessat, Readlink, Readlinkat,
     // Directory / path ops
@@ -162,6 +162,7 @@ pub enum Syscall {
     Mount, Umount,
     // Sockets
     Socket, Bind, Sendto, Recvfrom, Setsockopt, Getsockopt, Connect,
+    Getsockname, Getpeername, Sendmsg, Recvmsg, Shutdown,
     // Additional syscalls for musl/Alpine
     Getrandom, ClockGetres, Dup3, Sysctl,
     // Stubs that return specific values
@@ -191,6 +192,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
     match sc {
         // ── POSIX.1 File I/O ───────────────────────────────────────
         Syscall::Read => posix::read(a0, a1, a2),
+        Syscall::Readv => posix::readv(a0, a1, a2),
         Syscall::Pread64 => posix::pread64(a0, a1, a2, a3),
         Syscall::Write => posix::write(a0, a1, a2),
         Syscall::Open => posix::open(a0, a1, a2),
@@ -319,6 +321,11 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Recvfrom => socket::sys_recvfrom(a0, a1, a2, a3, a4, 0),
         Syscall::Setsockopt | Syscall::Getsockopt => 0, // stub
         Syscall::Connect => socket::sys_connect(a0, a1, a2),
+        Syscall::Getsockname => socket::sys_getsockname(a0, a1, a2),
+        Syscall::Getpeername => socket::sys_getpeername(a0, a1, a2),
+        Syscall::Sendmsg => socket::sys_sendto(a0, 0, 0, 0, 0, 0), // stub → 0
+        Syscall::Recvmsg => socket::sys_recvfrom(a0, 0, 0, 0, 0, 0), // stub
+        Syscall::Shutdown => 0, // stub
 
         // ── Additional syscalls ────────────────────────────────────
         Syscall::Getrandom => posix::getrandom(a0, a1, a2),

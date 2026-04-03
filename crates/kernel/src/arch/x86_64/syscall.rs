@@ -429,6 +429,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     let mut t = [u; 335];
     // File I/O
     t[0] = Syscall::Read;        t[1] = Syscall::Write;
+    t[19] = Syscall::Readv;
     t[2] = Syscall::Open;        t[3] = Syscall::Close;
     t[4] = Syscall::Stat;        t[5] = Syscall::Fstat;
     t[6] = Syscall::Lstat;       t[7] = Syscall::Poll;
@@ -457,6 +458,9 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[44] = Syscall::Sendto;     t[45] = Syscall::Recvfrom;
     t[49] = Syscall::Bind;       t[54] = Syscall::Setsockopt;
     t[55] = Syscall::Getsockopt;
+    t[51] = Syscall::Getsockname; t[52] = Syscall::Getpeername;
+    t[46] = Syscall::Sendmsg;     t[47] = Syscall::Recvmsg;
+    t[48] = Syscall::Shutdown;
     // Process
     t[24] = Syscall::SchedYield; t[35] = Syscall::Nanosleep;
     t[37] = Syscall::Alarm;      t[39] = Syscall::Getpid;

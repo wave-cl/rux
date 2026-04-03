@@ -39,19 +39,6 @@ pub fn handle_syscall(frame: *mut u8) {
         let a4 = *regs.add(4);   // x4
         let a5 = *regs.add(5);   // x5 (6th arg, used by mmap for offset)
         SAVED_SYSCALL_A5 = a5;
-        // Debug: trace first 20 syscalls for Alpine debugging
-        static mut SC_COUNT: u32 = 0;
-        SC_COUNT += 1;
-        if SC_COUNT <= 20 {
-            use rux_arch::ConsoleOps;
-            crate::arch::Arch::write_str("sc#");
-            let mut buf = [0u8; 10];
-            crate::arch::Arch::write_str(rux_klib::fmt::u32_to_str(&mut buf, nr as u32));
-            crate::arch::Arch::write_str("(");
-            let mut hb = [0u8; 16];
-            crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, a0 as usize));
-            crate::arch::Arch::write_str(")\n");
-        }
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {
@@ -225,6 +212,7 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     // File I/O
     t[56] = Syscall::OpenAt;     t[57] = Syscall::Close;
     t[63] = Syscall::Read;       t[64] = Syscall::Write;
+    t[65] = Syscall::Readv;
     t[66] = Syscall::Writev;     t[67] = Syscall::Pread64;
     t[71] = Syscall::Sendfile;   t[23] = Syscall::Dup;
     t[24] = Syscall::Dup2;       t[25] = Syscall::Fcntl;
@@ -276,6 +264,9 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[203] = Syscall::Connect;   t[206] = Syscall::Sendto;
     t[207] = Syscall::Recvfrom;  t[208] = Syscall::Setsockopt;
     t[209] = Syscall::Getsockopt;
+    t[204] = Syscall::Getsockname; t[205] = Syscall::Getpeername;
+    t[211] = Syscall::Sendmsg;     t[212] = Syscall::Recvmsg;
+    t[210] = Syscall::Shutdown;
     // Linux extensions
     t[61] = Syscall::Getdents64; t[43] = Syscall::Statfs;
     t[44] = Syscall::Statfs;     t[179] = Syscall::Sysinfo;
