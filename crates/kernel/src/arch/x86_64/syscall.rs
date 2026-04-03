@@ -88,6 +88,9 @@ unsafe extern "C" fn syscall_entry() {
 
         // Save args for the Rust handler
         // Linux syscall ABI: rax=nr, rdi=a0, rsi=a1, rdx=a2, r10=a3, r8=a4, r9=a5
+        // Save 6th arg (r9) to static for mmap offset
+        "mov [rip + {saved_a5}], r9",
+
         "push rax",       // syscall number
         "push rdi",       // arg0
         "push rsi",       // arg1
@@ -96,7 +99,7 @@ unsafe extern "C" fn syscall_entry() {
         "push r8",        // arg4
         "push r9",        // arg5
 
-        // Call Rust handler: syscall_dispatch_linux(nr, a0, a1, a2, a3, a4, a5)
+        // Call Rust handler: syscall_dispatch_linux(nr, a0, a1, a2, a3, a4)
         // Return value in RAX
         "mov rdi, rax",   // nr
         "mov rsi, [rsp + 40]", // arg0 (rdi was pushed at offset 5*8=40)
@@ -104,7 +107,6 @@ unsafe extern "C" fn syscall_entry() {
         "mov rcx, [rsp + 24]", // arg2 (rdx at 3*8=24)
         "mov r8, [rsp + 16]",  // arg3 (r10 at 2*8=16)
         "mov r9, [rsp + 8]",   // arg4 (r8 at 1*8=8)
-        // a5 would be [rsp + 0] but we pass max 5 args via regs
 
         "call {handler}",
 
@@ -618,7 +620,6 @@ pub fn syscall_arch_prctl(code: u64, addr: u64) -> i64 {
     unsafe {
         match code {
             ARCH_SET_FS => {
-                // Set FS base via IA32_FS_BASE MSR (0xC0000100)
                 let lo = addr as u32;
                 let hi = (addr >> 32) as u32;
                 core::arch::asm!(

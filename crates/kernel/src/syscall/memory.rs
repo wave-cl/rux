@@ -17,6 +17,8 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
 
     unsafe {
         let aligned_len = (len + 0xFFF) & !0xFFF;
+
+        // Trace mmap calls (temporary debug)
         let result = if mmap_flags & MAP_FIXED != 0 && addr != 0 {
             let fixed_addr = addr & !0xFFF;
             // Unmap existing pages to avoid double-mapping (ld.so uses MAP_FIXED
