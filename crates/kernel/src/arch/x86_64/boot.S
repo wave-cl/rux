@@ -151,9 +151,9 @@ pml4:   .skip 4096
 pdpt:   .skip 4096
 pd:     .skip 4096
 
-/* Boot stack — 16 KiB */
+/* Boot stack — 128 KiB (needs room for deeply nested init + net code + ext2) */
 .align 16
 boot_stack:
-    .skip 16384
+    .skip 131072
 .global boot_stack_top
 boot_stack_top:
