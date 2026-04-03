@@ -285,7 +285,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Linux extensions ───────────────────────────────────────
         Syscall::Getdents64 => linux::getdents64(a0, a1, a2),
         Syscall::SetTidAddress => linux::set_tid_address(a0),
-        Syscall::Poll => posix::poll(a0, a1, a2),
+        Syscall::Poll => posix::ppoll(a0, a1, a2, a3),
         Syscall::Gettimeofday => {
             use rux_arch::TimerOps;
             crate::arch::Arch::ticks() as isize

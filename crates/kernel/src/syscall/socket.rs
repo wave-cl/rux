@@ -30,6 +30,10 @@ struct SocketSlot {
     rx_ready: bool,
     /// TCP connection index (for SOCK_STREAM)
     tcp_conn: i8, // -1 = not connected
+    /// Connected destination (for UDP connect + send)
+    connected_ip: [u8; 4],
+    connected_port: u16,
+    connected: bool,
 }
 
 impl SocketSlot {
@@ -41,6 +45,7 @@ impl SocketSlot {
             rx_from_ip: [0; 4], rx_from_port: 0,
             rx_ready: false,
             tcp_conn: -1,
+            connected_ip: [0; 4], connected_port: 0, connected: false,
         }
     }
 }
@@ -120,7 +125,23 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     };
     unsafe {
         let sock = &mut SOCKETS[idx];
-        if sock.sock_type != SOCK_STREAM { return 0; } // non-TCP: stub
+        if sock.sock_type != SOCK_STREAM {
+            // UDP connect: just save the destination address
+            let dst_port = u16::from_be_bytes([
+                *(addr_ptr as *const u8).add(2),
+                *(addr_ptr as *const u8).add(3),
+            ]);
+            let dst_ip: [u8; 4] = [
+                *(addr_ptr as *const u8).add(4),
+                *(addr_ptr as *const u8).add(5),
+                *(addr_ptr as *const u8).add(6),
+                *(addr_ptr as *const u8).add(7),
+            ];
+            sock.connected_ip = dst_ip;
+            sock.connected_port = dst_port;
+            sock.connected = true;
+            return 0;
+        }
         if addr_ptr == 0 { return crate::errno::EFAULT; }
 
         #[cfg(feature = "net")]
@@ -182,6 +203,9 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
                 crate::uaccess::get_user::<u8>(addr_ptr + 7),
             ];
             (ip, p)
+        } else if SOCKETS[idx].connected {
+            // Use connected destination (from prior connect() call)
+            (SOCKETS[idx].connected_ip, SOCKETS[idx].connected_port)
         } else {
             ([0u8; 4], 0u16)
         };
@@ -202,7 +226,11 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
                 rux_net::stack::send_ip(dst_ip, rux_net::ipv4::PROTO_ICMP, &kbuf[..send_len]);
             } else if sock.sock_type == SOCK_DGRAM {
                 let mut udp_buf = [0u8; 1408];
-                let src_port = if sock.bound_port != 0 { sock.bound_port } else { 49152 + (idx as u16) };
+                // Assign ephemeral port if not bound
+                if SOCKETS[idx].bound_port == 0 {
+                    SOCKETS[idx].bound_port = 49152 + (idx as u16);
+                }
+                let src_port = SOCKETS[idx].bound_port;
                 let udp_len = rux_net::udp::build(&mut udp_buf, src_port, dst_port, &kbuf[..send_len]);
                 rux_net::stack::send_ip(dst_ip, rux_net::ipv4::PROTO_UDP, &udp_buf[..udp_len]);
             }
@@ -344,6 +372,23 @@ pub fn sys_getpeername(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
     0
 }
 
+/// Check if a socket has data available for reading.
+pub fn socket_has_data(fd: usize) -> bool {
+    unsafe {
+        let idx = match resolve_socket(fd) { Some(i) => i, None => return false };
+        let sock = &SOCKETS[idx];
+        // UDP/raw: check rx_ready
+        if sock.rx_ready { return true; }
+        // TCP: check connection buffer
+        #[cfg(feature = "net")]
+        if sock.tcp_conn >= 0 {
+            let conn = rux_net::tcp::get_conn(sock.tcp_conn as usize);
+            if conn.rx_available() > 0 || conn.fin_received { return true; }
+        }
+        false
+    }
+}
+
 /// Check if an fd is a socket
 pub fn is_socket(fd: usize) -> bool {
     unsafe {
@@ -357,7 +402,12 @@ pub fn is_socket(fd: usize) -> bool {
 
 pub unsafe fn deliver_udp(src_ip: [u8; 4], src_port: u16, dst_port: u16, data: &[u8]) {
     for sock in SOCKETS.iter_mut() {
-        if sock.active && sock.sock_type == SOCK_DGRAM && sock.bound_port == dst_port {
+        if !sock.active || sock.sock_type != SOCK_DGRAM { continue; }
+        // Match by bound port OR by connected remote (for DNS resolver pattern)
+        let port_match = sock.bound_port != 0 && sock.bound_port == dst_port;
+        let connected_match = sock.connected
+            && sock.connected_ip == src_ip && sock.connected_port == src_port;
+        if port_match || connected_match {
             let n = data.len().min(1500);
             sock.rx_buf[..n].copy_from_slice(&data[..n]);
             sock.rx_len = n;

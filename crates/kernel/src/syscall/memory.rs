@@ -170,11 +170,47 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
 
 /// poll(fds, nfds, timeout) — POSIX.1: check fd readiness.
 /// Returns number of fds with events, or 0 on timeout.
-pub fn poll(fds_ptr: usize, nfds: usize, _timeout: usize) -> isize {
+/// ppoll wrapper: reads timeout from timespec pointer
+pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -> isize {
+    let timeout_ms = if timeout_ptr != 0 {
+        unsafe {
+            let sec: u64 = crate::uaccess::get_user(timeout_ptr);
+            let nsec: u64 = crate::uaccess::get_user(timeout_ptr + 8);
+            (sec * 1000 + nsec / 1_000_000) as usize
+        }
+    } else { 30_000 }; // default 30s if no timeout
+    poll(fds_ptr, nfds, timeout_ms)
+}
+
+pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     if fds_ptr == 0 || nfds == 0 { return 0; }
-    unsafe {
-        let mut ready = 0i32;
-        for i in 0..nfds.min(64) {
+
+    // For socket FDs: poll network and retry until data arrives or timeout
+    let has_sockets = unsafe {
+        (0..nfds.min(64)).any(|i| {
+            let entry = (fds_ptr + i * 8) as *const u8;
+            let fd = *(entry as *const i32) as usize;
+            fd < 64 && super::socket::is_socket(fd)
+        })
+    };
+
+    let max_iters = if has_sockets && timeout_ms > 0 {
+        // Poll network for up to timeout_ms (each iter ~1 ms due to spin_loop)
+        timeout_ms.min(30_000) * 1000
+    } else { 1 };
+
+    for _attempt in 0..max_iters {
+        #[cfg(feature = "net")]
+        if has_sockets {
+            // Process multiple packets per iteration
+            for _ in 0..100 {
+                unsafe { rux_net::stack::poll(); }
+            }
+        }
+
+        unsafe {
+            let mut ready = 0i32;
+            for i in 0..nfds.min(64) {
             let entry = (fds_ptr + i * 8) as *mut u8;
             let fd = *(entry as *const i32) as usize;
             let events = *((entry as usize + 4) as *const i16);
@@ -184,8 +220,17 @@ pub fn poll(fds_ptr: usize, nfds: usize, _timeout: usize) -> isize {
 
             let f = &(*fdt::FD_TABLE)[fd];
             let mut revents: i16 = 0;
-            if f.active || fd <= 2 {
-                // Console fds and active fds are always ready for I/O
+            if f.active && f.is_socket {
+                // Socket: check actual readiness
+                if events & 4 != 0 { revents |= 4; } // POLLOUT always ready
+                if events & 1 != 0 {
+                    // POLLIN: check if data is available
+                    if super::socket::socket_has_data(fd) {
+                        revents |= 1;
+                    }
+                }
+            } else if f.active || fd <= 2 {
+                // Console fds and regular file fds are always ready
                 if events & 1 != 0 { revents |= 1; }   // POLLIN
                 if events & 4 != 0 { revents |= 4; }   // POLLOUT
             } else {
@@ -195,6 +240,10 @@ pub fn poll(fds_ptr: usize, nfds: usize, _timeout: usize) -> isize {
             *revents_ptr = revents;
             if revents != 0 { ready += 1; }
         }
-        ready as isize
+        if ready > 0 { return ready as isize; }
+        } // unsafe
+
+        core::hint::spin_loop();
     }
+    0 // timeout
 }
