@@ -75,6 +75,40 @@ pub unsafe fn boot(params: BootParams) -> ! {
         vfs_ptr, alloc_ptr, &cmdparams, params.virtio_mmio_base, log,
     );
 
+    // Probe for virtio-net device (aarch64 only for now)
+    #[cfg(target_arch = "aarch64")]
+    {
+        use rux_mm::FrameAllocator;
+        let alloc = &mut *alloc_ptr;
+        if let Some(net_base) = rux_drivers::virtio::net::probe_mmio() {
+            let rx_pg = alloc.alloc_order(1).ok(); // 2 pages = 8KB
+            let tx_pg = alloc.alloc_order(1).ok();
+            if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
+                core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 8192);
+                core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 8192);
+                if rux_drivers::virtio::net::init_mmio(net_base, rx.as_usize(), tx.as_usize()) {
+                    let mac = rux_drivers::virtio::net::mac();
+                    rux_net::stack::configure(
+                        [10, 0, 2, 15],   // default QEMU user-mode IP
+                        [10, 0, 2, 2],    // QEMU gateway
+                        [255, 255, 255, 0],
+                        mac,
+                    );
+                    log("rux: virtio-net: MAC=");
+                    let mut hb = [0u8; 3];
+                    for i in 0..6 {
+                        let hi = mac[i] >> 4;
+                        let lo = mac[i] & 0xF;
+                        hb[0] = if hi < 10 { b'0' + hi } else { b'a' + hi - 10 };
+                        hb[1] = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
+                        hb[2] = if i < 5 { b':' } else { b'\n' };
+                        crate::arch::Arch::write_bytes(&hb);
+                    }
+                }
+            }
+        }
+    }
+
     // Mount procfs at /proc and devfs at /dev
     {
         use rux_fs::FileSystem;

@@ -124,6 +124,10 @@ impl VirtioMmio {
 
     // ── Config space ───────────────────────────────────────────────
 
+    pub unsafe fn config_read8(&self, offset: usize) -> u8 {
+        core::ptr::read_volatile((self.base + CONFIG + offset) as *const u8)
+    }
+
     pub unsafe fn config_read32(&self, offset: usize) -> u32 {
         self.read32(CONFIG + offset)
     }

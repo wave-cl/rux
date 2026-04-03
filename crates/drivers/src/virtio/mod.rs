@@ -6,6 +6,8 @@
 pub mod mmio;
 pub mod queue;
 pub mod blk;
+#[cfg(target_arch = "aarch64")]
+pub mod net;
 
 #[cfg(target_arch = "x86_64")]
 pub mod pci;

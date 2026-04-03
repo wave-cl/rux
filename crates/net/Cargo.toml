@@ -2,3 +2,6 @@
 name = "rux-net"
 version = "0.8.0"
 edition = "2021"
+
+[dependencies]
+rux-drivers = { path = "../drivers" }

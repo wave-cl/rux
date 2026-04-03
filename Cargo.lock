@@ -56,6 +56,7 @@ dependencies = [
  "rux-ipc",
  "rux-klib",
  "rux-mm",
+ "rux-net",
  "rux-proc",
  "rux-sched",
 ]
@@ -75,6 +76,9 @@ dependencies = [
 [[package]]
 name = "rux-net"
 version = "0.8.0"
+dependencies = [
+ "rux-drivers",
+]
 
 [[package]]
 name = "rux-proc"

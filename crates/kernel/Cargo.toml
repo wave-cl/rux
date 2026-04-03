@@ -17,3 +17,6 @@ rux-fs = { path = "../fs" }
 rux-elf = { path = "../elf" }
 rux-ipc = { path = "../ipc" }
 rux-drivers = { path = "../drivers" }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+rux-net = { path = "../net" }

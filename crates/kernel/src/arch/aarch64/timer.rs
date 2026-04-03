@@ -25,6 +25,11 @@ pub fn handle_tick() {
     unsafe {
         core::arch::asm!("msr cntp_tval_el0, {}", in(reg) interval, options(nostack));
 
+        // Poll network for incoming packets (every tick = 1ms)
+        if rux_drivers::virtio::net::is_up() {
+            rux_net::stack::poll();
+        }
+
         let sched = crate::scheduler::get();
         sched.tick(1_000_000);
     }
