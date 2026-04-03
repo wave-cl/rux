@@ -165,8 +165,15 @@ unsafe fn load_dynamic_interp(
     let _ = fs.read(interp_ino, 0, &mut interp_hdr);
     let interp_elf = rux_elf::parse_elf(&interp_hdr).expect("interp ELF parse failed");
 
-    // 4. Load interpreter at a base address (0x40000000)
+    // 4. Load interpreter at a base address outside the kernel identity map.
+    // x86_64: identity map 0-128MB → 0x40000000 (1GB) is safe user VA.
+    // aarch64: identity map 0x40000000-0x48000000 → 0x20000000 (512MB) avoids collision.
+    #[cfg(target_arch = "x86_64")]
     const INTERP_BASE: u64 = 0x40000000;
+    #[cfg(target_arch = "aarch64")]
+    const INTERP_BASE: u64 = 0x20000000;
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    const INTERP_BASE: u64 = 0x20000000;
     let mut interp_reader = VfsReader { ino: interp_ino };
     let mut pt_adapter = PtAdapter { pt: upt };
     let interp_end = rux_elf::load_elf_to_pt_at_base(

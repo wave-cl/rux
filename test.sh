@@ -282,6 +282,7 @@ echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
 cat /proc/$$/stat | cut -d" " -f5
+/bin/dynhello
 exit
 CMDS
 } | \
@@ -378,7 +379,7 @@ check "tr (uppercase)"         "HELLO"
 check "tee"                    "testdata"
 check "ps shows process"       "PID"
 check "proc stat pgid"         "1"
-# check "dynamic linking"        "dynlink_ok"  # aarch64 ld.so hangs (x86_64 works)
+check "dynamic linking"        "dynlink_ok"
 
 fi  # RUN_AA64
 
