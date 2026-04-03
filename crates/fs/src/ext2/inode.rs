@@ -77,6 +77,50 @@ pub(crate) unsafe fn read_raw(fs: &Ext2Fs, ino: u32) -> Result<RawInode, VfsErro
     })
 }
 
+fn set_le16(buf: &mut [u8], off: usize, val: u16) {
+    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1];
+}
+fn set_le32(buf: &mut [u8], off: usize, val: u32) {
+    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1]; buf[off+2] = b[2]; buf[off+3] = b[3];
+}
+
+/// Write inode data back to disk.
+pub(crate) unsafe fn write_raw(fs: &Ext2Fs, ino: u32, raw: &RawInode) -> Result<(), VfsError> {
+    if ino == 0 || ino > fs.inode_count { return Err(VfsError::NotFound); }
+
+    let group = (ino - 1) / fs.inodes_per_group;
+    let local_idx = (ino - 1) % fs.inodes_per_group;
+
+    let bgd_offset = group * 32;
+    let bgd_block = fs.bgdt_block as u64 + (bgd_offset / fs.block_size) as u64;
+    let bgd_off = (bgd_offset % fs.block_size) as usize;
+    let mut buf = [0u8; 4096];
+    fs.read_block(bgd_block, &mut buf)?;
+    let inode_table_block = le32(&buf, bgd_off + 8);
+
+    let inode_byte_offset = local_idx as u64 * fs.inode_size as u64;
+    let inode_block = inode_table_block as u64 + inode_byte_offset / fs.block_size as u64;
+    let inode_off = (inode_byte_offset % fs.block_size as u64) as usize;
+
+    fs.read_block(inode_block, &mut buf)?;
+
+    // Write fields back
+    let b = &mut buf[inode_off..];
+    set_le16(b, 0, raw.mode);
+    set_le16(b, 2, raw.uid);
+    set_le32(b, 4, raw.size);
+    set_le32(b, 8, raw.atime);
+    set_le32(b, 12, raw.ctime);
+    set_le32(b, 16, raw.mtime);
+    set_le16(b, 24, raw.gid);
+    set_le16(b, 26, raw.links_count);
+    set_le32(b, 28, raw.blocks);
+    for i in 0..15 { set_le32(b, 40 + i * 4, raw.block[i]); }
+    set_le32(b, 108, raw.size_high);
+
+    fs.write_block(inode_block, &buf)
+}
+
 /// Convert ext2 mode to InodeType.
 pub(crate) fn mode_to_type(mode: u16) -> InodeType {
     match mode & 0xF000 {

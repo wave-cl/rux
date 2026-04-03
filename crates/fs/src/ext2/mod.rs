@@ -8,6 +8,7 @@ mod superblock;
 mod inode;
 mod dir;
 mod block;
+mod alloc;
 
 use core::cell::UnsafeCell;
 use crate::{FileSystem, FileName, InodeId, InodeStat, InodeType, DirEntry, VfsError};
@@ -124,9 +125,39 @@ impl Ext2Fs {
         Ok(())
     }
 
+    /// Write a filesystem block from `buf` to disk. Updates cache.
+    pub(crate) unsafe fn write_block(&self, block_no: u64, buf: &[u8]) -> Result<(), VfsError> {
+        let bs = self.block_size as usize;
+        let sectors_per_block = bs / 512;
+        let start_sector = block_no * sectors_per_block as u64;
+
+        // Write-through: write to device immediately
+        let dev = &mut *(self.dev as *mut dyn rux_drivers::BlockDevice);
+        for i in 0..sectors_per_block {
+            dev.write_block(start_sector + i as u64, buf.as_ptr().add(i * 512))
+                .map_err(|_| VfsError::IoError)?;
+        }
+
+        // Update cache if this block is cached
+        let inner = &mut *self.inner.get();
+        for entry in inner.cache.iter_mut() {
+            if entry.valid && entry.block_no == block_no {
+                entry.data[..bs].copy_from_slice(&buf[..bs]);
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Read raw inode data by inode number.
     pub(crate) unsafe fn read_inode_raw(&self, ino: u32) -> Result<inode::RawInode, VfsError> {
         inode::read_raw(self, ino)
+    }
+
+    /// Write raw inode data back to disk.
+    pub(crate) unsafe fn write_inode_raw(&self, ino: u32, raw: &inode::RawInode) -> Result<(), VfsError> {
+        inode::write_raw(self, ino, raw)
     }
 }
 
@@ -160,12 +191,17 @@ impl FileSystem for Ext2Fs {
         }
     }
 
-    fn write(&mut self, _ino: InodeId, _offset: u64, _buf: &[u8]) -> Result<usize, VfsError> {
-        Err(VfsError::NotSupported)
+    fn write(&mut self, ino: InodeId, offset: u64, buf: &[u8]) -> Result<usize, VfsError> {
+        unsafe { block::write_file(self, ino as u32, offset, buf) }
     }
 
-    fn truncate(&mut self, _ino: InodeId, _size: u64) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn truncate(&mut self, ino: InodeId, size: u64) -> Result<(), VfsError> {
+        unsafe {
+            let mut raw = self.read_inode_raw(ino as u32)?;
+            raw.size = size as u32;
+            raw.size_high = (size >> 32) as u32;
+            self.write_inode_raw(ino as u32, &raw)
+        }
     }
 
     fn lookup(&self, dir_ino: InodeId, name: FileName<'_>) -> Result<InodeId, VfsError> {
@@ -176,28 +212,121 @@ impl FileSystem for Ext2Fs {
         }
     }
 
-    fn create(&mut self, _dir: InodeId, _name: FileName<'_>, _mode: u32) -> Result<InodeId, VfsError> {
-        Err(VfsError::NotSupported)
+    fn create(&mut self, dir_ino: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError> {
+        unsafe {
+            let ino = alloc::alloc_inode(self)?;
+            // Initialize inode as regular file
+            let raw = inode::RawInode {
+                mode: (0x8000 | (mode & 0xFFF)) as u16, // S_IFREG | perms
+                uid: 0, gid: 0, size: 0, atime: 0, ctime: 0, mtime: 0,
+                links_count: 1, blocks: 0, block: [0; 15], size_high: 0,
+            };
+            self.write_inode_raw(ino, &raw)?;
+            dir::add_entry(self, dir_ino as u32, ino, name.as_bytes(), 1)?; // 1 = regular file
+            Ok(ino as InodeId)
+        }
     }
 
-    fn mkdir(&mut self, _dir: InodeId, _name: FileName<'_>, _mode: u32) -> Result<InodeId, VfsError> {
-        Err(VfsError::NotSupported)
+    fn mkdir(&mut self, dir_ino: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError> {
+        unsafe {
+            let ino = alloc::alloc_inode(self)?;
+            let block_num = alloc::alloc_block(self)?;
+
+            // Initialize inode as directory
+            let mut raw = inode::RawInode {
+                mode: (0x4000 | (mode & 0xFFF)) as u16, // S_IFDIR | perms
+                uid: 0, gid: 0, size: self.block_size, atime: 0, ctime: 0, mtime: 0,
+                links_count: 2, blocks: (self.block_size / 512) as u32,
+                block: [0; 15], size_high: 0,
+            };
+            raw.block[0] = block_num;
+            self.write_inode_raw(ino, &raw)?;
+
+            // Initialize directory block with . and ..
+            let bs = self.block_size as usize;
+            let mut dir_buf = [0u8; 4096];
+
+            // "." entry
+            let dot_rec_len = 12u16;
+            dir::set_le32(&mut dir_buf, 0, ino);
+            dir::set_le16(&mut dir_buf, 4, dot_rec_len);
+            dir_buf[6] = 1; // name_len
+            dir_buf[7] = 2; // file_type = directory
+            dir_buf[8] = b'.';
+
+            // ".." entry (takes remaining space)
+            let dotdot_off = dot_rec_len as usize;
+            dir::set_le32(&mut dir_buf, dotdot_off, dir_ino as u32);
+            dir::set_le16(&mut dir_buf, dotdot_off + 4, (bs - dotdot_off) as u16);
+            dir_buf[dotdot_off + 6] = 2; // name_len
+            dir_buf[dotdot_off + 7] = 2; // file_type = directory
+            dir_buf[dotdot_off + 8] = b'.';
+            dir_buf[dotdot_off + 9] = b'.';
+
+            self.write_block(block_num as u64, &dir_buf)?;
+
+            // Add entry in parent directory
+            dir::add_entry(self, dir_ino as u32, ino, name.as_bytes(), 2)?; // 2 = directory
+
+            // Increment parent's link count
+            let mut parent_raw = self.read_inode_raw(dir_ino as u32)?;
+            parent_raw.links_count += 1;
+            self.write_inode_raw(dir_ino as u32, &parent_raw)?;
+
+            Ok(ino as InodeId)
+        }
     }
 
-    fn unlink(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn unlink(&mut self, dir_ino: InodeId, name: FileName<'_>) -> Result<(), VfsError> {
+        unsafe {
+            let child_ino = dir::remove_entry(self, dir_ino as u32, name.as_bytes())?;
+            let mut raw = self.read_inode_raw(child_ino)?;
+            raw.links_count = raw.links_count.saturating_sub(1);
+            self.write_inode_raw(child_ino, &raw)?;
+            // TODO: free blocks if links_count == 0
+            Ok(())
+        }
     }
 
-    fn rmdir(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn rmdir(&mut self, dir_ino: InodeId, name: FileName<'_>) -> Result<(), VfsError> {
+        // Same as unlink for now (doesn't check if dir is empty)
+        self.unlink(dir_ino, name)
     }
 
-    fn link(&mut self, _dir: InodeId, _name: FileName<'_>, _target: InodeId) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn link(&mut self, dir_ino: InodeId, name: FileName<'_>, target: InodeId) -> Result<(), VfsError> {
+        unsafe {
+            let mut raw = self.read_inode_raw(target as u32)?;
+            raw.links_count += 1;
+            self.write_inode_raw(target as u32, &raw)?;
+            dir::add_entry(self, dir_ino as u32, target as u32, name.as_bytes(), 1)?;
+            Ok(())
+        }
     }
 
-    fn symlink(&mut self, _dir: InodeId, _name: FileName<'_>, _target: &[u8]) -> Result<InodeId, VfsError> {
-        Err(VfsError::NotSupported)
+    fn symlink(&mut self, dir_ino: InodeId, name: FileName<'_>, target: &[u8]) -> Result<InodeId, VfsError> {
+        unsafe {
+            let ino = alloc::alloc_inode(self)?;
+            let mut raw = inode::RawInode {
+                mode: 0xA1FF, // S_IFLNK | 0777
+                uid: 0, gid: 0, size: target.len() as u32, atime: 0, ctime: 0, mtime: 0,
+                links_count: 1, blocks: 0, block: [0; 15], size_high: 0,
+            };
+
+            // Fast symlink: store inline if <= 60 bytes
+            if target.len() <= 60 {
+                let dst = &mut raw.block as *mut u32 as *mut u8;
+                core::ptr::copy_nonoverlapping(target.as_ptr(), dst, target.len());
+            } else {
+                // Slow symlink: write to data block
+                self.write_inode_raw(ino, &raw)?;
+                block::write_file(self, ino, 0, target)?;
+                raw = self.read_inode_raw(ino)?;
+            }
+
+            self.write_inode_raw(ino, &raw)?;
+            dir::add_entry(self, dir_ino as u32, ino, name.as_bytes(), 7)?; // 7 = symlink
+            Ok(ino as InodeId)
+        }
     }
 
     fn readlink(&self, ino: InodeId, buf: &mut [u8]) -> Result<usize, VfsError> {
@@ -214,19 +343,43 @@ impl FileSystem for Ext2Fs {
         }
     }
 
-    fn rename(&mut self, _od: InodeId, _on: FileName<'_>, _nd: InodeId, _nn: FileName<'_>) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn rename(&mut self, old_dir: InodeId, old_name: FileName<'_>, new_dir: InodeId, new_name: FileName<'_>) -> Result<(), VfsError> {
+        unsafe {
+            // Look up the inode first
+            let ino = dir::lookup(self, old_dir as u32, old_name.as_bytes())?;
+            let raw = self.read_inode_raw(ino)?;
+            let ft = if inode::mode_to_type(raw.mode) == InodeType::Directory { 2u8 } else { 1u8 };
+            // Add to new location
+            dir::add_entry(self, new_dir as u32, ino, new_name.as_bytes(), ft)?;
+            // Remove from old location
+            dir::remove_entry(self, old_dir as u32, old_name.as_bytes())?;
+            Ok(())
+        }
     }
 
-    fn chmod(&mut self, _ino: InodeId, _mode: u32) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn chmod(&mut self, ino: InodeId, mode: u32) -> Result<(), VfsError> {
+        unsafe {
+            let mut raw = self.read_inode_raw(ino as u32)?;
+            raw.mode = (raw.mode & 0xF000) | (mode & 0xFFF) as u16;
+            self.write_inode_raw(ino as u32, &raw)
+        }
     }
 
-    fn chown(&mut self, _ino: InodeId, _uid: u32, _gid: u32) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn chown(&mut self, ino: InodeId, uid: u32, gid: u32) -> Result<(), VfsError> {
+        unsafe {
+            let mut raw = self.read_inode_raw(ino as u32)?;
+            raw.uid = uid as u16;
+            raw.gid = gid as u16;
+            self.write_inode_raw(ino as u32, &raw)
+        }
     }
 
-    fn utimes(&mut self, _ino: InodeId, _atime: u64, _mtime: u64) -> Result<(), VfsError> {
-        Err(VfsError::NotSupported)
+    fn utimes(&mut self, ino: InodeId, atime: u64, mtime: u64) -> Result<(), VfsError> {
+        unsafe {
+            let mut raw = self.read_inode_raw(ino as u32)?;
+            raw.atime = atime as u32;
+            raw.mtime = mtime as u32;
+            self.write_inode_raw(ino as u32, &raw)
+        }
     }
 }

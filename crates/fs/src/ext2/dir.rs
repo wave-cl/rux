@@ -4,6 +4,13 @@ use crate::{InodeId, DirEntry, InodeType, VfsError};
 use super::Ext2Fs;
 use super::inode;
 
+pub(crate) fn set_le16(buf: &mut [u8], off: usize, val: u16) {
+    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1];
+}
+pub(crate) fn set_le32(buf: &mut [u8], off: usize, val: u32) {
+    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1]; buf[off+2] = b[2]; buf[off+3] = b[3];
+}
+
 fn le16(buf: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([buf[off], buf[off + 1]])
 }
@@ -113,4 +120,132 @@ pub(crate) unsafe fn readdir(
     }
 
     Ok(false)
+}
+
+/// Add a directory entry. Finds space in existing blocks or allocates new one.
+pub(crate) unsafe fn add_entry(
+    fs: &Ext2Fs, dir_ino: u32, child_ino: u32, name: &[u8], file_type: u8,
+) -> Result<(), VfsError> {
+    let mut raw = inode::read_raw(fs, dir_ino)?;
+    let bs = fs.block_size as usize;
+    let dir_size = raw.size as usize;
+    let needed = ((8 + name.len() + 3) / 4) * 4; // align to 4
+
+    let mut buf = [0u8; 4096];
+    let num_blocks = (dir_size + bs - 1) / bs;
+
+    // Try to find space in existing blocks
+    for blk_idx in 0..num_blocks {
+        let phys = super::block::translate(fs, &raw, blk_idx as u32)?;
+        if phys == 0 { continue; }
+        fs.read_block(phys as u64, &mut buf)?;
+
+        let mut off = 0usize;
+        while off < bs {
+            let rec_len = le16(&buf, off + 4) as usize;
+            if rec_len == 0 { break; }
+            let d_ino = le32(&buf, off);
+            let d_name_len = buf[off + 6] as usize;
+            let actual_len = ((8 + d_name_len + 3) / 4) * 4;
+
+            // Check for slack space after this entry
+            if d_ino != 0 && rec_len >= actual_len + needed {
+                // Split: shrink current entry, add new entry in the slack
+                let new_off = off + actual_len;
+                let new_rec_len = rec_len - actual_len;
+
+                // Shrink current
+                set_le16(&mut buf, off + 4, actual_len as u16);
+
+                // Write new entry
+                set_le32(&mut buf, new_off, child_ino);
+                set_le16(&mut buf, new_off + 4, new_rec_len as u16);
+                buf[new_off + 6] = name.len() as u8;
+                buf[new_off + 7] = file_type;
+                buf[new_off + 8..new_off + 8 + name.len()].copy_from_slice(name);
+
+                fs.write_block(phys as u64, &buf)?;
+                return Ok(());
+            }
+
+            // Deleted entry — reuse if big enough
+            if d_ino == 0 && rec_len >= needed {
+                set_le32(&mut buf, off, child_ino);
+                buf[off + 6] = name.len() as u8;
+                buf[off + 7] = file_type;
+                buf[off + 8..off + 8 + name.len()].copy_from_slice(name);
+                fs.write_block(phys as u64, &buf)?;
+                return Ok(());
+            }
+
+            off += rec_len;
+        }
+    }
+
+    // No space in existing blocks — allocate a new one
+    let new_block = super::alloc::alloc_block(fs)?;
+    let new_blk_idx = num_blocks as u32;
+    super::block::assign_block(fs, &mut raw, new_blk_idx, new_block)?;
+    raw.size += fs.block_size;
+    raw.blocks += (fs.block_size / 512) as u32;
+    inode::write_raw(fs, dir_ino, &raw)?;
+
+    // Initialize new block with single entry spanning the whole block
+    let mut new_buf = [0u8; 4096];
+    set_le32(&mut new_buf, 0, child_ino);
+    set_le16(&mut new_buf, 4, bs as u16); // rec_len = whole block
+    new_buf[6] = name.len() as u8;
+    new_buf[7] = file_type;
+    new_buf[8..8 + name.len()].copy_from_slice(name);
+    fs.write_block(new_block as u64, &new_buf)?;
+
+    Ok(())
+}
+
+/// Remove a directory entry by name. Marks it as deleted (ino=0) and
+/// merges with the previous entry if possible.
+pub(crate) unsafe fn remove_entry(
+    fs: &Ext2Fs, dir_ino: u32, name: &[u8],
+) -> Result<u32, VfsError> {
+    let raw = inode::read_raw(fs, dir_ino)?;
+    let bs = fs.block_size as usize;
+    let dir_size = raw.size as usize;
+    let mut buf = [0u8; 4096];
+
+    let num_blocks = (dir_size + bs - 1) / bs;
+    for blk_idx in 0..num_blocks {
+        let phys = super::block::translate(fs, &raw, blk_idx as u32)?;
+        if phys == 0 { continue; }
+        fs.read_block(phys as u64, &mut buf)?;
+
+        let mut off = 0usize;
+        let mut prev_off = 0usize;
+        let mut found = false;
+
+        while off < bs {
+            let d_ino = le32(&buf, off);
+            let rec_len = le16(&buf, off + 4) as usize;
+            if rec_len == 0 { break; }
+            let d_name_len = buf[off + 6] as usize;
+
+            if d_ino != 0 && d_name_len == name.len() {
+                let entry_name = &buf[off + 8..off + 8 + d_name_len];
+                if entry_name == name {
+                    // Found: merge with previous entry if possible
+                    if off != prev_off {
+                        let prev_rec = le16(&buf, prev_off + 4) as usize;
+                        set_le16(&mut buf, prev_off + 4, (prev_rec + rec_len) as u16);
+                    }
+                    // Clear inode
+                    set_le32(&mut buf, off, 0);
+                    fs.write_block(phys as u64, &buf)?;
+                    return Ok(d_ino);
+                }
+            }
+
+            prev_off = off;
+            off += rec_len;
+        }
+    }
+    Err(VfsError::NotFound)
 }

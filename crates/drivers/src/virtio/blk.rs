@@ -194,8 +194,39 @@ impl BlockDevice for VirtioBlk {
         this.read_sector(block, buf)
     }
 
-    unsafe fn write_block(&mut self, _block: u64, _buf: *const u8) -> Result<(), DriverError> {
-        Err(DriverError::Unsupported)
+    unsafe fn write_block(&mut self, block: u64, buf: *const u8) -> Result<(), DriverError> {
+        self.req_header.typ = VIRTIO_BLK_T_OUT;
+        self.req_header.sector = block;
+        self.status_byte = 0xFF;
+
+        let head = self.vq.alloc_chain(3).ok_or(DriverError::ResourceBusy)?;
+
+        let d0 = &mut *self.vq.desc.add(head as usize);
+        d0.addr = &self.req_header as *const BlkReqHeader as u64;
+        d0.len = 16;
+        d0.flags = DESC_F_NEXT;
+        let d1_idx = d0.next;
+
+        let d1 = &mut *self.vq.desc.add(d1_idx as usize);
+        d1.addr = buf as u64;
+        d1.len = 512;
+        d1.flags = DESC_F_NEXT; // device reads (no WRITE flag)
+        let d2_idx = d1.next;
+
+        let d2 = &mut *self.vq.desc.add(d2_idx as usize);
+        d2.addr = &self.status_byte as *const u8 as u64;
+        d2.len = 1;
+        d2.flags = DESC_F_WRITE;
+
+        self.vq.submit(head);
+        self.mmio.notify(0);
+        if !self.vq.poll_used() {
+            self.vq.free_chain(head);
+            return Err(DriverError::Timeout);
+        }
+        self.vq.free_chain(head);
+
+        if self.status_byte == VIRTIO_BLK_S_OK { Ok(()) } else { Err(DriverError::IoError) }
     }
 }
 
