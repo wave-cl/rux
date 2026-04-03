@@ -42,6 +42,11 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                             return; // COW resolved
                         }
                     }
+                    // Demand paging: translation fault at user address → map zero page
+                    let is_translation = dfsc == 0x05 || dfsc == 0x06 || dfsc == 0x07;
+                    if (is_translation || is_perm) && far < 0x8000_0000 && far >= 0x1000 {
+                        if unsafe { demand_page(far as usize) } { return; }
+                    }
                     dump_user_fault("KERNEL DATA ABORT", far, esr, _frame);
                 }
                 0b100000 | 0b100001 => {
@@ -85,8 +90,13 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     let is_perm = dfsc == 0x0F || dfsc == 0x0E || dfsc == 0x0D;  // permission fault level 1/2/3
                     if wnr && is_perm {
                         if unsafe { crate::cow::handle_cow_fault(far as usize).is_ok() } {
-                            return; // COW resolved — resume faulting instruction
+                            return; // COW resolved
                         }
+                    }
+                    // Demand paging: translation or permission fault → map zero page
+                    let is_translation = dfsc == 0x05 || dfsc == 0x06 || dfsc == 0x07;
+                    if (is_translation || is_perm) && far < 0x8000_0000 && far >= 0x1000 {
+                        if unsafe { demand_page(far as usize) } { return; }
                     }
                     dump_user_fault("USER DATA ABORT", far, esr, _frame);
                 }
@@ -113,6 +123,29 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             write_hex(esr as usize);
             super::console::write_str("\n");
         }
+    }
+}
+
+/// Demand page: allocate and map a zero-filled page at the faulting address.
+/// Returns true if the page was mapped, false if allocation failed.
+unsafe fn demand_page(addr: usize) -> bool {
+    use rux_mm::FrameAllocator;
+    let alloc = crate::kstate::alloc();
+    let frame = match alloc.alloc(rux_mm::PageSize::FourK) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
+    let va = rux_klib::VirtAddr::new(addr & !0xFFF);
+    let flags = rux_mm::MappingFlags::READ
+        .or(rux_mm::MappingFlags::WRITE)
+        .or(rux_mm::MappingFlags::EXECUTE)
+        .or(rux_mm::MappingFlags::USER);
+    let mut upt = crate::syscall::current_user_page_table();
+    let _ = upt.unmap_4k(va); // remove any stale entry
+    match upt.map_4k(va, frame, flags, alloc) {
+        Ok(()) => true,
+        Err(_) => false,
     }
 }
 

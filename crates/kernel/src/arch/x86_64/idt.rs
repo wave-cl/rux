@@ -310,6 +310,29 @@ pub unsafe fn load() {
 
 /// Rust dispatch function called from the assembly common handler.
 #[no_mangle]
+/// Demand page: allocate and map a zero-filled RW user page at the faulting address.
+unsafe fn demand_page_x86(addr: usize) -> bool {
+    use rux_mm::FrameAllocator;
+    let alloc = crate::kstate::alloc();
+    let frame = match alloc.alloc(rux_mm::PageSize::FourK) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
+    let va = rux_klib::VirtAddr::new(addr & !0xFFF);
+    let flags = rux_mm::MappingFlags::READ
+        .or(rux_mm::MappingFlags::WRITE)
+        .or(rux_mm::MappingFlags::EXECUTE)
+        .or(rux_mm::MappingFlags::USER);
+    let mut upt = crate::syscall::current_user_page_table();
+    let _ = upt.unmap_4k(va);
+    match upt.map_4k(va, frame, flags, alloc) {
+        Ok(()) => true,
+        Err(_) => false,
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {
     match vector {
         0 => panic!("Division by zero"),
@@ -348,7 +371,22 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
             }
 
-            // Not a COW fault — dump and panic
+            // Demand paging: if the fault is at a user address (not present),
+            // allocate and map a zero page. Handles BSS, mmap lazy alloc, etc.
+            let present = error_code & 1 != 0;
+            if !present && cr2 < 0x0000_8000_0000_0000u64 && cr2 >= 0x1000 {
+                if unsafe { demand_page_x86(cr2 as usize) } {
+                    return; // page mapped — resume faulting instruction
+                }
+            }
+            // Also handle permission faults (page present but wrong perms)
+            if present && cr2 < 0x0000_8000_0000_0000u64 && cr2 >= 0x1000 {
+                if unsafe { demand_page_x86(cr2 as usize) } {
+                    return;
+                }
+            }
+
+            // Not resolvable — dump and panic
             unsafe {
                 let cr3: u64;
                 core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
