@@ -445,6 +445,11 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     // Signals
     t[13] = Syscall::Sigaction;  t[14] = Syscall::Sigprocmask;
     t[15] = Syscall::Sigreturn;  t[131] = Syscall::Sigaltstack;
+    // Filesystem mounting
+    t[165] = Syscall::Mount;     t[166] = Syscall::Umount;
+    // Additional
+    t[318] = Syscall::Getrandom; t[229] = Syscall::ClockGetres;
+    t[292] = Syscall::Dup3;      t[156] = Syscall::Sysctl;
     // Sockets
     t[41] = Syscall::Socket;     t[42] = Syscall::Connect;
     t[44] = Syscall::Sendto;     t[45] = Syscall::Recvfrom;

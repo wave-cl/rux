@@ -277,6 +277,31 @@ pub fn nanosleep(req_ptr: usize) -> isize {
 // ── Resource limits ─────────────────────────────────────────────────
 
 /// prlimit64(pid, resource, new_limit, old_limit) — Linux
+/// getrandom(buf, buflen, flags) — fill buffer with random bytes
+pub fn getrandom(buf_ptr: usize, len: usize, _flags: usize) -> isize {
+    if buf_ptr == 0 { return crate::errno::EFAULT; }
+    unsafe {
+        // Use the same xorshift64 PRNG as /dev/urandom
+        use rux_arch::TimerOps;
+        let mut state = crate::arch::Arch::ticks().wrapping_mul(6364136223846793005).wrapping_add(1);
+        let ptr = buf_ptr as *mut u8;
+        for i in 0..len {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *ptr.add(i) = state as u8;
+        }
+    }
+    len as isize
+}
+
+/// dup3(oldfd, newfd, flags) — like dup2 but with flags
+pub fn dup3(oldfd: usize, newfd: usize, _flags: usize) -> isize {
+    // dup3 is the same as dup2 except it fails if oldfd == newfd
+    if oldfd == newfd { return crate::errno::EINVAL; }
+    super::posix::dup2(oldfd, newfd)
+}
+
 pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: usize) -> isize {
     // Return RLIM_INFINITY for all resources
     if old_limit != 0 {

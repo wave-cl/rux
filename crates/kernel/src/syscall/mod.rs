@@ -11,6 +11,7 @@ mod process;
 pub(crate) mod signal;
 mod memory;
 pub(crate) mod socket;
+mod mount;
 
 // ── Shared process state ────────────────────────────────────────────
 
@@ -157,8 +158,12 @@ pub enum Syscall {
     Prctl, Alarm, Access, Link, Linkat, Sysinfo, Statfs,
     // Signals (additional)
     Sigreturn,
+    // Filesystem mounting
+    Mount, Umount,
     // Sockets
     Socket, Bind, Sendto, Recvfrom, Setsockopt, Getsockopt, Connect,
+    // Additional syscalls for musl/Alpine
+    Getrandom, ClockGetres, Dup3, Sysctl,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -303,6 +308,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // Dispatched by arch entry point, never reaches generic dispatch
         Syscall::Vfork | Syscall::Execve | Syscall::Sigreturn => 0,
 
+        // ── Filesystem mounting ─────────────────────────────────────
+        Syscall::Mount => mount::sys_mount(a0, a1, a2, a3, a4),
+        Syscall::Umount => mount::sys_umount(a0, a1),
+
         // ── Sockets ────────────────────────────────────────────────
         Syscall::Socket => socket::sys_socket(a0, a1, a2),
         Syscall::Bind => socket::sys_bind(a0, a1, a2),
@@ -310,6 +319,12 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Recvfrom => socket::sys_recvfrom(a0, a1, a2, a3, a4, 0),
         Syscall::Setsockopt | Syscall::Getsockopt => 0, // stub
         Syscall::Connect => socket::sys_connect(a0, a1, a2),
+
+        // ── Additional syscalls ────────────────────────────────────
+        Syscall::Getrandom => posix::getrandom(a0, a1, a2),
+        Syscall::ClockGetres => 0, // stub — musl queries but doesn't need real value
+        Syscall::Dup3 => posix::dup3(a0, a1, a2),
+        Syscall::Sysctl => 0, // stub — OpenRC queries kernel params
 
         Syscall::Rseq => crate::errno::ENOSYS,
 
