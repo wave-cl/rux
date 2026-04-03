@@ -206,6 +206,7 @@ check "cut"                    "root"
 check "tr (uppercase)"         "HELLO"
 check "tee"                    "root"
 check "proc stat pgid"         "1"
+# check "dynamic linking"        "dynlink_ok"  # manual test: /bin/dynhello prints dynlink_ok
 
 # ── aarch64 ──────────────────────────────────────────────────────────
 printf "\n\033[1m── aarch64 ──\033[0m\n"
@@ -382,6 +383,7 @@ check "cut"                    "root"
 check "tr (uppercase)"         "HELLO"
 check "tee"                    "root"
 check "proc stat pgid"         "1"
+# check "dynamic linking"        "dynlink_ok"  # manual test: /bin/dynhello prints dynlink_ok
 
 # ── Summary ──────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
