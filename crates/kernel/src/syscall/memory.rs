@@ -203,11 +203,12 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     } else { 1 };
 
     for _attempt in 0..max_iters {
-        // Poll network multiple times per iteration to drain queued packets
+        // Poll smoltcp (drains all available frames in one call)
         #[cfg(feature = "net")]
         if has_sockets {
-            for _ in 0..100 {
-                unsafe { rux_net::stack::poll(); }
+            unsafe {
+                use rux_arch::TimerOps;
+                rux_net::poll(crate::arch::Arch::ticks());
             }
         }
 

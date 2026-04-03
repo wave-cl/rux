@@ -452,7 +452,10 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             unsafe {
                 crate::task_table::wake_sleepers();
                 #[cfg(feature = "net")]
-                if rux_net::stack::is_configured() { rux_net::stack::poll(); }
+                if rux_net::is_configured() {
+                    use rux_arch::TimerOps;
+                    rux_net::poll(crate::arch::Arch::ticks());
+                }
 
                 let sched = crate::scheduler::get();
                 sched.tick(1_000_000);

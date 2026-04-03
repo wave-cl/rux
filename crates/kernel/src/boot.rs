@@ -88,14 +88,11 @@ pub unsafe fn boot(params: BootParams) -> ! {
                 core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 8192);
                 if rux_drivers::virtio::net::init_mmio(net_base, rx.as_usize(), tx.as_usize()) {
                     let mac = rux_drivers::virtio::net::mac();
-                    rux_net::stack::set_driver(
+                    rux_net::init(
                         |frame| rux_drivers::virtio::net::send(frame),
                         |buf| rux_drivers::virtio::net::recv(buf),
-                    );
-                    rux_net::stack::configure([10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0], mac);
-                    rux_net::stack::set_callbacks(
-                        |s, sp, dp, d| crate::syscall::socket::deliver_udp(s, sp, dp, d),
-                        |s, d| crate::syscall::socket::deliver_icmp(s, d),
+                        mac,
+                        [10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0],
                     );
                     log("rux: virtio-net: MAC=");
                     let mut hb = [0u8; 3];
@@ -116,7 +113,6 @@ pub unsafe fn boot(params: BootParams) -> ! {
     #[cfg(all(target_arch = "x86_64", feature = "net"))]
     {
         use rux_mm::FrameAllocator;
-        // Check for device BEFORE allocating queue pages
         let has_net = rux_drivers::pci::find_device(rux_drivers::pci::VIRTIO_VENDOR, 0x1000).is_some();
         if has_net {
             let alloc = &mut *alloc_ptr;
@@ -126,29 +122,26 @@ pub unsafe fn boot(params: BootParams) -> ! {
                 core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 16384);
                 core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 16384);
                 if rux_drivers::virtio::net_pci::init(rx.as_usize(), tx.as_usize()) {
-                let mac = rux_drivers::virtio::net_pci::mac();
-                rux_net::stack::set_driver(
-                    |frame| rux_drivers::virtio::net_pci::send(frame),
-                    |buf| rux_drivers::virtio::net_pci::recv(buf),
-                );
-                rux_net::stack::configure([10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0], mac);
-                rux_net::stack::set_callbacks(
-                    |s, sp, dp, d| crate::syscall::socket::deliver_udp(s, sp, dp, d),
-                    |s, d| crate::syscall::socket::deliver_icmp(s, d),
-                );
-                log("rux: virtio-net-pci: MAC=");
-                let mut hb = [0u8; 3];
-                for i in 0..6 {
-                    let hi = mac[i] >> 4;
-                    let lo = mac[i] & 0xF;
-                    hb[0] = if hi < 10 { b'0' + hi } else { b'a' + hi - 10 };
-                    hb[1] = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
-                    hb[2] = if i < 5 { b':' } else { b'\n' };
-                    crate::arch::Arch::write_bytes(&hb);
+                    let mac = rux_drivers::virtio::net_pci::mac();
+                    rux_net::init(
+                        |frame| rux_drivers::virtio::net_pci::send(frame),
+                        |buf| rux_drivers::virtio::net_pci::recv(buf),
+                        mac,
+                        [10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0],
+                    );
+                    log("rux: virtio-net-pci: MAC=");
+                    let mut hb = [0u8; 3];
+                    for i in 0..6 {
+                        let hi = mac[i] >> 4;
+                        let lo = mac[i] & 0xF;
+                        hb[0] = if hi < 10 { b'0' + hi } else { b'a' + hi - 10 };
+                        hb[1] = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
+                        hb[2] = if i < 5 { b':' } else { b'\n' };
+                        crate::arch::Arch::write_bytes(&hb);
+                    }
                 }
             }
         }
-        } // if has_net
     }
 
     // Mount procfs at /proc and devfs at /dev
