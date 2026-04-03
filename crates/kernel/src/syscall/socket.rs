@@ -55,7 +55,8 @@ static mut SOCKETS: [SocketSlot; MAX_SOCKETS] = [SocketSlot::empty(); MAX_SOCKET
 /// socket(domain, type, protocol) → fd
 pub fn sys_socket(domain: usize, stype: usize, protocol: usize) -> isize {
     if domain as u32 != AF_INET { return crate::errno::EAFNOSUPPORT; }
-    let st = stype as u32 & 0xFF; // mask out SOCK_NONBLOCK etc.
+    let st = stype as u32 & 0xFF; // mask out SOCK_NONBLOCK, SOCK_CLOEXEC
+    let sock_nonblock = stype & 0x800 != 0; // SOCK_NONBLOCK
     if st != SOCK_STREAM && st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
 
     unsafe {
@@ -84,6 +85,9 @@ pub fn sys_socket(domain: usize, stype: usize, protocol: usize) -> isize {
         fd_table[fd].active = true;
         fd_table[fd].is_socket = true;
         fd_table[fd].socket_idx = sock_idx as u8;
+        if sock_nonblock {
+            fd_table[fd].flags |= 0x800; // O_NONBLOCK
+        }
 
         fd as isize
     }
@@ -165,8 +169,18 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
             let src_ip = rux_net::stack::our_ip();
             rux_net::tcp::connect(conn_idx, dst_ip, dst_port, src_ip);
             sock.tcp_conn = conn_idx as i8;
+            sock.connected_ip = dst_ip;
+            sock.connected_port = dst_port;
 
-            // Wait for connection to be established (poll for SYN+ACK)
+            // Non-blocking connect: return EINPROGRESS immediately
+            let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & 0x800) != 0;
+            // Also check SOCK_NONBLOCK flag (0x800 in type field from socket() call)
+            let sock_nonblock = nonblock || (sock.sock_type & 0x800 != 0);
+            if sock_nonblock {
+                return crate::errno::EINPROGRESS;
+            }
+
+            // Blocking connect: wait for SYN+ACK
             for _ in 0..10_000_000u32 {
                 rux_net::stack::poll();
                 let conn = rux_net::tcp::get_conn(conn_idx);
@@ -423,6 +437,32 @@ pub fn sys_recvmmsg(fd: usize, msgvec_ptr: usize, vlen: usize) -> isize {
     recvd
 }
 
+/// getsockopt(fd, level, optname, optval, optlen) — get socket option
+pub fn sys_getsockopt(_fd: usize, _level: usize, optname: usize, optval: usize, optlen: usize) -> isize {
+    unsafe {
+        const SO_ERROR: usize = 4;
+        const SO_SNDBUF: usize = 7;
+        const SO_RCVBUF: usize = 8;
+        match optname {
+            SO_ERROR => {
+                // Return 0 (no error) — connection is established
+                if optval != 0 { *(optval as *mut i32) = 0; }
+                if optlen != 0 { *(optlen as *mut u32) = 4; }
+            }
+            SO_SNDBUF | SO_RCVBUF => {
+                if optval != 0 { *(optval as *mut i32) = 65536; }
+                if optlen != 0 { *(optlen as *mut u32) = 4; }
+            }
+            _ => {
+                // Unknown option — return 0 in the value
+                if optval != 0 { *(optval as *mut i32) = 0; }
+                if optlen != 0 { *(optlen as *mut u32) = 4; }
+            }
+        }
+    }
+    0
+}
+
 /// getsockname(fd, addr, addrlen) — get local address
 pub fn sys_getsockname(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
     if addr_ptr == 0 { return 0; }
@@ -467,6 +507,23 @@ pub fn sys_getpeername(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
 }
 
 /// Check if a socket has data available for reading.
+/// Check if a socket is writable (connected and ready for send).
+pub fn socket_can_write(fd: usize) -> bool {
+    unsafe {
+        let idx = match resolve_socket(fd) { Some(i) => i, None => return false };
+        let sock = &SOCKETS[idx];
+        // UDP sockets are always writable
+        if sock.sock_type == SOCK_DGRAM { return true; }
+        // TCP: writable when established
+        #[cfg(feature = "net")]
+        if sock.tcp_conn >= 0 {
+            let conn = rux_net::tcp::get_conn(sock.tcp_conn as usize);
+            return conn.state == rux_net::tcp::TcpState::Established;
+        }
+        true
+    }
+}
+
 pub fn socket_has_data(fd: usize) -> bool {
     unsafe {
         let idx = match resolve_socket(fd) { Some(i) => i, None => return false };

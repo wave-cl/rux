@@ -225,7 +225,12 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             let mut revents: i16 = 0;
             if f.active && f.is_socket {
                 // Socket: check actual readiness
-                if events & 4 != 0 { revents |= 4; } // POLLOUT always ready
+                if events & 4 != 0 {
+                    // POLLOUT: ready if connected (not still in SYN_SENT)
+                    if super::socket::socket_can_write(fd) {
+                        revents |= 4;
+                    }
+                }
                 if events & 1 != 0 {
                     // POLLIN: check if data is available
                     if super::socket::socket_has_data(fd) {
