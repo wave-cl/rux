@@ -329,7 +329,7 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             crate::arch::Arch::write_str(" error_code=0x");
             crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut buf, error_code as usize));
             crate::arch::Arch::write_str("\n");
-            loop { unsafe { core::arch::asm!("cli; hlt"); } }
+            super::exit::exit_qemu(super::exit::EXIT_FAILURE);
         }
         8 => panic!("Double fault (error_code={:#x})", error_code),
         14 => {
