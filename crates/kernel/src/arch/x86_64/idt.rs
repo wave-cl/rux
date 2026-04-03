@@ -365,6 +365,29 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 w("  rip: "); h(*r.add(17) as usize);
                 w("  rsp: "); h(*r.add(20) as usize); super::console::write_byte(b'\n');
                 w("  cr3: "); h(cr3 as usize); super::console::write_byte(b'\n');
+                // Walk page table to show PTE for faulting address
+                let l4_idx = (cr2 as usize >> 39) & 0x1FF;
+                let l3_idx = (cr2 as usize >> 30) & 0x1FF;
+                let l2_idx = (cr2 as usize >> 21) & 0x1FF;
+                let l1_idx = (cr2 as usize >> 12) & 0x1FF;
+                let l4 = cr3 as *const u64;
+                let l4e = *l4.add(l4_idx);
+                w("  L4["); h(l4_idx); w("]="); h(l4e as usize); super::console::write_byte(b'\n');
+                if l4e & 1 != 0 {
+                    let l3 = (l4e & 0x000F_FFFF_FFFF_F000) as *const u64;
+                    let l3e = *l3.add(l3_idx);
+                    w("  L3["); h(l3_idx); w("]="); h(l3e as usize); super::console::write_byte(b'\n');
+                    if l3e & 1 != 0 && l3e & (1<<7) == 0 {
+                        let l2 = (l3e & 0x000F_FFFF_FFFF_F000) as *const u64;
+                        let l2e = *l2.add(l2_idx);
+                        w("  L2["); h(l2_idx); w("]="); h(l2e as usize); super::console::write_byte(b'\n');
+                        if l2e & 1 != 0 && l2e & (1<<7) == 0 {
+                            let l1 = (l2e & 0x000F_FFFF_FFFF_F000) as *const u64;
+                            let l1e = *l1.add(l1_idx);
+                            w("  L1["); h(l1_idx); w("]="); h(l1e as usize); super::console::write_byte(b'\n');
+                        }
+                    }
+                }
             }
             panic!("page fault");
         }

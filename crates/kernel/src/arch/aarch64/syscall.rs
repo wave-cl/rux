@@ -54,9 +54,10 @@ pub fn handle_syscall(frame: *mut u8) {
             }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
             139 => {
-                // rt_sigreturn — restore pre-signal state
-                // generic_sigreturn modifies the exception frame directly via SignalOps
+                // rt_sigreturn — restore pre-signal state (reads signal frame from user stack)
+                crate::uaccess::stac();
                 let _ = crate::syscall::generic_sigreturn::<super::Aarch64>();
+                crate::uaccess::clac();
                 return; // exception frame already has restored x0, skip writing it
             }
             _ => {
@@ -70,7 +71,9 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // Check for pending signals before returning to userspace
         if crate::syscall::PROCESS.signal_hot.has_deliverable() {
+            crate::uaccess::stac(); // signal frame is on user stack
             crate::syscall::generic_deliver_signal::<super::Aarch64>(result);
+            crate::uaccess::clac();
         }
         // Check for pending reschedule (set by timer tick or fork).
         let sched = crate::scheduler::get();

@@ -67,18 +67,9 @@ pub unsafe fn init_syscall_msrs() {
 #[unsafe(naked)]
 unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
+        // SMAP: on KVM/real hardware with CR4.SMAP, stac/clac are handled
+        // at the Rust level via dispatch() and uaccess helpers.
         // Switch to per-task kernel stack (save user RSP).
-        // CURRENT_KSTACK_TOP is updated by swap_process_state on every context switch
-        // so each task uses its own kstack, preventing cross-task stack corruption.
-        // Note: clac for SMAP enforcement is done at the Rust level via
-        // the SMAP_ACTIVE guard in uaccess::stac/clac. Can't use clac here
-        // unconditionally because QEMU TCG may not support SMAP instructions.
-        // Per-CPU via GS-base ready (swapgs + gs:[offset]) but disabled for QEMU
-        // timing compatibility. Enable for real hardware / KVM:
-        // "swapgs",
-        // "mov gs:[0], rsp",     // saved_user_rsp
-        // "mov gs:[8], r9",      // saved_syscall_a5
-        // "mov rsp, gs:[16]",    // syscall_kstack_top
         "mov [rip + {saved_user_rsp}], rsp",
         "mov [rip + {saved_a5}], r9",
         "mov rsp, [rip + {current_kstack_top}]",
@@ -142,7 +133,6 @@ unsafe extern "C" fn syscall_entry() {
         "mov rsp, [rip + {saved_user_rsp}]",
 
         // Return to user mode
-        // For real SMP: "swapgs" here before sysretq
         "sysretq",
 
         saved_user_rsp = sym SAVED_USER_RSP,
@@ -309,13 +299,17 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
             return unsafe { crate::fork::sys_fork() } as i64;
         }
         57 | 58 => return unsafe { crate::fork::sys_fork() } as i64,
-        59 => { unsafe { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } }
+        59 => { unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); } }
         _ => {}
     }
 
     // sigreturn is handled specially — it restores the pre-signal state
+    // stac/clac needed: sig_restore_frame reads the signal frame from user stack
     if nr == 15 {
-        return unsafe { crate::syscall::generic_sigreturn::<super::X86_64>() };
+        unsafe { crate::uaccess::stac(); }
+        let r = unsafe { crate::syscall::generic_sigreturn::<super::X86_64>() };
+        unsafe { crate::uaccess::clac(); }
+        return r;
     }
 
     // Everything else goes through generic dispatch
@@ -500,7 +494,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
 
         // Exec uses generic implementation
         let result: i64 = match nr {
-            59 => { crate::uaccess::stac(); crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); }
+            59 => { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); }
             _ => {
                 let sc = translate_x86_64(nr as usize);
                 crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, 0, 0) as i64

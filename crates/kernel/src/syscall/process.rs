@@ -174,13 +174,12 @@ pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
         let len = super::PROCESS.fs_ctx.cwd_path_len;
         if buf == 0 || size < len + 1 { return crate::errno::ERANGE; }
-        crate::uaccess::stac();
+        // dispatch() provides stac/clac wrapping — no inner pair needed
         let ptr = buf as *mut u8;
         for i in 0..len {
             *ptr.add(i) = super::PROCESS.fs_ctx.cwd_path[i];
         }
         *ptr.add(len) = 0;
-        crate::uaccess::clac();
     }
     buf as isize
 }
@@ -188,8 +187,8 @@ pub fn getcwd(buf: usize, size: usize) -> isize {
 /// uname(buf) — POSIX.1
 pub fn uname(buf: usize) -> isize {
     if buf == 0 { return crate::errno::EFAULT; }
+    // dispatch() provides stac/clac wrapping for SMAP
     unsafe {
-        crate::uaccess::stac();
         let ptr = buf as *mut u8;
         for i in 0..325 { *ptr.add(i) = 0; }
         // sysname
@@ -222,7 +221,6 @@ pub fn uname(buf: usize) -> isize {
                 *ptr.add(260 + i) = b;
             }
         }
-        crate::uaccess::clac();
     }
     0
 }

@@ -174,7 +174,7 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
 
     // Write child tid to user space if requested
     if child_tid_ptr != 0 {
-        *(child_tid_ptr as *mut u32) = child_pid;
+        crate::uaccess::put_user(child_tid_ptr, child_pid as u32);
     }
 
     child_pid as isize

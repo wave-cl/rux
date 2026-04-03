@@ -155,17 +155,10 @@ pub fn x86_64_init(multiboot_info: usize) {
         if features.has(FSGSBASE) { cr4 |= 1 << 16; console::write_str("rux: FSGSBASE enabled\n"); }
         if features.has(UMIP) { cr4 |= 1 << 11; console::write_str("rux: UMIP enabled\n"); }
         if features.has(SMAP) {
-            if super::syscall::GS_PERCPU_ACTIVE {
-                // KVM: enable SMAP (real stac/clac + pushfq/popfq both work)
-                cr4 |= 1 << 21;
-                console::write_str("rux: SMAP enabled (KVM)\n");
-            } else {
-                // TCG: SMAP detected but not all kernel user-memory accesses are
-                // wrapped in stac/clac yet. Enable guards for future enforcement.
-                console::write_str("rux: SMAP detected (TCG: enforcement deferred)\n");
-            }
+            // SMAP CR4 bit deferred until after KVM detection.
+            // QEMU TCG's SMAP + stac/clac interaction is unreliable
+            // from syscall paths — enable only on KVM/real hardware.
         }
-        // Must set CR4 before enabling stac/clac guards
 
         core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
 
@@ -194,7 +187,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             if features.has(STIBP) { console::write_str("rux: STIBP enabled\n"); }
         }
 
-        // Activate stac/clac runtime guards now that CR4 is set
+        // Activate stac/clac runtime guards (run as no-ops until CR4.SMAP is set)
         if features.has(SMAP) {
             crate::uaccess::enable_smap_guards();
         }
@@ -205,8 +198,20 @@ pub fn x86_64_init(multiboot_info: usize) {
         if detect_kvm() {
             super::syscall::GS_PERCPU_ACTIVE = true;
             console::write_str("rux: KVM detected, using gs-based syscall entry\n");
+
+            // Enable SMAP in CR4 on KVM (stac/clac work reliably)
+            if rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::SMAP) {
+                let mut cr4: u64;
+                core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
+                cr4 |= 1 << 21;
+                core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
+                console::write_str("rux: SMAP enforced (KVM)\n");
+            }
         } else {
             console::write_str("rux: TCG mode, using RIP-relative syscall entry\n");
+            if rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::SMAP) {
+                console::write_str("rux: SMAP detected (TCG: CR4 deferred, guards active)\n");
+            }
         }
     }
 

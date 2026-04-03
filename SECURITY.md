@@ -14,7 +14,7 @@ that no programming language can provide.
 | Feature | x86_64 | aarch64 | Purpose |
 |---------|--------|---------|---------|
 | SMEP | CR4.20 | N/A | Prevent kernel executing user code |
-| SMAP | CR4.21 (pushfq/popfq) | PAN | Prevent kernel accessing user memory |
+| SMAP | CR4.21 + stac/clac | PAN (MSR PAN) | Prevent kernel accessing user memory |
 | UMIP | CR4.11 | N/A | Block SGDT/SIDT info leaks from userspace |
 | NX/XN | PTE bit 63 | UXN/PXN | No-execute enforcement per page |
 | CR0.WP | CR0.16 | SCTLR | Enforce read-only pages in kernel mode |
@@ -69,6 +69,7 @@ they protect against (memory corruption) is largely eliminated by the language.
 
 | Feature | Reason Deferred |
 |---------|----------------|
+| SMAP/PAN CR4 enforcement on QEMU TCG | SMAP (x86_64) and PAN (aarch64) guards (stac/clac, MSR PAN) are implemented and all kernel→user memory access paths are wrapped. However, CR4.SMAP is only enabled on KVM/real hardware — QEMU TCG's stac/clac interaction with SMAP is unreliable from syscall paths. SMAP_ACTIVE volatile guard + full audit in place; enforcement deferred until KVM testing. |
 | KPTI (Kernel Page Table Isolation) | Mitigates Meltdown (speculative kernel memory reads from userspace). High implementation effort: requires separate user/kernel page tables and CR3 swap on every syscall. Design approach: trampoline page mapped in both kernel and user page tables to handle the CR3 switch during syscall entry/exit. The Rust kernel's minimal `unsafe` surface makes exploitation significantly harder even without KPTI. |
 | Read-only page tables | Prevents page table corruption from kernel bugs. Rust's type system prevents most wild writes; the remaining `unsafe` page table code is small and auditable. |
 
