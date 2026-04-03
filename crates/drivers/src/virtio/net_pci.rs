@@ -22,13 +22,13 @@ struct NetPciState {
     io_base: u16,
     mac: [u8; 6],
     initialized: bool,
-    // RX queue state
+    // RX queue state (dev_*_qsize = device's actual queue size for ring arithmetic)
     rx_desc: usize, rx_avail: usize, rx_used: usize,
-    rx_avail_idx: u16, rx_last_used: u16, rx_qsize: u16,
+    rx_avail_idx: u16, rx_last_used: u16, dev_rx_qsize: u16,
     // TX queue state
     tx_desc: usize, tx_avail: usize, tx_used: usize,
-    tx_avail_idx: u16, tx_last_used: u16, tx_qsize: u16,
-    // Buffers
+    tx_avail_idx: u16, tx_last_used: u16, dev_tx_qsize: u16,
+    // Buffers (16 pre-allocated; only these descriptors go in avail ring)
     rx_bufs: [[u8; BUF_SIZE]; 16],
     tx_hdr: NetHdr,
 }
@@ -36,9 +36,9 @@ struct NetPciState {
 static mut STATE: NetPciState = NetPciState {
     io_base: 0, mac: [0; 6], initialized: false,
     rx_desc: 0, rx_avail: 0, rx_used: 0,
-    rx_avail_idx: 0, rx_last_used: 0, rx_qsize: 0,
+    rx_avail_idx: 0, rx_last_used: 0, dev_rx_qsize: 0,
     tx_desc: 0, tx_avail: 0, tx_used: 0,
-    tx_avail_idx: 0, tx_last_used: 0, tx_qsize: 0,
+    tx_avail_idx: 0, tx_last_used: 0, dev_tx_qsize: 0,
     rx_bufs: [[0; BUF_SIZE]; 16],
     tx_hdr: NetHdr { flags: 0, gso_type: 0, hdr_len: 0, gso_size: 0, csum_start: 0, csum_offset: 0 },
 };
@@ -78,16 +78,15 @@ pub unsafe fn init(rx_pages: usize, tx_pages: usize) -> bool {
     pci.set_driver_features(features & (1 << 5)); // VIRTIO_NET_F_MAC
 
     // Setup RX queue (queue 0)
-    // Legacy PCI: queue size is fixed by device. We must allocate memory
-    // for the full device queue size, even if we only use 16 entries.
+    // Legacy PCI: queue size is fixed by device. We allocate memory for
+    // the full device queue size. We only use 16 buffers, but ring index
+    // arithmetic MUST use the device's queue size.
     pci.select_queue(0);
     let dev_rx_qsize = pci.queue_size();
     if dev_rx_qsize == 0 { return false; }
-    let rx_qsize = dev_rx_qsize.min(16); // we only USE 16 entries
 
-    // Layout memory for the DEVICE's full queue size
     let (rx_d, rx_a, rx_u) = queue_addrs(rx_pages, dev_rx_qsize);
-    // Initialize our 16 RX descriptors (device sees full queue but we only fill 16)
+    // Initialize descriptors: 0-15 get buffers, 16+ are zeroed
     let desc = rx_d as *mut Descriptor;
     for i in 0..dev_rx_qsize {
         let d = &mut *desc.add(i as usize);
@@ -103,21 +102,21 @@ pub unsafe fn init(rx_pages: usize, tx_pages: usize) -> bool {
     pci.set_queue_addr((rx_d / 4096) as u32);
 
     STATE.rx_desc = rx_d; STATE.rx_avail = rx_a; STATE.rx_used = rx_u;
-    STATE.rx_qsize = rx_qsize;
+    STATE.dev_rx_qsize = dev_rx_qsize;
 
-    // Pre-fill RX available ring with our 16 buffer indices
+    // Pre-fill avail ring with descriptors 0-15 (the ones with buffers).
+    // Ring indices wrap at dev_rx_qsize, not 16.
     let avail_ring = (rx_a + 4) as *mut u16;
-    for i in 0..rx_qsize {
+    for i in 0..16u16.min(dev_rx_qsize) {
         *avail_ring.add(i as usize) = i;
     }
-    STATE.rx_avail_idx = rx_qsize;
-    *((rx_a + 2) as *mut u16) = rx_qsize;
+    STATE.rx_avail_idx = 16u16.min(dev_rx_qsize);
+    *((rx_a + 2) as *mut u16) = STATE.rx_avail_idx;
 
     // Setup TX queue (queue 1)
     pci.select_queue(1);
     let dev_tx_qsize = pci.queue_size();
     if dev_tx_qsize == 0 { return false; }
-    let tx_qsize = dev_tx_qsize.min(16);
 
     let (tx_d, tx_a, tx_u) = queue_addrs(tx_pages, dev_tx_qsize);
     let tdesc = tx_d as *mut Descriptor;
@@ -128,7 +127,7 @@ pub unsafe fn init(rx_pages: usize, tx_pages: usize) -> bool {
     pci.set_queue_addr((tx_d / 4096) as u32);
 
     STATE.tx_desc = tx_d; STATE.tx_avail = tx_a; STATE.tx_used = tx_u;
-    STATE.tx_qsize = tx_qsize;
+    STATE.dev_tx_qsize = dev_tx_qsize;
 
     // Driver OK
     pci.set_status(1 | 2 | 4);
@@ -164,7 +163,7 @@ pub unsafe fn send(frame: &[u8]) -> bool {
     d1.flags = 0;
 
     let avail_ring = (STATE.tx_avail + 4) as *mut u16;
-    *avail_ring.add((STATE.tx_avail_idx % STATE.tx_qsize) as usize) = 0;
+    *avail_ring.add((STATE.tx_avail_idx % STATE.dev_tx_qsize) as usize) = 0;
     STATE.tx_avail_idx += 1;
     fence(Ordering::Release);
     *((STATE.tx_avail + 2) as *mut u16) = STATE.tx_avail_idx;
@@ -197,7 +196,7 @@ pub unsafe fn recv(buf: &mut [u8]) -> Option<usize> {
     if current == STATE.rx_last_used { return None; }
 
     let used_ring = (STATE.rx_used + 4) as *const u32;
-    let idx = STATE.rx_last_used % STATE.rx_qsize;
+    let idx = STATE.rx_last_used % STATE.dev_rx_qsize;
     let elem_id = core::ptr::read_volatile(used_ring.add(idx as usize * 2)) as usize;
     let elem_len = core::ptr::read_volatile(used_ring.add(idx as usize * 2 + 1)) as usize;
     STATE.rx_last_used += 1;
@@ -210,7 +209,7 @@ pub unsafe fn recv(buf: &mut [u8]) -> Option<usize> {
 
         // Re-add to RX available ring
         let avail_ring = (STATE.rx_avail + 4) as *mut u16;
-        *avail_ring.add((STATE.rx_avail_idx % STATE.rx_qsize) as usize) = elem_id as u16;
+        *avail_ring.add((STATE.rx_avail_idx % STATE.dev_rx_qsize) as usize) = elem_id as u16;
         STATE.rx_avail_idx += 1;
         fence(Ordering::Release);
         *((STATE.rx_avail + 2) as *mut u16) = STATE.rx_avail_idx;

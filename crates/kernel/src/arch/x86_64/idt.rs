@@ -386,19 +386,17 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
             }
 
-            // User-mode fault not resolvable → deliver SIGSEGV (or exit)
-            if user {
+            // Fault not resolvable. If the address is in user space, kill
+            // the process (SIGSEGV) regardless of whether the fault came
+            // from user or kernel mode (kernel may read user ptrs in syscalls).
+            if cr2 < 0x0000_8000_0000_0000u64 {
                 unsafe {
                     use rux_arch::ConsoleOps;
                     crate::arch::Arch::write_str("rux: SIGSEGV at addr=0x");
                     let mut hb = [0u8; 16];
                     crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, cr2 as usize));
-                    crate::arch::Arch::write_str(" rip=0x");
-                    let rip = *((frame as *const u64).add(17));
-                    crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, rip as usize));
                     crate::arch::Arch::write_str("\n");
-                    // Kill the current process with SIGSEGV
-                    crate::syscall::posix::exit(139); // 128 + SIGSEGV(11)
+                    crate::syscall::posix::exit(139);
                 }
             }
 
