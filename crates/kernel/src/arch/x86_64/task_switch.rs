@@ -28,6 +28,17 @@ unsafe impl rux_arch::TaskSwitchOps for super::X86_64 {
 
     #[inline(always)]
     unsafe fn restore_task_hw(saved_user_sp: usize, tls: u64, kstack_top: usize) {
+        // Issue IBPB (Indirect Branch Prediction Barrier) on context switch
+        if rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::IBRS) {
+            core::arch::asm!(
+                "wrmsr",
+                in("ecx") 0x49u32,  // IA32_PRED_CMD
+                in("eax") 1u32,     // IBPB
+                in("edx") 0u32,
+                options(nostack),
+            );
+        }
+
         // Update per-CPU syscall state
         let pc = crate::percpu::this_cpu();
         pc.saved_user_rsp = saved_user_sp as u64;

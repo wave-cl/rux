@@ -67,14 +67,15 @@ unsafe fn detect_x86_features() -> rux_arch::cpu::CpuFeatures {
     // Leaf 7 subleaf 0: extended features
     let ebx7: u64;
     let ecx7_out: u32;
+    let edx7_out: u32;
     core::arch::asm!(
         "push rbx", "cpuid", "mov {out}, rbx", "pop rbx",
         out = out(reg) ebx7,
-        inout("eax") 7u32 => _, inout("ecx") 0u32 => ecx7_out, lateout("edx") _,
+        inout("eax") 7u32 => _, inout("ecx") 0u32 => ecx7_out, lateout("edx") edx7_out,
         options(nostack)
     );
     let ebx7 = ebx7 as u32;
-    let f7 = parse_cpuid_07(ebx7, ecx7_out);
+    let f7 = parse_cpuid_07(ebx7, ecx7_out, edx7_out);
 
     // Extended leaf 0x80000001: NX, GBPAGES
     let edx_ext1: u32;
@@ -169,6 +170,22 @@ pub fn x86_64_init(multiboot_info: usize) {
             core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nostack, preserves_flags));
         }
         console::write_str("rux: CR0.WP enabled\n");
+
+        // Spectre mitigations: enable IBRS + STIBP if detected
+        if features.has(IBRS) || features.has(STIBP) {
+            let mut spec_ctrl: u64 = 0;
+            if features.has(IBRS) { spec_ctrl |= 1; }   // bit 0 = IBRS
+            if features.has(STIBP) { spec_ctrl |= 2; }  // bit 1 = STIBP
+            core::arch::asm!(
+                "wrmsr",
+                in("ecx") 0x48u32,  // IA32_SPEC_CTRL
+                in("eax") spec_ctrl as u32,
+                in("edx") 0u32,
+                options(nostack),
+            );
+            if features.has(IBRS) { console::write_str("rux: IBRS enabled\n"); }
+            if features.has(STIBP) { console::write_str("rux: STIBP enabled\n"); }
+        }
 
         // Activate stac/clac runtime guards now that CR4 is set
         if features.has(SMAP) {
@@ -380,11 +397,11 @@ pub fn x86_64_init(multiboot_info: usize) {
             // The init code itself is in .text, so its address gives a lower bound.
             // Use the known layout: .text < .rodata < .data, all page-aligned by linker.
             let text_start = 0x101000usize;
-            // .rodata always starts on a page boundary after .text
-            // Use .data section start as .rodata end (conservative)
-            // These are compile-time stable within the same binary.
             let text_end_page = 0x121000usize;   // page-aligned start of .rodata
-            let rodata_end_page = 0x126000usize;  // page-aligned start of .data
+            // Only protect pages that are ENTIRELY within .rodata.
+            // The last page of .rodata may share with .data/.got/.relro,
+            // so stop one page before .data to avoid write-protecting mutable data.
+            let rodata_end_page = 0x125000usize;  // conservative: exclude last page before .data
 
             // .text → RX
             {

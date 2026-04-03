@@ -51,21 +51,6 @@ pub extern "C" fn kernel_main(arg: usize) -> ! {
     Arch::exit(Arch::EXIT_SUCCESS);
 }
 
-// ── Stack protector symbols (ready for -Z stack-protector=strong) ──────
-
-#[cfg(not(feature = "native"))]
-#[no_mangle]
-pub static __stack_chk_guard: u64 = 0x595e9fbd94fda766;
-
-#[cfg(not(feature = "native"))]
-#[no_mangle]
-pub extern "C" fn __stack_chk_fail() -> ! {
-    use rux_arch::ConsoleOps;
-    arch::Arch::write_str("PANIC: stack smashing detected\n");
-    use rux_arch::ExitOps;
-    arch::Arch::exit(arch::Arch::EXIT_FAILURE);
-}
-
 // ── Panic handler (no_std mode only; std provides one in native mode) ─
 
 #[cfg(not(feature = "native"))]

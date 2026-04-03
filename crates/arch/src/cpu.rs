@@ -102,7 +102,7 @@ mod tests {
 
         #[test]
         fn parse_cpuid_07_bmi_smep_smap() {
-            let f = parse_cpuid_07((1 << 3) | (1 << 7) | (1 << 8) | (1 << 20));
+            let f = parse_cpuid_07((1 << 3) | (1 << 7) | (1 << 8) | (1 << 20), 0, 0);
             assert!(f.has(BMI1));
             assert!(f.has(SMEP));
             assert!(f.has(BMI2));
@@ -126,7 +126,7 @@ mod tests {
         #[test]
         fn combine_all_cpuid_leaves() {
             let f1 = parse_cpuid_01((1 << 23), (1 << 4) | (1 << 9));
-            let f7 = parse_cpuid_07(1 << 3);
+            let f7 = parse_cpuid_07(1 << 3, 0, 0);
             let fe = parse_cpuid_ext_01(1 << 20);
             let combined = f1.or(f7).or(fe);
             assert!(combined.has(TSC));

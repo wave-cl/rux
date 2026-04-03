@@ -33,6 +33,10 @@ pub struct ProcessState {
     pub signal_cold: rux_proc::signal::SignalCold,
     /// Per-signal sa_restorer address (x86_64 only — musl sets this for sigreturn trampoline).
     pub signal_restorer: [usize; 32],
+    /// Syscall filter bitmask (seccomp-lite infrastructure).
+    /// 0 = allow all (default). When non-zero, each bit represents a denied
+    /// syscall category. Actual enforcement is deferred to a future release.
+    pub syscall_filter: u64,
 }
 
 impl ProcessState {
@@ -46,6 +50,7 @@ impl ProcessState {
             signal_hot: rux_proc::signal::SignalHot::new(),
             signal_cold: rux_proc::signal::SignalCold::new(),
             signal_restorer: [0; 32],
+            syscall_filter: 0,
         }
     }
 }
