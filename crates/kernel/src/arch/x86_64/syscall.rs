@@ -456,6 +456,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[73] = Syscall::Flock;
     t[38] = Syscall::SetItimer;
     t[270] = Syscall::Pselect6;
+    t[81] = Syscall::Fchdir;
     // Sockets
     t[41] = Syscall::Socket;     t[42] = Syscall::Connect;
     t[44] = Syscall::Sendto;     t[45] = Syscall::Recvfrom;

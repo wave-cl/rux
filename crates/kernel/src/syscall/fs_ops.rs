@@ -95,6 +95,17 @@ pub fn fstatat(dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize
 // ── Directory operations (POSIX.1) ──────────────────────────────────
 
 /// chdir(path) — POSIX.1
+/// fchdir(fd) — change CWD to directory referenced by fd
+pub fn fchdir(fd: usize) -> isize {
+    unsafe {
+        if fd >= rux_fs::fdtable::MAX_FDS { return crate::errno::EBADF; }
+        match rux_fs::fdtable::get_fd_inode(fd) {
+            Some(ino) => { super::PROCESS.fs_ctx.cwd = ino; 0 }
+            None => crate::errno::EBADF,
+        }
+    }
+}
+
 pub fn chdir(path_ptr: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
