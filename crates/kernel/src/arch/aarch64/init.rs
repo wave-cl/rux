@@ -61,13 +61,17 @@ pub fn aarch64_init(dtb_addr: usize) {
         rux_arch::cpu::set_cpu_features(features);
         if features.has(ATOMICS) { console::write_str("rux: LSE atomics detected\n"); }
         if features.has(PAN) {
-            // PAN detected but enforcement deferred on QEMU TCG.
-            // Do NOT call enable_smap_guards() — that would cause
-            // user_access_end to enable PAN (MSR PAN, #1), which
-            // persists across exception entries when SPAN=1 (default).
-            // Enable on KVM/real hardware where the full SPAN+PAN
-            // lifecycle can be tested.
-            console::write_str("rux: PAN detected (enforcement deferred)\n");
+            // PAN detected — disable enforcement by ensuring SPAN=1
+            // (PAN is NOT set on exception entry from EL0).
+            // Also explicitly clear PAN bit in PSTATE.
+            let mut sctlr: u64;
+            core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr, options(nostack));
+            sctlr |= 1 << 23; // SPAN=1: do NOT set PAN on exception entry
+            core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr, options(nostack));
+            core::arch::asm!("isb", options(nostack));
+            // Clear PAN in current PSTATE
+            core::arch::asm!(".inst 0xd500409f", options(nostack)); // MSR PAN, #0
+            console::write_str("rux: PAN detected (disabled via SPAN=1)\n");
         }
     }
 
