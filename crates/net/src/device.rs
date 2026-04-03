@@ -61,7 +61,9 @@ impl phy::TxToken for VirtioTxToken {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let mut buf = [0u8; 1514];
+        // Use a static buffer to avoid stack allocation issues in ISR context
+        static mut TX_BUF: [u8; 1514] = [0u8; 1514];
+        let buf = unsafe { &mut *core::ptr::addr_of_mut!(TX_BUF) };
         let result = f(&mut buf[..len]);
         (self.send)(&buf[..len]);
         result

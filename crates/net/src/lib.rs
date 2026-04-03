@@ -140,13 +140,17 @@ pub unsafe fn tcp_alloc() -> Option<SocketHandle> {
     let idx = TCP_BUF_USED.iter().position(|&used| !used)?;
     TCP_BUF_USED[idx] = true;
 
-    // Zero the buffers
-    TCP_RX_BUFS[idx] = [0; TCP_RX_BUF_SIZE];
-    TCP_TX_BUFS[idx] = [0; TCP_TX_BUF_SIZE];
+    // Zero the buffers (use write_bytes to avoid 64KB stack copy)
+    core::ptr::write_bytes(TCP_RX_BUFS[idx].as_mut_ptr(), 0, TCP_RX_BUF_SIZE);
+    core::ptr::write_bytes(TCP_TX_BUFS[idx].as_mut_ptr(), 0, TCP_TX_BUF_SIZE);
 
-    let rx_buf = tcp::SocketBuffer::new(&mut *(&raw mut TCP_RX_BUFS[idx]) as &mut [u8]);
-    let tx_buf = tcp::SocketBuffer::new(&mut *(&raw mut TCP_TX_BUFS[idx]) as &mut [u8]);
-    let socket = tcp::Socket::new(rx_buf, tx_buf);
+    let rx_slice: &mut [u8] = &mut *(&raw mut TCP_RX_BUFS[idx]);
+    let tx_slice: &mut [u8] = &mut *(&raw mut TCP_TX_BUFS[idx]);
+    let rx_buf = tcp::SocketBuffer::new(rx_slice);
+    let tx_buf = tcp::SocketBuffer::new(tx_slice);
+    let mut socket = tcp::Socket::new(rx_buf, tx_buf);
+    // Ensure Nagle is disabled for better interactivity
+    socket.set_nagle_enabled(false);
     Some(sockets.add(socket))
 }
 
