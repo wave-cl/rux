@@ -174,3 +174,68 @@ pub fn reset() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_pipes() {
+        unsafe {
+            for pipe in (&raw mut PIPES).as_mut().unwrap().iter_mut() {
+                *pipe = PipeBuf {
+                    buf: [0; PIPE_BUF_SIZE],
+                    read_pos: 0, write_pos: 0, count: 0,
+                    readers: 0, writers: 0, active: false,
+                    waiters: [0; MAX_WAITERS], waiter_count: 0,
+                };
+            }
+        }
+    }
+
+    #[test]
+    fn test_alloc_and_free() {
+        init_pipes();
+        let id = alloc().unwrap();
+        close(id, false); // close reader
+        close(id, true);  // close writer
+    }
+
+    #[test]
+    fn test_write_read_roundtrip() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let data = b"hello pipe";
+        let n = write(id, data.as_ptr(), data.len());
+        assert_eq!(n, data.len() as isize);
+        let mut buf = [0u8; 32];
+        let r = read(id, buf.as_mut_ptr(), buf.len());
+        assert_eq!(r, data.len() as isize);
+        assert_eq!(&buf[..data.len()], data);
+    }
+
+    #[test]
+    fn test_fifo_order() {
+        init_pipes();
+        let id = alloc().unwrap();
+        write(id, b"first".as_ptr(), 5);
+        write(id, b"second".as_ptr(), 6);
+        let mut buf = [0u8; 11];
+        let n = read(id, buf.as_mut_ptr(), 11);
+        assert_eq!(n, 11);
+        assert_eq!(&buf, b"firstsecond");
+    }
+
+    #[test]
+    fn test_dup_ref() {
+        init_pipes();
+        let id = alloc().unwrap();
+        dup_ref(id, false); // dup reader
+        dup_ref(id, true);  // dup writer
+        close(id, false);   // close one reader
+        // Pipe should still be active (refs > 0)
+        write(id, b"x".as_ptr(), 1);
+        let mut b = [0u8; 1];
+        assert_eq!(read(id, b.as_mut_ptr(), 1), 1);
+        assert_eq!(b[0], b'x');
+    }
+}

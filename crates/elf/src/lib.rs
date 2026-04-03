@@ -4,7 +4,7 @@
 //! and the entry point address. No heap, no alloc — operates on
 //! a `&[u8]` byte slice.
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 use rux_klib::{PhysAddr, VirtAddr};
 use rux_mm::{FrameAllocator, MappingFlags, PageSize};
@@ -381,4 +381,91 @@ pub unsafe fn load_elf_to_pt_at_base(
     }
 
     max_end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: build a minimal valid ELF64 header (64 bytes)
+    fn minimal_elf64_header(entry: u64, e_type: u16, phoff: u64, phnum: u16, phentsize: u16) -> [u8; 64] {
+        let mut h = [0u8; 64];
+        h[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']); // magic
+        h[4] = 2; // ELFCLASS64
+        h[5] = 1; // ELFDATA2LSB
+        h[6] = 1; // EV_CURRENT
+        h[16..18].copy_from_slice(&e_type.to_le_bytes()); // e_type
+        h[24..32].copy_from_slice(&entry.to_le_bytes()); // e_entry
+        h[32..40].copy_from_slice(&phoff.to_le_bytes()); // e_phoff
+        h[54..56].copy_from_slice(&phentsize.to_le_bytes()); // e_phentsize
+        h[56..58].copy_from_slice(&phnum.to_le_bytes()); // e_phnum
+        h
+    }
+
+    #[test]
+    fn test_parse_too_small() {
+        assert!(parse_elf(&[0u8; 10]).is_none());
+        assert!(parse_elf(&[0u8; 63]).is_none());
+    }
+
+    #[test]
+    fn test_parse_bad_magic() {
+        let mut data = [0u8; 64];
+        data[0..4].copy_from_slice(b"\x7fXLF");
+        assert!(parse_elf(&data).is_none());
+    }
+
+    #[test]
+    fn test_parse_32bit_rejected() {
+        let mut data = minimal_elf64_header(0x400000, 2, 0, 0, 0);
+        data[4] = 1; // ELFCLASS32
+        assert!(parse_elf(&data).is_none());
+    }
+
+    #[test]
+    fn test_parse_valid_static_elf() {
+        let data = minimal_elf64_header(0x401000, 2, 0, 0, 56);
+        let info = parse_elf(&data).unwrap();
+        assert_eq!(info.entry, 0x401000);
+        assert_eq!(info.e_type, 2); // ET_EXEC
+        assert!(!info.is_dynamic);
+        assert_eq!(info.num_segments, 0);
+    }
+
+    #[test]
+    fn test_parse_with_load_segment() {
+        // Header + one PT_LOAD program header
+        let mut data = vec![0u8; 64 + 56];
+        let hdr = minimal_elf64_header(0x400000, 2, 64, 1, 56);
+        data[..64].copy_from_slice(&hdr);
+        // PT_LOAD at offset 64
+        data[64..68].copy_from_slice(&1u32.to_le_bytes()); // p_type = PT_LOAD
+        data[68..72].copy_from_slice(&5u32.to_le_bytes()); // p_flags = PF_R|PF_X
+        data[72..80].copy_from_slice(&0u64.to_le_bytes()); // p_offset
+        data[80..88].copy_from_slice(&0x400000u64.to_le_bytes()); // p_vaddr
+        data[96..104].copy_from_slice(&0x1000u64.to_le_bytes()); // p_filesz
+        data[104..112].copy_from_slice(&0x1000u64.to_le_bytes()); // p_memsz
+        let info = parse_elf(&data).unwrap();
+        assert_eq!(info.num_segments, 1);
+        assert_eq!(info.segments[0].vaddr, 0x400000);
+        assert_eq!(info.segments[0].memsz, 0x1000);
+        assert_eq!(info.segments[0].flags, 5);
+    }
+
+    #[test]
+    fn test_parse_interp_detected() {
+        // Header + PT_INTERP program header
+        let mut data = vec![0u8; 64 + 56 + 32]; // header + phdr + interp string
+        let hdr = minimal_elf64_header(0x400000, 2, 64, 1, 56);
+        data[..64].copy_from_slice(&hdr);
+        // PT_INTERP at offset 64
+        data[64..68].copy_from_slice(&3u32.to_le_bytes()); // p_type = PT_INTERP
+        data[72..80].copy_from_slice(&120u64.to_le_bytes()); // p_offset (interp string)
+        data[96..104].copy_from_slice(&20u64.to_le_bytes()); // p_filesz (interp len)
+        data[120..140].copy_from_slice(b"/lib/ld-linux.so.2\0\0");
+        let info = parse_elf(&data).unwrap();
+        assert!(info.is_dynamic);
+        assert_eq!(info.interp_offset, 120);
+        assert_eq!(info.interp_len, 20);
+    }
 }

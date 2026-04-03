@@ -3,7 +3,7 @@
 //! Provides pipe ring buffers for kernel IPC. The buffer management
 //! is generic — fd allocation is handled by rux_fs::fdtable.
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 pub mod pipe;
 

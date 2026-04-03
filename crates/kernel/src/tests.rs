@@ -234,4 +234,61 @@ mod tests {
         assert_eq!(r, 0, "uname failed: {r}");
         assert_eq!(&buf[..3], b"rux", "sysname should be 'rux'");
     }
+
+    #[test]
+    fn test_symlink_and_readlink() {
+        setup();
+        unsafe {
+            // Create symlink: symlink("/bin/busybox", "/tmp/mylink")
+            let target = b"/bin/busybox\0";
+            let link = b"/tmp/mylink\0";
+            let r = syscall::dispatch(Syscall::Symlink, target.as_ptr() as usize, link.as_ptr() as usize, 0, 0, 0);
+            assert!(r >= 0, "symlink failed: {r}");
+            // Readlink
+            let mut buf = [0u8; 64];
+            let n = syscall::dispatch(Syscall::Readlink, link.as_ptr() as usize, buf.as_mut_ptr() as usize, 64, 0, 0);
+            assert!(n > 0, "readlink failed: {n}");
+            assert_eq!(&buf[..n as usize], b"/bin/busybox");
+        }
+    }
+
+    #[test]
+    fn test_unlink_file() {
+        setup();
+        unsafe {
+            // Create a file
+            let path = b"/tmp/unlinktest\0";
+            let fd = syscall::dispatch(Syscall::Creat, path.as_ptr() as usize, 0, 0, 0, 0);
+            assert!(fd >= 0, "creat failed: {fd}");
+            syscall::dispatch(Syscall::Close, fd as usize, 0, 0, 0, 0);
+            // Unlink
+            let r = syscall::dispatch(Syscall::Unlink, path.as_ptr() as usize, 0, 0, 0, 0);
+            assert_eq!(r, 0, "unlink failed: {r}");
+            // Stat should fail
+            let mut stat_buf = [0u8; 256];
+            let r2 = syscall::dispatch(Syscall::Stat, path.as_ptr() as usize, stat_buf.as_mut_ptr() as usize, 0, 0, 0);
+            assert!(r2 < 0, "stat after unlink should fail");
+        }
+    }
+
+    #[test]
+    fn test_unknown_syscall_returns_enosys() {
+        setup();
+        let r = syscall::dispatch(Syscall::Unknown(9999), 0, 0, 0, 0, 0);
+        assert_eq!(r, crate::errno::ENOSYS);
+    }
+
+    #[test]
+    fn test_rename_file() {
+        setup();
+        unsafe {
+            let old = b"/tmp/rename_src\0";
+            let new = b"/tmp/rename_dst\0";
+            let fd = syscall::dispatch(Syscall::Creat, old.as_ptr() as usize, 0, 0, 0, 0);
+            assert!(fd >= 0);
+            syscall::dispatch(Syscall::Close, fd as usize, 0, 0, 0, 0);
+            let r = syscall::dispatch(Syscall::Rename, old.as_ptr() as usize, new.as_ptr() as usize, 0, 0, 0);
+            assert_eq!(r, 0, "rename failed: {r}");
+        }
+    }
 }
