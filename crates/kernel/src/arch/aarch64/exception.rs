@@ -98,10 +98,17 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     if (is_translation || is_perm) && far < 0x8000_0000 && far >= 0x1000 {
                         if unsafe { demand_page(far as usize) } { return; }
                     }
-                    dump_user_fault("USER DATA ABORT", far, esr, _frame);
+                    // Unresolvable user fault → kill process (SIGSEGV)
+                    super::console::write_str("rux: SIGSEGV at ");
+                    write_hex(far as usize);
+                    super::console::write_str("\n");
+                    unsafe { crate::syscall::posix::exit(139); } // 128 + SIGSEGV
                 }
                 0b100000 | 0b100001 => {
-                    dump_user_fault("USER INSTR ABORT", far, esr, _frame);
+                    super::console::write_str("rux: SIGSEGV (instr) at ");
+                    write_hex(far as usize);
+                    super::console::write_str("\n");
+                    unsafe { crate::syscall::posix::exit(139); }
                 }
                 _ => {
                     super::console::write_str("rux: user sync EC=");

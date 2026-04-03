@@ -386,7 +386,23 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
             }
 
-            // Not resolvable — dump and panic
+            // User-mode fault not resolvable → deliver SIGSEGV (or exit)
+            if user {
+                unsafe {
+                    use rux_arch::ConsoleOps;
+                    crate::arch::Arch::write_str("rux: SIGSEGV at addr=0x");
+                    let mut hb = [0u8; 16];
+                    crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, cr2 as usize));
+                    crate::arch::Arch::write_str(" rip=0x");
+                    let rip = *((frame as *const u64).add(17));
+                    crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, rip as usize));
+                    crate::arch::Arch::write_str("\n");
+                    // Kill the current process with SIGSEGV
+                    crate::syscall::posix::exit(139); // 128 + SIGSEGV(11)
+                }
+            }
+
+            // Kernel-mode fault — dump and panic
             unsafe {
                 let cr3: u64;
                 core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack));
