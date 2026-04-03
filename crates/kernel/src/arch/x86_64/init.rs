@@ -154,12 +154,8 @@ pub fn x86_64_init(multiboot_info: usize) {
         if features.has(FSGSBASE) { cr4 |= 1 << 16; console::write_str("rux: FSGSBASE enabled\n"); }
         if features.has(UMIP) { cr4 |= 1 << 11; console::write_str("rux: UMIP enabled\n"); }
         if features.has(SMAP) {
-            // SMAP requires hardware support for stac/clac instructions.
-            // QEMU TCG (software emulation) does not support SMAP — stac/clac
-            // cause #UD. Only enable on real hardware or KVM.
-            // cr4 |= 1 << 21;
-            // console::write_str("rux: SMAP enabled\n");
-            console::write_str("rux: SMAP detected (not enabled on TCG)\n");
+            cr4 |= 1 << 21;
+            console::write_str("rux: SMAP enabled\n");
         }
         // Must set CR4 before enabling stac/clac guards
 
@@ -176,14 +172,6 @@ pub fn x86_64_init(multiboot_info: usize) {
         if detect_kvm() {
             super::syscall::GS_PERCPU_ACTIVE = true;
             console::write_str("rux: KVM detected, using gs-based syscall entry\n");
-            // Enable SMAP on KVM (hardware supports stac/clac)
-            if rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::SMAP) {
-                let mut cr4: u64;
-                core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
-                cr4 |= 1 << 21;
-                core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
-                console::write_str("rux: SMAP enabled (KVM)\n");
-            }
         } else {
             console::write_str("rux: TCG mode, using RIP-relative syscall entry\n");
         }
@@ -330,6 +318,10 @@ pub fn x86_64_init(multiboot_info: usize) {
             super::paging::activate(&kpt);
             pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
             console::write_str("rux: CR3 switched to kernel page tables!\n");
+
+            // Note: kernel null guard + stack guard pages deferred — the identity
+            // map uses 2MB huge pages, so unmap_4k can't punch holes without
+            // splitting. These require 4K mapping for the affected regions.
         }
     }
 

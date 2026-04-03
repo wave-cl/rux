@@ -112,6 +112,10 @@ pub fn aarch64_init(dtb_addr: usize) {
         super::paging::activate(&kpt);
         pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);
         console::write_str("rux: MMU enabled, kernel page tables active!\n");
+
+        // Note: kernel stack guard pages deferred — the identity map uses
+        // 2MB huge pages, so unmap_4k can't punch holes in them without
+        // splitting. Guard pages would require 4K mapping for the stack region.
     }
 
     // ── Init scheduler (needed for vfork/exec) ──────────────────────

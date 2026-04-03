@@ -184,6 +184,10 @@ impl BuddyAllocator {
         // Track deallocation: assert no double-free
         self.track_dealloc(addr, order);
 
+        // Note: pages are zeroed at allocation time (alloc_page, map_zeroed_pages)
+        // rather than at free time, to avoid performance issues during bulk
+        // deallocation (e.g., freeing 200+ pages in free_user_address_space_cow).
+
         self.free_frames += 1u32 << order;
         if order == 0 {
             self.pcp.push(addr);
