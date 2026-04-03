@@ -397,11 +397,11 @@ pub fn x86_64_init(multiboot_info: usize) {
             // The init code itself is in .text, so its address gives a lower bound.
             // Use the known layout: .text < .rodata < .data, all page-aligned by linker.
             let text_start = 0x101000usize;
-            let text_end_page = 0x121000usize;   // page-aligned start of .rodata
+            let text_end_page = 0x122000usize;   // page-aligned start of .rodata
             // Only protect pages that are ENTIRELY within .rodata.
             // The last page of .rodata may share with .data/.got/.relro,
             // so stop one page before .data to avoid write-protecting mutable data.
-            let rodata_end_page = 0x125000usize;  // conservative: exclude last page before .data
+            let rodata_end_page = 0x126000usize;  // conservative: exclude last page before .data
 
             // .text → RX
             {

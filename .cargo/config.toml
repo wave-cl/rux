@@ -27,7 +27,7 @@ target = "x86_64-unknown-none"
 [target.x86_64-unknown-none]
 rustflags = [
     "-C", "target-cpu=haswell",
-    "-C", "target-feature=+bmi1,+bmi2,+popcnt,+lzcnt,+soft-float,-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,-fma",
+    "-C", "target-feature=+bmi1,+bmi2,+popcnt,+lzcnt,+soft-float,-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,-fma,+retpoline",
     # code-model=kernel disabled for now — requires higher-half mapping.
     # Re-enable when the kernel runs at 0xFFFFFFFF80000000+.
     # "-C", "code-model=kernel",

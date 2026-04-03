@@ -34,7 +34,8 @@ that no programming language can provide.
 | Stack guard pages | 4KB unmapped page at bottom of each 32KB kernel stack |
 | FPU state isolation | FXSAVE64/FXRSTOR64 (x86) or STP/LDP Q regs (aarch64) on every context switch |
 | PCID/ASID | TLB tagged per-process to prevent cross-process leaks |
-| User ASLR | mmap_base randomized per exec (0-1MB entropy) |
+| User ASLR | mmap_base (0-16MB entropy), stack (0-28KB entropy), interpreter base (0-1MB entropy) per exec |
+| Retpoline | Compiler-level Spectre v2 mitigation via `+retpoline` target feature (x86_64 only) |
 
 ### Process Isolation
 | Feature | Detail |
@@ -68,9 +69,7 @@ they protect against (memory corruption) is largely eliminated by the language.
 
 | Feature | Reason Deferred |
 |---------|----------------|
-| KPTI (Kernel Page Table Isolation) | Mitigates Meltdown (speculative kernel memory reads from userspace). High implementation effort: requires separate user/kernel page tables and CR3 swap on every syscall. The Rust kernel's minimal `unsafe` surface makes exploitation significantly harder even without KPTI. |
-| Full ASLR (PIE + stack + heap) | Full randomization of all segments. Useful defense-in-depth, but without memory corruption bugs, attackers can't leverage address knowledge for exploitation. Current partial ASLR (mmap_base) provides basic protection. |
-| Retpoline | Compiler-level Spectre v2 mitigation. Requires LLVM flag integration and performance testing. Hardware IBRS/STIBP (already enabled) provides equivalent protection. |
+| KPTI (Kernel Page Table Isolation) | Mitigates Meltdown (speculative kernel memory reads from userspace). High implementation effort: requires separate user/kernel page tables and CR3 swap on every syscall. Design approach: trampoline page mapped in both kernel and user page tables to handle the CR3 switch during syscall entry/exit. The Rust kernel's minimal `unsafe` surface makes exploitation significantly harder even without KPTI. |
 | Read-only page tables | Prevents page table corruption from kernel bugs. Rust's type system prevents most wild writes; the remaining `unsafe` page table code is small and auditable. |
 
 ## The `unsafe` Surface

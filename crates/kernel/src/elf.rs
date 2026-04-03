@@ -83,7 +83,7 @@ pub unsafe fn load_elf_from_inode(
     {
         use rux_arch::TimerOps;
         let entropy = crate::arch::Arch::ticks() as usize;
-        let random_offset = (entropy & 0xFF) << 12; // 0-1MB, page-aligned
+        let random_offset = (entropy & 0xFFF) << 12; // 0-16MB, page-aligned
         crate::syscall::PROCESS.mmap_base = 0x10000000 + random_offset;
     }
     rux_fs::fdtable::reset();
@@ -109,6 +109,13 @@ pub unsafe fn load_elf_from_inode(
             crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root = new_root;
         }
     }
+
+    // Stack ASLR: random offset within the mapped stack region (0-7 pages)
+    let stack_top = {
+        use rux_arch::TimerOps;
+        let stack_entropy = ((crate::arch::Arch::ticks() >> 8) & 0x7) as u64; // 0-7 pages
+        stack_top - stack_entropy * 4096
+    };
 
     // Write exec args to user stack (needs stac for SMAP — user pages)
     crate::uaccess::stac();
@@ -180,10 +187,16 @@ unsafe fn load_dynamic_interp(
     const INTERP_BASE: u64 = 0x20000000;
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     const INTERP_BASE: u64 = 0x20000000;
+    // Randomize interpreter base for ASLR (0-255 page offset = 0-1MB)
+    let interp_base = {
+        use rux_arch::TimerOps;
+        let interp_entropy = ((crate::arch::Arch::ticks() >> 16) & 0xFF) as u64;
+        INTERP_BASE + interp_entropy * 4096
+    };
     let mut interp_reader = VfsReader { ino: interp_ino };
     let mut pt_adapter = PtAdapter { pt: upt };
     let interp_end = rux_elf::load_elf_to_pt_at_base(
-        &interp_elf, &mut interp_reader, &mut pt_adapter, alloc, INTERP_BASE,
+        &interp_elf, &mut interp_reader, &mut pt_adapter, alloc, interp_base,
     );
 
     // Bump mmap_base past the interpreter's end
@@ -209,10 +222,10 @@ unsafe fn load_dynamic_interp(
         main_elf.e_phentsize as usize,
         main_elf.e_phnum as usize,
         main_elf.entry as usize,
-        INTERP_BASE as usize,
+        interp_base as usize,
     );
 
     // 6. Return interpreter's entry point (offset by base)
-    (INTERP_BASE + interp_elf.entry) as usize
+    (interp_base + interp_elf.entry) as usize
 }
 
