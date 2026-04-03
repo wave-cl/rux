@@ -534,6 +534,18 @@ pub unsafe fn deliver_signal<S: rux_arch::SignalOps>(
     syscall_result: i64,
     exit_fn: fn(i32) -> !,
 ) -> i64 {
+    deliver_signal_ex::<S>(hot, cold, restorer, syscall_result, exit_fn, |_| {})
+}
+
+/// Extended signal delivery with stop callback.
+pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
+    hot: &mut SignalHot,
+    cold: &mut SignalCold,
+    restorer: &[usize; 32],
+    syscall_result: i64,
+    exit_fn: fn(i32) -> !,
+    stop_fn: impl FnOnce(u8),
+) -> i64 {
     let (sig, action, _info) = match cold.dequeue_signal(hot) {
         Some(v) => v,
         None => return syscall_result,
@@ -545,6 +557,10 @@ pub unsafe fn deliver_signal<S: rux_arch::SignalOps>(
         match sig.default_action() {
             SignalDefault::Terminate | SignalDefault::CoreDump => {
                 exit_fn(128 + signum as i32);
+            }
+            SignalDefault::Stop => {
+                stop_fn(signum);
+                return syscall_result;
             }
             _ => return syscall_result,
         }

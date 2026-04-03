@@ -91,13 +91,16 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
 
         let my_pid = current_pid();
         const WNOHANG: usize = 1;
+        const WUNTRACED: usize = 2;
 
         loop {
-            // Scan for a zombie child matching the pid criteria.
+            // Scan for zombie or stopped children matching the pid criteria.
             for i in 0..MAX_PROCS {
                 let t = &TASK_TABLE[i];
                 if !t.active || t.ppid != my_pid { continue; }
-                if t.state != TaskState::Zombie { continue; }
+                let is_zombie = t.state == TaskState::Zombie;
+                let is_stopped = t.state == TaskState::Stopped && (options & WUNTRACED != 0);
+                if !is_zombie && !is_stopped { continue; }
                 // pid matching: usize::MAX (-1) = any child, 0 = same process group
                 if pid == 0 {
                     if t.pgid != TASK_TABLE[current_task_idx()].pgid { continue; }
@@ -105,9 +108,19 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                     continue;
                 }
 
-                // Found a zombie — reap it.
                 let child_pid = t.pid as isize;
                 let exit_code = t.exit_code;
+
+                // Stopped child: report but don't reap
+                if is_stopped {
+                    if wstatus_ptr != 0 {
+                        // WIFSTOPPED status: 0x7F in low byte, signal in bits 15:8
+                        crate::uaccess::put_user(wstatus_ptr, exit_code as u32);
+                    }
+                    return child_pid;
+                }
+
+                // Zombie: reap
                 let child_pt_root = t.pt_root;
                 let slot = &mut TASK_TABLE[i];
                 slot.active = false;
@@ -115,11 +128,6 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 slot.pid = 0;
                 slot.pt_root = 0;
 
-                // Free the child's address space. Fork children bypass begin_child so
-                // their PT is not in CHILD_PAGES — free it here instead.
-                // Use the COW-aware variant: if the child exited before exec-ing,
-                // its pages may still be shared with the parent via COW and must
-                // not be freed until the last owner releases them.
                 if child_pt_root != 0 {
                     let alloc = crate::kstate::alloc();
                     let child_pt = crate::arch::PageTable::from_root(

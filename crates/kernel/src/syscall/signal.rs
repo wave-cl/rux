@@ -193,7 +193,27 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                     SignalDefault::Terminate | SignalDefault::CoreDump => {
                         posix_exit(128 + signum as i32);
                     }
-                    SignalDefault::Ignore | SignalDefault::Stop | SignalDefault::Continue => {
+                    SignalDefault::Stop => {
+                        // Stop the current process
+                        let idx = crate::task_table::current_task_idx();
+                        crate::task_table::TASK_TABLE[idx].state = crate::task_table::TaskState::Stopped;
+                        crate::task_table::TASK_TABLE[idx].exit_code = 0x7F | ((signum as i32) << 8); // WIFSTOPPED
+                        // Notify parent
+                        crate::task_table::notify_parent_child_exit(
+                            crate::task_table::TASK_TABLE[idx].ppid,
+                            crate::task_table::TASK_TABLE[idx].exit_code,
+                        );
+                        // Yield to scheduler
+                        let sched = crate::scheduler::get();
+                        sched.tasks[idx].entity.state = rux_sched::TaskState::Stopped;
+                        sched.schedule();
+                        return 0;
+                    }
+                    SignalDefault::Continue => {
+                        // Continue is a no-op for the current process (already running)
+                        return 0;
+                    }
+                    SignalDefault::Ignore => {
                         return 0;
                     }
                 }
@@ -246,9 +266,18 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             TASK_TABLE[target_idx].signal_hot.pending =
                 TASK_TABLE[target_idx].signal_hot.pending.add(signum as u8);
 
-            // If target is sleeping/waiting, wake it so it can handle the signal.
+            // SIGCONT: resume a stopped process
+            if sig == Signal::Cont {
+                if TASK_TABLE[target_idx].state == TaskState::Stopped {
+                    TASK_TABLE[target_idx].state = TaskState::Ready;
+                    crate::scheduler::get().wake_task(target_idx);
+                }
+                return 0;
+            }
+
+            // If target is sleeping/waiting/stopped, wake it so it can handle the signal.
             match TASK_TABLE[target_idx].state {
-                TaskState::Sleeping | TaskState::WaitingForChild => {
+                TaskState::Sleeping | TaskState::WaitingForChild | TaskState::Stopped => {
                     TASK_TABLE[target_idx].state = TaskState::Ready;
                     crate::scheduler::get().wake_task(target_idx);
                 }

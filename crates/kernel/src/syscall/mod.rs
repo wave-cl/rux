@@ -383,12 +383,25 @@ pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64
     // syscall return path corrupts state. Since sigaction writes to both
     // the per-task slot and PROCESS.signal_cold, and exec resets both,
     // the global is correct for the current task during delivery.
-    rux_proc::signal::deliver_signal::<S>(
+    rux_proc::signal::deliver_signal_ex::<S>(
         &mut (*(&raw mut PROCESS)).signal_hot,
         &mut (*(&raw mut PROCESS)).signal_cold,
         &(*(&raw const PROCESS)).signal_restorer,
         syscall_result,
         |status| posix::exit(status),
+        |signum| {
+            // Stop the current process
+            let idx = crate::task_table::current_task_idx();
+            crate::task_table::TASK_TABLE[idx].state = crate::task_table::TaskState::Stopped;
+            crate::task_table::TASK_TABLE[idx].exit_code = 0x7F | ((signum as i32) << 8);
+            crate::task_table::notify_parent_child_exit(
+                crate::task_table::TASK_TABLE[idx].ppid,
+                crate::task_table::TASK_TABLE[idx].exit_code,
+            );
+            let sched = crate::scheduler::get();
+            sched.tasks[idx].entity.state = rux_sched::TaskState::Stopped;
+            sched.schedule();
+        },
     )
 }
 

@@ -27,6 +27,9 @@ pub const ENOSYS: isize = -38;     // Function not implemented
 
 pub const SIGKILL: u8 = 9;
 pub const SIGCHLD: u8 = 17;
+pub const SIGCONT: u8 = 18;
+pub const SIGSTOP: u8 = 19;
+pub const SIGTSTP: u8 = 20;
 
 // ── Clone flags (Linux) ─────────────────────────────────────────────
 

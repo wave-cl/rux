@@ -33,6 +33,8 @@ pub enum TaskState {
     WaitingForPipe = 6,
     /// Blocked on futex (FUTEX_WAIT).
     WaitingForFutex = 7,
+    /// Stopped by signal (SIGTSTP/SIGSTOP/SIGTTIN/SIGTTOU).
+    Stopped = 8,
 }
 
 /// Per-process state container.

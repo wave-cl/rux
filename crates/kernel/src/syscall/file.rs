@@ -235,8 +235,8 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
                     let tty = &*(&raw const crate::tty::TTY);
                     let ptr = arg as *mut u8;
                     for i in 0..60 { *ptr.add(i) = 0; }
-                    *(arg as *mut u32) = 0x500; // c_iflag
-                    *((arg + 4) as *mut u32) = 0x5; // c_oflag
+                    *(arg as *mut u32) = 0x500; // c_iflag: ICRNL | IXON
+                    *((arg + 4) as *mut u32) = 0x5; // c_oflag: OPOST | ONLCR
                     *((arg + 8) as *mut u32) = 0xBF; // c_cflag
                     // c_lflag: build from actual TTY state
                     let mut lflag: u32 = 0;
@@ -245,6 +245,16 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
                     if tty.isig   { lflag |= 0x1; }   // ISIG
                     lflag |= 0x8A30; // ECHOE | ECHOK | IEXTEN | ECHOCTL
                     *((arg + 12) as *mut u32) = lflag;
+                    // c_cc control characters (offset 17 on Linux/musl)
+                    let cc = (arg + 17) as *mut u8;
+                    *cc.add(0) = 0x03;  // VINTR = Ctrl-C
+                    *cc.add(1) = 0x1C;  // VQUIT = Ctrl-\
+                    *cc.add(2) = 0x7F;  // VERASE = DEL
+                    *cc.add(3) = 0x15;  // VKILL = Ctrl-U
+                    *cc.add(4) = 0x04;  // VEOF = Ctrl-D
+                    *cc.add(5) = 0x00;  // VTIME
+                    *cc.add(6) = 0x01;  // VMIN
+                    *cc.add(10) = 0x1A; // VSUSP = Ctrl-Z
                 }
             }
             0

@@ -52,7 +52,18 @@ impl Tty {
                         self.line_len = 0;
                         if self.echo { A::write_str("^C\n"); }
                         crate::syscall::posix::kill(
-                            -(self.foreground_pgid as isize), 2,
+                            -(self.foreground_pgid as isize), 2, // SIGINT
+                        );
+                        return crate::errno::EINTR;
+                    }
+                }
+                // Ctrl-Z: send SIGTSTP to foreground process group
+                0x1A => {
+                    if self.isig {
+                        self.line_len = 0;
+                        if self.echo { A::write_str("^Z\n"); }
+                        crate::syscall::posix::kill(
+                            -(self.foreground_pgid as isize), 20, // SIGTSTP
                         );
                         return crate::errno::EINTR;
                     }
