@@ -1,11 +1,14 @@
 //! virtio-blk over PCI transport (legacy/transitional).
 //!
-//! Uses I/O port-based config space from BAR0. For x86_64 QEMU `pc` machine.
+//! All mutable state lives in a global static (PCI_STATE) to avoid
+//! issues with struct moves invalidating interior pointers. The
+//! VirtioBlkPci struct is a thin handle.
 
 use crate::{BlockDevice, DriverError};
 use crate::pci;
 use super::pci::VirtioPci;
-use super::queue::{Virtqueue, Descriptor, QUEUE_SIZE, DESC_F_NEXT, DESC_F_WRITE};
+use super::queue::{Descriptor, DESC_F_NEXT, DESC_F_WRITE};
+use core::sync::atomic::{fence, Ordering};
 
 const VIRTIO_BLK_T_IN: u32 = 0;
 const VIRTIO_BLK_S_OK: u8 = 0;
@@ -14,7 +17,6 @@ const STATUS_ACK: u8 = 1;
 const STATUS_DRIVER: u8 = 2;
 const STATUS_DRIVER_OK: u8 = 4;
 
-/// virtio-blk request header (16 bytes).
 #[repr(C)]
 struct BlkReqHeader {
     typ: u32,
@@ -22,169 +24,229 @@ struct BlkReqHeader {
     sector: u64,
 }
 
-/// Static request header and status byte — shared across all reads.
-/// Safe because we're single-threaded at boot time.
-static mut REQ_HEADER: BlkReqHeader = BlkReqHeader { typ: 0, _reserved: 0, sector: 0 };
-static mut STATUS_BYTE: u8 = 0xFF;
-
-/// virtio-blk device over PCI transport.
-pub struct VirtioBlkPci {
-    pci_dev: VirtioPci,
-    vq: core::cell::UnsafeCell<Virtqueue>,
+/// All mutable state for the PCI virtio-blk device.
+struct PciState {
+    io_base: u16,
     capacity: u64,
+    // Virtqueue state (inline, no separate struct)
+    desc_base: usize,       // physical addr of descriptor table
+    avail_base: usize,      // physical addr of available ring
+    used_base: usize,       // physical addr of used ring
+    queue_size: u16,
+    free_head: u16,
+    num_free: u16,
+    avail_idx: u16,
+    last_used_idx: u16,
+    // Per-request buffers
+    req_header: BlkReqHeader,
+    status_byte: u8,
+    initialized: bool,
+}
+
+static mut STATE: PciState = PciState {
+    io_base: 0, capacity: 0,
+    desc_base: 0, avail_base: 0, used_base: 0,
+    queue_size: 0, free_head: 0, num_free: 0,
+    avail_idx: 0, last_used_idx: 0,
+    req_header: BlkReqHeader { typ: 0, _reserved: 0, sector: 0 },
+    status_byte: 0xFF, initialized: false,
+};
+
+/// Thin handle to the PCI virtio-blk device. All state is in a static.
+pub struct VirtioBlkPci {
+    _dummy: (),
 }
 
 impl VirtioBlkPci {
-    /// Probe PCI bus for a virtio-blk device and initialize it.
-    ///
-    /// `vq_pages` must point to zeroed, page-aligned memory for the virtqueue.
-    ///
-    /// # Safety
-    /// Must be called during boot with valid memory.
     pub unsafe fn probe(vq_pages: usize) -> Result<Self, DriverError> {
-        // Find virtio-blk on PCI bus (try legacy ID first, then modern)
         let dev = pci::find_device(pci::VIRTIO_VENDOR, pci::VIRTIO_BLK_LEGACY)
             .or_else(|| pci::find_device(pci::VIRTIO_VENDOR, pci::VIRTIO_BLK_MODERN))
             .ok_or(DriverError::ProbeFailure)?;
 
-        // BAR0 should be an I/O port region (bit 0 = 1 for I/O space)
-        if dev.bar0 & 1 == 0 {
-            return Err(DriverError::Unsupported); // MMIO BAR, not I/O port
-        }
+        if dev.bar0 & 1 == 0 { return Err(DriverError::Unsupported); }
         let io_base = (dev.bar0 & 0xFFFC) as u16;
-
-        // Enable bus mastering for DMA
         pci::enable_bus_master(dev.addr);
 
         let pci_dev = VirtioPci::new(io_base);
 
-        // Reset
+        // Reset + init
         pci_dev.set_status(0);
-
-        // Acknowledge + driver
         pci_dev.set_status(STATUS_ACK);
         pci_dev.set_status(STATUS_ACK | STATUS_DRIVER);
-
-        // Feature negotiation: accept no special features
         let _features = pci_dev.device_features();
         pci_dev.set_driver_features(0);
 
-        // Set up virtqueue 0
+        // Queue setup
         pci_dev.select_queue(0);
-        let dev_queue_size = pci_dev.queue_size();
-        if dev_queue_size == 0 {
-            return Err(DriverError::ProbeFailure);
+        let qsize = pci_dev.queue_size();
+        if qsize == 0 { return Err(DriverError::ProbeFailure); }
+
+        // Initialize descriptor chain in vq_pages memory
+        let desc_base = vq_pages;
+        let avail_off = 16 * qsize as usize;
+        let avail_base = vq_pages + avail_off;
+        let avail_end = avail_off + 4 + 2 * qsize as usize + 2;
+        let used_off = (avail_end + 0xFFF) & !0xFFF;
+        let used_base = vq_pages + used_off;
+
+        // Chain free descriptors
+        let desc = desc_base as *mut Descriptor;
+        for i in 0..qsize {
+            let d = &mut *desc.add(i as usize);
+            d.next = if i + 1 < qsize { i + 1 } else { 0 };
+            d.flags = 0;
+            d.addr = 0;
+            d.len = 0;
         }
-        // Use device's queue size (legacy PCI: fixed by device, can't change)
-        let vq = core::cell::UnsafeCell::new(Virtqueue::init_with_size(vq_pages, dev_queue_size));
-        // Legacy PCI: write PFN of queue (page frame number, 4096-byte pages)
-        pci_dev.set_queue_addr(((*vq.get()).desc_addr() / 4096) as u32);
+
+        // Write PFN to device
+        pci_dev.set_queue_addr((desc_base / 4096) as u32);
 
         // Driver OK
         pci_dev.set_status(STATUS_ACK | STATUS_DRIVER | STATUS_DRIVER_OK);
 
-        // Read capacity
         let capacity = pci_dev.blk_capacity();
 
-        Ok(Self {
-            pci_dev,
-            vq,
-            capacity,
-        })
+        // Store all state in the global
+        STATE.io_base = io_base;
+        STATE.capacity = capacity;
+        STATE.desc_base = desc_base;
+        STATE.avail_base = avail_base;
+        STATE.used_base = used_base;
+        STATE.queue_size = qsize;
+        STATE.free_head = 0;
+        STATE.num_free = qsize;
+        STATE.avail_idx = 0;
+        STATE.last_used_idx = 0;
+        STATE.initialized = true;
+
+        Ok(Self { _dummy: () })
     }
 
-    pub fn capacity_sectors(&self) -> u64 { self.capacity }
+    pub fn capacity_sectors(&self) -> u64 {
+        unsafe { STATE.capacity }
+    }
+}
 
-    pub unsafe fn read_sector(&mut self, sector: u64, buf: *mut u8) -> Result<(), DriverError> {
-        REQ_HEADER.typ = VIRTIO_BLK_T_IN;
-        REQ_HEADER.sector = sector;
-        STATUS_BYTE = 0xFF;
+/// Read a single sector using the global PCI state.
+unsafe fn pci_read_sector(sector: u64, buf: *mut u8) -> Result<(), DriverError> {
+    if !STATE.initialized { return Err(DriverError::InvalidState); }
+    if STATE.num_free < 3 { return Err(DriverError::ResourceBusy); }
 
-        let vq = &mut *self.vq.get();
-        let head = vq.alloc_chain(3).ok_or(DriverError::ResourceBusy)?;
+    STATE.req_header.typ = VIRTIO_BLK_T_IN;
+    STATE.req_header.sector = sector;
+    STATE.status_byte = 0xFF;
 
-        // Descriptor 0: request header (device reads)
-        let d0 = &mut *vq.desc.add(head as usize);
-        d0.addr = &raw const REQ_HEADER as u64;
-        d0.len = 16;
-        d0.flags = DESC_F_NEXT;
-        let d1_idx = d0.next;
+    let desc = STATE.desc_base as *mut Descriptor;
+    let qsize = STATE.queue_size;
 
-        // Descriptor 1: data buffer (device writes)
-        let d1 = &mut *vq.desc.add(d1_idx as usize);
-        d1.addr = buf as u64;
-        d1.len = 512;
-        d1.flags = DESC_F_WRITE | DESC_F_NEXT;
-        let d2_idx = d1.next;
+    // Alloc 3 descriptors from free list
+    let head = STATE.free_head;
+    let mut idx = head;
+    for i in 0..3u16 {
+        let d = &mut *desc.add(idx as usize);
+        if i < 2 {
+            d.flags |= DESC_F_NEXT;
+            idx = d.next;
+        } else {
+            d.flags &= !DESC_F_NEXT;
+            STATE.free_head = d.next;
+        }
+    }
+    STATE.num_free -= 3;
 
-        // Descriptor 2: status byte (device writes)
-        let d2 = &mut *vq.desc.add(d2_idx as usize);
-        d2.addr = &raw const STATUS_BYTE as u64;
-        d2.len = 1;
-        d2.flags = DESC_F_WRITE;
+    // Set up descriptors
+    let d0 = &mut *desc.add(head as usize);
+    d0.addr = &raw const STATE.req_header as u64;
+    d0.len = 16;
+    d0.flags = DESC_F_NEXT;
+    let d1_idx = d0.next;
 
-        vq.submit(head);
-        self.pci_dev.notify(0);
-        if !vq.poll_used() {
-            vq.free_chain(head);
+    let d1 = &mut *desc.add(d1_idx as usize);
+    d1.addr = buf as u64;
+    d1.len = 512;
+    d1.flags = DESC_F_WRITE | DESC_F_NEXT;
+    let d2_idx = d1.next;
+
+    let d2 = &mut *desc.add(d2_idx as usize);
+    d2.addr = &raw const STATE.status_byte as u64;
+    d2.len = 1;
+    d2.flags = DESC_F_WRITE;
+
+    // Submit to available ring
+    let avail_flags = STATE.avail_base as *mut u16;
+    let avail_idx_ptr = (STATE.avail_base + 2) as *mut u16;
+    let avail_ring = (STATE.avail_base + 4) as *mut u16;
+
+    let ai = STATE.avail_idx;
+    *avail_ring.add((ai % qsize) as usize) = head;
+    fence(Ordering::Release);
+    STATE.avail_idx = ai.wrapping_add(1);
+    *avail_idx_ptr = STATE.avail_idx;
+    fence(Ordering::Release);
+
+    // Notify device
+    let pci = VirtioPci::new(STATE.io_base);
+    pci.notify(0);
+
+    // Poll used ring
+    let used_idx_ptr = (STATE.used_base + 2) as *const u16;
+    let mut timeout = 100_000_000u32;
+    loop {
+        fence(Ordering::Acquire);
+        if core::ptr::read_volatile(used_idx_ptr) != STATE.last_used_idx {
+            STATE.last_used_idx = core::ptr::read_volatile(used_idx_ptr);
+            break;
+        }
+        timeout -= 1;
+        if timeout == 0 {
+            // Free chain on timeout
+            free_chain_3(head);
             return Err(DriverError::Timeout);
         }
-        vq.free_chain(head);
-
-        if STATUS_BYTE == VIRTIO_BLK_S_OK {
-            Ok(())
-        } else if STATUS_BYTE == 0xFF {
-            Err(DriverError::Timeout)
-        } else {
-            Err(DriverError::IoError)
-        }
+        core::hint::spin_loop();
     }
+
+    // Free the 3 descriptors
+    free_chain_3(head);
+
+    if STATE.status_byte == VIRTIO_BLK_S_OK {
+        Ok(())
+    } else {
+        Err(DriverError::IoError)
+    }
+}
+
+/// Free a 3-descriptor chain back to the free list.
+unsafe fn free_chain_3(head: u16) {
+    let desc = STATE.desc_base as *mut Descriptor;
+    let d0 = &*desc.add(head as usize);
+    let idx1 = d0.next;
+    let d1 = &*desc.add(idx1 as usize);
+    let idx2 = d1.next;
+
+    // Push back in reverse: 2, 1, 0
+    let d2 = &mut *desc.add(idx2 as usize);
+    d2.next = STATE.free_head;
+    STATE.free_head = idx2;
+
+    let d1 = &mut *desc.add(idx1 as usize);
+    d1.next = STATE.free_head;
+    STATE.free_head = idx1;
+
+    let d0 = &mut *desc.add(head as usize);
+    d0.next = STATE.free_head;
+    STATE.free_head = head;
+
+    STATE.num_free += 3;
 }
 
 impl BlockDevice for VirtioBlkPci {
     fn block_size(&self) -> usize { 512 }
-    fn block_count(&self) -> u64 { self.capacity }
+    fn block_count(&self) -> u64 { unsafe { STATE.capacity } }
 
     unsafe fn read_block(&self, block: u64, buf: *mut u8) -> Result<(), DriverError> {
-        let vq = &mut *self.vq.get();
-        let pci = &self.pci_dev;
-
-        REQ_HEADER.typ = VIRTIO_BLK_T_IN;
-        REQ_HEADER.sector = block;
-        STATUS_BYTE = 0xFF;
-
-        let head = vq.alloc_chain(3).ok_or(DriverError::ResourceBusy)?;
-
-        let d0 = &mut *vq.desc.add(head as usize);
-        d0.addr = &raw const REQ_HEADER as u64;
-        d0.len = 16;
-        d0.flags = DESC_F_NEXT;
-        let d1_idx = d0.next;
-
-        let d1 = &mut *vq.desc.add(d1_idx as usize);
-        d1.addr = buf as u64;
-        d1.len = 512;
-        d1.flags = DESC_F_WRITE | DESC_F_NEXT;
-        let d2_idx = d1.next;
-
-        let d2 = &mut *vq.desc.add(d2_idx as usize);
-        d2.addr = &raw const STATUS_BYTE as u64;
-        d2.len = 1;
-        d2.flags = DESC_F_WRITE;
-
-        vq.submit(head);
-        pci.notify(0);
-        if !vq.poll_used() {
-            vq.free_chain(head);
-            return Err(DriverError::Timeout);
-        }
-        vq.free_chain(head);
-
-        if STATUS_BYTE == VIRTIO_BLK_S_OK {
-            Ok(())
-        } else {
-            Err(DriverError::IoError)
-        }
+        pci_read_sector(block, buf)
     }
 
     unsafe fn write_block(&mut self, _block: u64, _buf: *const u8) -> Result<(), DriverError> {

@@ -103,12 +103,14 @@ impl Ext2Fs {
             }
         }
 
-        // Cache miss: read from device
+        // Cache miss: read from device sector-by-sector
         let sectors_per_block = bs / 512;
         let start_sector = block_no * sectors_per_block as u64;
         let dev = &*self.dev;
+        // Read all sectors for this block
         for i in 0..sectors_per_block {
-            dev.read_block(start_sector + i as u64, buf.as_mut_ptr().add(i * 512))
+            let sector = start_sector + i as u64;
+            dev.read_block(sector, buf.as_mut_ptr().add(i * 512))
                 .map_err(|_| VfsError::IoError)?;
         }
 

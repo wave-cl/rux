@@ -58,11 +58,11 @@ pub struct Virtqueue {
     pub avail: *mut AvailRing,
     pub used: *mut UsedRing,
     /// Next descriptor index to allocate.
-    free_head: u16,
+    pub free_head: u16,
     /// Number of free descriptors.
-    num_free: u16,
+    pub num_free: u16,
     /// Last seen used index (for polling).
-    last_used_idx: u16,
+    pub last_used_idx: u16,
 }
 
 impl Virtqueue {
@@ -131,7 +131,9 @@ impl Virtqueue {
 
     /// Allocate a chain of `n` descriptors. Returns the head index.
     pub unsafe fn alloc_chain(&mut self, n: u16) -> Option<u16> {
-        if self.num_free < n { return None; }
+        if self.num_free < n {
+            return None;
+        }
         let head = self.free_head;
         let mut idx = head;
         for i in 0..n {
