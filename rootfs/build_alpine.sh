@@ -90,11 +90,11 @@ CONF
     sed -i '' 's|^root:.*|root:::0:::::|' "$STAGING/etc/shadow" 2>/dev/null || \
     sed -i 's|^root:.*|root:::0:::::|' "$STAGING/etc/shadow"
 
-    # APK repository configuration
+    # APK repository configuration (HTTP for now — our TCP stack doesn't do TLS)
     mkdir -p "$STAGING/etc/apk"
     cat > "$STAGING/etc/apk/repositories" << CONF
-https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main
-https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community
+http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main
+http://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community
 CONF
 
     # APK needs these directories

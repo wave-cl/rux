@@ -112,6 +112,23 @@ pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     rux_fs::path::resolve_with_cwd(fs, PROCESS.fs_ctx.cwd, path)
 }
 
+/// Resolve a path relative to a directory FD (for *at syscalls).
+/// If dirfd is AT_FDCWD (-100) or path is absolute, falls back to CWD.
+pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, isize> {
+    let at_fdcwd = (-100i32) as usize;
+    if path.first() == Some(&b'/') || dirfd == at_fdcwd {
+        return resolve_with_cwd(path);
+    }
+    // Relative path with dirfd: resolve relative to that directory
+    if dirfd < 64 {
+        if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
+            let fs = crate::kstate::fs();
+            return rux_fs::path::resolve_path_at(fs, dir_ino, path).map_err(|_| -2isize);
+        }
+    }
+    resolve_with_cwd(path)
+}
+
 /// Resolve a user path pointer to (parent_inode, basename).
 pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
     let path = crate::uaccess::read_user_cstr(path_ptr);

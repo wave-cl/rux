@@ -56,20 +56,32 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
 
 /// fstatat(dirfd, pathname, statbuf, flags) — POSIX.1-2008
 /// flags=0x100 (AT_SYMLINK_NOFOLLOW): stat the symlink itself, not its target.
-pub fn fstatat(_dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize {
+pub fn fstatat(dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize {
     if buf == 0 { return crate::errno::EFAULT; }
     const AT_SYMLINK_NOFOLLOW: usize = 0x100;
+    const AT_EMPTY_PATH: usize = 0x1000;
     unsafe {
         use rux_fs::FileSystem;
         let path = crate::uaccess::read_user_cstr(pathname);
         let fs = crate::kstate::fs();
+
+        // AT_EMPTY_PATH: stat the FD itself
+        if flags & AT_EMPTY_PATH != 0 && path.is_empty() && dirfd < 64 {
+            if let Some(ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
+                let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
+                if fs.stat(ino, &mut vfs_stat).is_err() { return crate::errno::ENOENT; }
+                crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, &vfs_stat);
+                return 0;
+            }
+        }
+
         let ino = if flags & AT_SYMLINK_NOFOLLOW != 0 {
             match rux_fs::path::resolve_nofollow(fs, super::PROCESS.fs_ctx.cwd, path) {
                 Ok(ino) => ino,
                 Err(e) => return e,
             }
         } else {
-            match super::resolve_with_cwd(path) {
+            match super::resolve_at(dirfd, path) {
                 Ok(ino) => ino,
                 Err(e) => return e,
             }
