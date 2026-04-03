@@ -78,18 +78,26 @@ pub unsafe fn init(rx_pages: usize, tx_pages: usize) -> bool {
     pci.set_driver_features(features & (1 << 5)); // VIRTIO_NET_F_MAC
 
     // Setup RX queue (queue 0)
+    // Legacy PCI: queue size is fixed by device. We must allocate memory
+    // for the full device queue size, even if we only use 16 entries.
     pci.select_queue(0);
-    let rx_qsize = pci.queue_size().min(16);
-    if rx_qsize == 0 { return false; }
+    let dev_rx_qsize = pci.queue_size();
+    if dev_rx_qsize == 0 { return false; }
+    let rx_qsize = dev_rx_qsize.min(16); // we only USE 16 entries
 
-    // Init RX descriptors
-    let (rx_d, rx_a, rx_u) = queue_addrs(rx_pages, rx_qsize);
+    // Layout memory for the DEVICE's full queue size
+    let (rx_d, rx_a, rx_u) = queue_addrs(rx_pages, dev_rx_qsize);
+    // Initialize our 16 RX descriptors (device sees full queue but we only fill 16)
     let desc = rx_d as *mut Descriptor;
-    for i in 0..rx_qsize {
+    for i in 0..dev_rx_qsize {
         let d = &mut *desc.add(i as usize);
-        d.addr = STATE.rx_bufs[i as usize].as_ptr() as u64;
-        d.len = BUF_SIZE as u32;
-        d.flags = DESC_F_WRITE;
+        if (i as usize) < 16 {
+            d.addr = STATE.rx_bufs[i as usize].as_ptr() as u64;
+            d.len = BUF_SIZE as u32;
+            d.flags = DESC_F_WRITE;
+        } else {
+            d.addr = 0; d.len = 0; d.flags = 0;
+        }
         d.next = 0;
     }
     pci.set_queue_addr((rx_d / 4096) as u32);
@@ -97,7 +105,7 @@ pub unsafe fn init(rx_pages: usize, tx_pages: usize) -> bool {
     STATE.rx_desc = rx_d; STATE.rx_avail = rx_a; STATE.rx_used = rx_u;
     STATE.rx_qsize = rx_qsize;
 
-    // Pre-fill RX available ring
+    // Pre-fill RX available ring with our 16 buffer indices
     let avail_ring = (rx_a + 4) as *mut u16;
     for i in 0..rx_qsize {
         *avail_ring.add(i as usize) = i;
@@ -107,13 +115,13 @@ pub unsafe fn init(rx_pages: usize, tx_pages: usize) -> bool {
 
     // Setup TX queue (queue 1)
     pci.select_queue(1);
-    let tx_qsize = pci.queue_size().min(16);
-    if tx_qsize == 0 { return false; }
+    let dev_tx_qsize = pci.queue_size();
+    if dev_tx_qsize == 0 { return false; }
+    let tx_qsize = dev_tx_qsize.min(16);
 
-    let (tx_d, tx_a, tx_u) = queue_addrs(tx_pages, tx_qsize);
-    // Init TX desc chain (empty)
+    let (tx_d, tx_a, tx_u) = queue_addrs(tx_pages, dev_tx_qsize);
     let tdesc = tx_d as *mut Descriptor;
-    for i in 0..tx_qsize {
+    for i in 0..dev_tx_qsize {
         let d = &mut *tdesc.add(i as usize);
         d.addr = 0; d.len = 0; d.flags = 0; d.next = 0;
     }
