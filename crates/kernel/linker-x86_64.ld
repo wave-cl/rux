@@ -34,6 +34,12 @@ SECTIONS {
         __bss_end = .;
     }
 
+    /* Boot page tables + stack — separate from .bss so kernel_main can
+     * safely zero all of .bss without destroying live page tables/stack. */
+    .boot_bss : ALIGN(4096) {
+        *(.boot_bss)
+    }
+
     /* End of kernel image — page-aligned, above all code/data/BSS.
      * Boot code uses this to place the frame allocator and ramfs
      * dynamically, preventing overlap when BSS grows (e.g., MAX_PROCS). */

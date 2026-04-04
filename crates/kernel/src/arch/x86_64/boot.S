@@ -46,7 +46,7 @@ _start:
      * PD[0..1023] → 2MB pages identity mapping 0-2GB
      */
 
-    /* Zero the page table area */
+    /* Zero the page table area (redundant after BSS clear, but explicit) */
     movl $pml4, %edi
     xorl %eax, %eax
     movl $(3 * 4096 / 4), %ecx  /* 3 pages worth of dwords */
@@ -118,8 +118,8 @@ long_mode_entry:
     /* Set up stack (grows down from top of boot_stack) */
     movabs $boot_stack_top, %rsp
 
-    /* NOTE: Do NOT zero BSS here — boot page tables and stack are in .bss.
-     * Zeroing would destroy the active page tables and triple-fault. */
+    /* BSS was zeroed in 32-bit mode before page table setup.
+     * Do NOT zero again here — boot stack and page tables are live. */
 
     /* Restore multiboot info pointer from esi into rdi (SysV ABI first arg) */
     movl %esi, %edi              /* zero-extend esi to rdi */
@@ -144,14 +144,18 @@ gdt64_ptr:
     .word gdt64_end - gdt64 - 1
     .long gdt64
 
-/* Page tables — must be page-aligned */
-.section .bss
+/* Page tables and boot stack — in .boot_bss (NOT .bss) so kernel_main
+ * can safely zero all of .bss without destroying live page tables/stack.
+ * The BSS zeroing in boot.S (32-bit mode) runs before page tables are built
+ * so it's safe there. But kernel_main also zeros .bss (Rust entry) as a
+ * safety net for large BSS sections. */
+.section .boot_bss, "aw", @nobits
 .align 4096
 pml4:   .skip 4096
 pdpt:   .skip 4096
 pd:     .skip 4096
 
-/* Boot stack — 128 KiB (needs room for deeply nested init + net code + ext2) */
+/* Boot stack — 128 KiB */
 .align 16
 boot_stack:
     .skip 131072
