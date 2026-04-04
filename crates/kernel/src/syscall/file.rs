@@ -524,6 +524,10 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
                     tty.cooked = lflag & 0x2 != 0; // ICANON
                     tty.echo   = lflag & 0x8 != 0; // ECHO
                     tty.isig   = lflag & 0x1 != 0; // ISIG
+                    // c_cc: VTIME at offset 5, VMIN at offset 6
+                    let cc = (arg + 17) as *const u8;
+                    tty.vtime = *cc.add(5);
+                    tty.vmin  = *cc.add(6);
                 }
             }
             0

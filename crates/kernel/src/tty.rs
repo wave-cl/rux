@@ -22,6 +22,10 @@ pub struct Tty {
     pub isig: bool,
     /// Foreground process group for SIGINT delivery.
     pub foreground_pgid: u32,
+    /// VMIN — minimum bytes for raw read (0 = non-blocking).
+    pub vmin: u8,
+    /// VTIME — timeout in deciseconds for raw read (0 = no timeout).
+    pub vtime: u8,
 }
 
 impl Tty {
@@ -33,6 +37,8 @@ impl Tty {
             echo: true,
             isig: true,
             foreground_pgid: 1,
+            vmin: 1,
+            vtime: 0,
         }
     }
 
@@ -134,18 +140,35 @@ impl Tty {
         n as isize
     }
 
-    /// Read from terminal in raw mode — pass bytes through directly.
+    /// Read from terminal in raw mode — respects VMIN/VTIME.
+    ///
+    /// VMIN=1, VTIME=0 (default): block until 1 byte, return it immediately.
+    /// VMIN=0, VTIME=0: non-blocking, return what's available.
+    /// VMIN>0, VTIME=0: block until VMIN bytes.
+    /// VMIN=0, VTIME>0: wait up to VTIME*100ms, return what arrives.
     pub unsafe fn read_raw<A: ConsoleOps>(
         &mut self, buf: *mut u8, len: usize,
     ) -> isize {
+        if len == 0 { return 0; }
+        let vmin = (self.vmin as usize).min(len);
         let ptr = buf;
-        for i in 0..len {
+
+        if vmin == 0 && self.vtime == 0 {
+            // Pure non-blocking: try one byte
+            // For now, just read one byte (QEMU serial is blocking)
             let b = A::read_byte();
-            *ptr.add(i) = b;
-            if b == b'\n' {
-                return (i + 1) as isize;
-            }
+            *ptr = b;
+            return 1;
         }
-        len as isize
+
+        // Read up to min(vmin, len) bytes, or len if vmin==0
+        let target = if vmin > 0 { vmin } else { 1 };
+        let mut got = 0usize;
+        while got < target.min(len) {
+            let b = A::read_byte();
+            *ptr.add(got) = b;
+            got += 1;
+        }
+        got as isize
     }
 }
