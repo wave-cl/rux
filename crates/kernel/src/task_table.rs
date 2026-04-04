@@ -333,6 +333,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     // Restore hardware state (user SP, TLS, kernel stack top)
     crate::arch::Arch::restore_task_hw(new.saved_user_sp, new.tls, new.kstack_top);
 
+
     // Restore FPU/SIMD state
     crate::arch::Arch::restore_fpu(&new.fpu_state as *const _ as *const u8);
 
