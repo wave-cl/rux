@@ -380,7 +380,11 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Flock => 0, // stub — single-process, locking is a no-op
         Syscall::SetItimer => 0, // stub — no interval timers yet
         Syscall::Pselect6 => memory::pselect6(a0, a1, a2, a3, a4),
-        Syscall::ClockNanosleep => posix::nanosleep(a2), // clock_nanosleep(clk, flags, req, rem) → nanosleep(req)
+        Syscall::ClockNanosleep => {
+            // clock_nanosleep(clockid, flags, request, remain)
+            // flags & 1 = TIMER_ABSTIME: request is absolute time (not supported, return 0)
+            if a1 & 1 != 0 { 0 } else { posix::nanosleep(a2) }
+        }
 
         Syscall::Rseq => crate::errno::ENOSYS,
 

@@ -116,6 +116,8 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     super::console::write_str(" ESR=");
                     write_hex(esr as usize);
                     super::console::write_str("\n");
+                    // Kill the process for unhandled user exceptions
+                    unsafe { crate::syscall::posix::exit(139); }
                 }
             }
         }
