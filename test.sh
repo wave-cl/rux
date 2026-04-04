@@ -166,6 +166,9 @@ echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
 test -d /proc && echo proc_is_dir
 head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
 cat /etc/issue
+echo "nameserver 10.0.2.3" > /etc/resolv.conf
+echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
+apk update 2>&1 | tail -1
 echo all_tests_done
 exit
 CMDS
@@ -290,6 +293,7 @@ check "pipe chain grep"      "1"
 check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
+check "apk update"           "OK:"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
