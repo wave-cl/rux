@@ -328,8 +328,8 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 437] = {
     // Batch 2: misc
     t[116] = Syscall::Syslog;    t[142] = Syscall::Reboot;
     t[162] = Syscall::Setdomainname; t[161] = Syscall::Sethostname;
-    t[87] = Syscall::Getitimer;
-    t[53] = Syscall::Lchown;
+    t[102] = Syscall::Getitimer;
+    // t[53] = Syscall::Fchmod (already set above; lchown uses fchownat on aarch64)
     t[152] = Syscall::Setfsuid;  t[153] = Syscall::Setfsgid;
     t[279] = Syscall::MemfdCreate; t[285] = Syscall::CopyFileRange;
     t[291] = Syscall::Statx;
