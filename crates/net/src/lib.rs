@@ -186,6 +186,13 @@ pub unsafe fn tcp_send(handle: SocketHandle, data: &[u8]) -> Result<usize, i32> 
     socket.send_slice(data).map_err(|_| -1)
 }
 
+/// Put a TCP socket into listen mode on the specified port.
+pub unsafe fn tcp_listen(handle: SocketHandle, port: u16) -> Result<(), i32> {
+    let sockets = SOCKETS.as_mut().ok_or(-1)?;
+    let socket = sockets.get_mut::<tcp::Socket>(handle);
+    socket.listen(port).map_err(|_| -1)
+}
+
 /// Receive data from a TCP socket. Returns bytes received.
 pub unsafe fn tcp_recv(handle: SocketHandle, buf: &mut [u8]) -> Result<usize, i32> {
     let sockets = SOCKETS.as_mut().ok_or(-1)?;

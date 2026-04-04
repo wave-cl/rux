@@ -1,6 +1,175 @@
-//! Memory mapping and poll syscalls.
+//! Memory mapping, poll, and epoll syscalls.
 
 use rux_fs::fdtable as fdt;
+
+// ── epoll ──────────────────────────────────────────────────────────
+
+const MAX_EPOLL: usize = 4;
+const MAX_EPOLL_FDS: usize = 64;
+
+#[derive(Clone, Copy)]
+struct EpollEntry {
+    fd: i32,
+    events: u32,
+    data: u64,
+}
+
+struct EpollInstance {
+    active: bool,
+    entries: [EpollEntry; MAX_EPOLL_FDS],
+    count: usize,
+    epoll_fd: usize, // the FD number assigned to this epoll instance
+}
+
+impl EpollInstance {
+    const fn empty() -> Self {
+        Self {
+            active: false,
+            entries: [EpollEntry { fd: -1, events: 0, data: 0 }; MAX_EPOLL_FDS],
+            count: 0,
+            epoll_fd: 0,
+        }
+    }
+}
+
+static mut EPOLL: [EpollInstance; MAX_EPOLL] = [
+    EpollInstance::empty(), EpollInstance::empty(),
+    EpollInstance::empty(), EpollInstance::empty(),
+];
+
+/// epoll_create1(flags) → fd
+pub fn epoll_create(_flags: usize) -> isize {
+    unsafe {
+        let idx = match (0..MAX_EPOLL).find(|&i| !EPOLL[i].active) {
+            Some(i) => i,
+            None => return crate::errno::ENOMEM,
+        };
+        // Allocate an FD for this epoll instance
+        let fd_table = &mut *fdt::FD_TABLE;
+        let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
+            Some(f) => f,
+            None => return crate::errno::ENOMEM,
+        };
+        fd_table[fd] = fdt::EMPTY_FD;
+        fd_table[fd].active = true;
+        // Mark as epoll FD (reuse is_pipe field with a flag)
+        EPOLL[idx].active = true;
+        EPOLL[idx].count = 0;
+        EPOLL[idx].epoll_fd = fd;
+        fd as isize
+    }
+}
+
+fn find_epoll(epfd: usize) -> Option<usize> {
+    unsafe { (0..MAX_EPOLL).find(|&i| EPOLL[i].active && EPOLL[i].epoll_fd == epfd) }
+}
+
+/// epoll_ctl(epfd, op, fd, event_ptr) — add/mod/del fd
+pub fn epoll_ctl(epfd: usize, op: usize, fd: usize, event_ptr: usize) -> isize {
+    const EPOLL_CTL_ADD: usize = 1;
+    const EPOLL_CTL_DEL: usize = 2;
+    const EPOLL_CTL_MOD: usize = 3;
+
+    let idx = match find_epoll(epfd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+
+    unsafe {
+        let ep = &mut EPOLL[idx];
+        match op {
+            EPOLL_CTL_ADD => {
+                if ep.count >= MAX_EPOLL_FDS { return crate::errno::ENOMEM; }
+                if crate::uaccess::validate_user_ptr(event_ptr, 12).is_err() { return crate::errno::EFAULT; }
+                let events = *(event_ptr as *const u32);
+                let data = *((event_ptr + 4) as *const u64);
+                let slot = ep.count;
+                ep.entries[slot] = EpollEntry { fd: fd as i32, events, data };
+                ep.count += 1;
+                0
+            }
+            EPOLL_CTL_DEL => {
+                if let Some(pos) = ep.entries[..ep.count].iter().position(|e| e.fd == fd as i32) {
+                    ep.entries[pos] = ep.entries[ep.count - 1];
+                    ep.count -= 1;
+                }
+                0
+            }
+            EPOLL_CTL_MOD => {
+                if crate::uaccess::validate_user_ptr(event_ptr, 12).is_err() { return crate::errno::EFAULT; }
+                let events = *(event_ptr as *const u32);
+                let data = *((event_ptr + 4) as *const u64);
+                if let Some(pos) = ep.entries[..ep.count].iter().position(|e| e.fd == fd as i32) {
+                    ep.entries[pos].events = events;
+                    ep.entries[pos].data = data;
+                }
+                0
+            }
+            _ => crate::errno::EINVAL,
+        }
+    }
+}
+
+/// epoll_wait(epfd, events, maxevents, timeout) — wait for events
+pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usize) -> isize {
+    let idx = match find_epoll(epfd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    if maxevents == 0 { return crate::errno::EINVAL; }
+    let out_count = maxevents.min(64);
+    if crate::uaccess::validate_user_ptr(events_ptr, out_count * 12).is_err() { return crate::errno::EFAULT; }
+
+    let timeout_ms = if timeout as isize == -1 { 30_000usize } else { (timeout as usize).min(30_000) };
+    let has_sockets = unsafe {
+        let ep = &EPOLL[idx];
+        ep.entries[..ep.count].iter().any(|e| e.fd >= 0 && super::socket::is_socket(e.fd as usize))
+    };
+
+    for _ in 0..timeout_ms.max(1) {
+        #[cfg(feature = "net")]
+        if has_sockets {
+            unsafe { use rux_arch::TimerOps; rux_net::poll(crate::arch::Arch::ticks()); }
+        }
+
+        let mut ready = 0usize;
+        unsafe {
+            let ep = &EPOLL[idx];
+            for i in 0..ep.count {
+                if ready >= out_count { break; }
+                let e = &ep.entries[i];
+                let fd = e.fd as usize;
+                let mut revents: u32 = 0;
+                const EPOLLIN: u32 = 1;
+                const EPOLLOUT: u32 = 4;
+                if e.events & EPOLLIN != 0 {
+                    if super::socket::is_socket(fd) {
+                        if super::socket::socket_has_data(fd) { revents |= EPOLLIN; }
+                    } else {
+                        revents |= EPOLLIN; // regular FDs are always readable
+                    }
+                }
+                if e.events & EPOLLOUT != 0 {
+                    if super::socket::is_socket(fd) {
+                        if super::socket::socket_can_write(fd) { revents |= EPOLLOUT; }
+                    } else {
+                        revents |= EPOLLOUT;
+                    }
+                }
+                if revents != 0 {
+                    let out = events_ptr + ready * 12;
+                    *(out as *mut u32) = revents;
+                    *((out + 4) as *mut u64) = e.data;
+                    ready += 1;
+                }
+            }
+        }
+        if ready > 0 { return ready as isize; }
+        if timeout == 0 { return 0; } // non-blocking
+        unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
+    }
+    0
+}
 
 /// mmap(addr, len, prot, flags, fd, offset) — POSIX.1
 ///

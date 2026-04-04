@@ -29,6 +29,8 @@ pub const ECONNREFUSED: isize = -111;  // Connection refused
 pub const EINPROGRESS: isize = -115;   // Operation now in progress
 pub const ETIMEDOUT: isize = -110;     // Connection timed out
 pub const ENETUNREACH: isize = -101;   // Network is unreachable
+pub const EADDRINUSE: isize = -98;     // Address already in use
+pub const EOPNOTSUPP: isize = -95;     // Operation not supported on socket
 
 // ── Signal numbers (POSIX) ──────────────────────────────────────────
 

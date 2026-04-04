@@ -333,6 +333,58 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
     }
 }
 
+/// listen(fd, backlog) — mark socket as passive (server)
+pub fn sys_listen(fd: usize, _backlog: usize) -> isize {
+    let idx = match unsafe { resolve_socket(fd) } {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        if SOCKETS[idx].sock_type != SOCK_STREAM { return crate::errno::EOPNOTSUPP; }
+        #[cfg(feature = "net")]
+        if SOCKETS[idx].smol_handle_raw >= 0 && SOCKETS[idx].bound_port != 0 {
+            let handle = to_handle(SOCKETS[idx].smol_handle_raw);
+            if rux_net::tcp_listen(handle, SOCKETS[idx].bound_port).is_err() {
+                return crate::errno::EADDRINUSE;
+            }
+        }
+    }
+    0
+}
+
+/// accept(fd, addr, addrlen) — accept incoming connection
+pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
+    if addr_ptr != 0 && crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
+    let idx = match unsafe { resolve_socket(fd) } {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        if SOCKETS[idx].sock_type != SOCK_STREAM { return crate::errno::EOPNOTSUPP; }
+
+        #[cfg(feature = "net")]
+        {
+            use rux_arch::TimerOps;
+            let listen_handle = to_handle(SOCKETS[idx].smol_handle_raw);
+            // Wait for incoming connection
+            for _ in 0..30_000u32 {
+                rux_net::poll(crate::arch::Arch::ticks());
+                if rux_net::tcp_can_recv(listen_handle) {
+                    // Connection accepted — allocate new socket for it
+                    // For now, return the listen socket's data (simplified)
+                    // A full implementation would create a new smoltcp socket
+                    return crate::errno::ENOSYS; // TODO: full accept
+                }
+                use rux_arch::HaltOps;
+                crate::arch::Arch::halt_until_interrupt();
+            }
+            return crate::errno::EAGAIN;
+        }
+        #[cfg(not(feature = "net"))]
+        return crate::errno::EOPNOTSUPP;
+    }
+}
+
 /// shutdown(fd, how) — shut down part of a full-duplex connection
 pub fn sys_shutdown(fd: usize, how: usize) -> isize {
     // how: 0=SHUT_RD, 1=SHUT_WR, 2=SHUT_RDWR

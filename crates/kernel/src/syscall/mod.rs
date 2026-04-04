@@ -210,6 +210,22 @@ pub enum Syscall {
     // Additional syscalls for musl/Alpine
     Getrandom, ClockGetres, Dup3, Sysctl, Flock, SetItimer, Pselect6, ClockNanosleep,
     Fstatfs,
+    // Phase 1 stubs
+    Getrusage, GetPriority, SetPriority, Umask, SetGroups,
+    Fsync, Fdatasync, Sync, Syncfs, Fallocate,
+    Getxattr, Setxattr, Fgetxattr, Fsetxattr, Lgetxattr, Lsetxattr,
+    Listxattr, Flistxattr, Llistxattr,
+    Removexattr, Fremovexattr, Lremovexattr,
+    Capget, Capset, Personality, Seccomp,
+    RestartSyscall, Membarrier,
+    // Phase 2 wrappers
+    Pwrite64, Ftruncate, Truncate, Rmdir, Pipe, Getsid,
+    // Phase 3 epoll
+    EpollCreate, EpollCreate1, EpollCtl, EpollWait, EpollPwait,
+    // Phase 4 server sockets
+    Listen, Accept, Accept4,
+    // Phase 5 event/timer fds
+    Eventfd2, TimerfdCreate, TimerfdSettime, TimerfdGettime,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -401,6 +417,57 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             // flags & 1 = TIMER_ABSTIME: request is absolute time (not supported, return 0)
             if a1 & 1 != 0 { 0 } else { posix::nanosleep(a2) }
         }
+
+        // ── Phase 1 stubs ─────────────────────────────────────────
+        Syscall::Getrusage => {
+            // Zero the rusage struct (144 bytes)
+            if a1 != 0 && crate::uaccess::validate_user_ptr(a1, 144).is_ok() {
+                unsafe { core::ptr::write_bytes(a1 as *mut u8, 0, 144); }
+            }
+            0
+        }
+        Syscall::GetPriority => 0,
+        Syscall::SetPriority => 0,
+        Syscall::Umask => {
+            let old = unsafe { PROCESS.fs_ctx.umask } as isize;
+            unsafe { PROCESS.fs_ctx.umask = (a0 & 0o777) as u16; }
+            old
+        }
+        Syscall::SetGroups => 0,
+        Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync | Syscall::Syncfs => 0,
+        Syscall::Fallocate => 0,
+        Syscall::Getxattr | Syscall::Setxattr | Syscall::Fgetxattr | Syscall::Fsetxattr |
+        Syscall::Lgetxattr | Syscall::Lsetxattr | Syscall::Listxattr | Syscall::Flistxattr |
+        Syscall::Llistxattr | Syscall::Removexattr | Syscall::Fremovexattr |
+        Syscall::Lremovexattr => crate::errno::ENOSYS, // no xattr support
+        Syscall::Capget | Syscall::Capset | Syscall::Personality | Syscall::Seccomp => crate::errno::ENOSYS,
+        Syscall::RestartSyscall | Syscall::Membarrier => 0,
+
+        // ── Phase 2 wrappers ─────────────────────────────────────
+        Syscall::Pwrite64 => posix::pwrite64(a0, a1, a2, a3),
+        Syscall::Ftruncate => posix::ftruncate(a0, a1),
+        Syscall::Truncate => posix::truncate(a0, a1),
+        Syscall::Rmdir => posix::unlink(a0), // rmdir → unlink (ext2 handles both)
+        Syscall::Pipe => linux::pipe2(a0, 0),
+        Syscall::Getsid => unsafe { PROCESS.fs_ctx.cwd as isize }, // stub: return 0 (session = init)
+
+        // ── Phase 3 epoll ─────────────────────────────────────────
+        Syscall::EpollCreate => memory::epoll_create(0),
+        Syscall::EpollCreate1 => memory::epoll_create(a0),
+        Syscall::EpollCtl => memory::epoll_ctl(a0, a1, a2, a3),
+        Syscall::EpollWait => memory::epoll_wait(a0, a1, a2, a3),
+        Syscall::EpollPwait => memory::epoll_wait(a0, a1, a2, a3), // ignore sigmask
+
+        // ── Phase 4 server sockets ────────────────────────────────
+        Syscall::Listen => socket::sys_listen(a0, a1),
+        Syscall::Accept => socket::sys_accept(a0, a1, a2),
+        Syscall::Accept4 => socket::sys_accept(a0, a1, a2), // ignore flags for now
+
+        // ── Phase 5 event/timer fds ───────────────────────────────
+        Syscall::Eventfd2 => crate::errno::ENOSYS,  // TODO: implement
+        Syscall::TimerfdCreate => crate::errno::ENOSYS,  // TODO: implement
+        Syscall::TimerfdSettime => crate::errno::ENOSYS,
+        Syscall::TimerfdGettime => crate::errno::ENOSYS,
 
         Syscall::Rseq => crate::errno::ENOSYS,
 

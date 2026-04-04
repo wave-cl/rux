@@ -498,6 +498,38 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[218] = Syscall::SetTidAddress;
     t[273] = Syscall::SetRobustList;
     t[302] = Syscall::Prlimit64; t[334] = Syscall::Rseq;
+    // Phase 1 stubs
+    t[98] = Syscall::Getrusage;  t[140] = Syscall::GetPriority;
+    t[141] = Syscall::SetPriority; t[95] = Syscall::Umask;
+    t[116] = Syscall::SetGroups;
+    t[74] = Syscall::Fsync;      t[75] = Syscall::Fdatasync;
+    t[162] = Syscall::Sync;      t[306] = Syscall::Syncfs;
+    t[285] = Syscall::Fallocate;
+    t[191] = Syscall::Getxattr;  t[188] = Syscall::Setxattr;
+    t[193] = Syscall::Fgetxattr; t[190] = Syscall::Fsetxattr;
+    t[192] = Syscall::Lgetxattr; t[189] = Syscall::Lsetxattr;
+    t[194] = Syscall::Listxattr; t[196] = Syscall::Flistxattr;
+    t[195] = Syscall::Llistxattr;
+    t[197] = Syscall::Removexattr; t[199] = Syscall::Fremovexattr;
+    t[198] = Syscall::Lremovexattr;
+    t[125] = Syscall::Capget;    t[126] = Syscall::Capset;
+    t[135] = Syscall::Personality; t[317] = Syscall::Seccomp;
+    t[219] = Syscall::RestartSyscall; t[324] = Syscall::Membarrier;
+    // Phase 2 wrappers
+    t[18] = Syscall::Pwrite64;   t[77] = Syscall::Ftruncate;
+    t[76] = Syscall::Truncate;   t[84] = Syscall::Rmdir;
+    t[22] = Syscall::Pipe;       t[124] = Syscall::Getsid;
+    // Phase 3 epoll
+    t[213] = Syscall::EpollCreate; t[291] = Syscall::EpollCreate1;
+    t[233] = Syscall::EpollCtl; t[232] = Syscall::EpollWait;
+    t[281] = Syscall::EpollPwait;
+    // Phase 4 server sockets
+    t[50] = Syscall::Listen;     t[43] = Syscall::Accept;
+    t[288] = Syscall::Accept4;
+    // Phase 5 event/timer fds
+    t[290] = Syscall::Eventfd2;
+    t[283] = Syscall::TimerfdCreate; t[286] = Syscall::TimerfdSettime;
+    t[287] = Syscall::TimerfdGettime;
     t
 };
 

@@ -310,6 +310,54 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
     }
 }
 
+/// pwrite64(fd, buf, count, offset) — POSIX.1: write at offset without seeking.
+pub fn pwrite64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return crate::errno::EBADF; }
+        if (*fdt::FD_TABLE)[fd].is_pipe { return crate::errno::ESPIPE; }
+        if crate::uaccess::validate_user_ptr(buf, len).is_err() { return crate::errno::EFAULT; }
+        let ino = (*fdt::FD_TABLE)[fd].ino;
+        let user_buf = core::slice::from_raw_parts(buf as *const u8, len);
+        let fs = crate::kstate::fs();
+        match fs.write(ino, offset as u64, user_buf) {
+            Ok(n) => n as isize,
+            Err(_) => crate::errno::EIO,
+        }
+    }
+}
+
+/// ftruncate(fd, length) — POSIX.1: truncate file to specified length.
+pub fn ftruncate(fd: usize, length: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return crate::errno::EBADF; }
+        let ino = (*fdt::FD_TABLE)[fd].ino;
+        let fs = crate::kstate::fs();
+        match fs.truncate(ino, length as u64) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::EIO,
+        }
+    }
+}
+
+/// truncate(path, length) — POSIX.1: truncate file by path.
+pub fn truncate(path_ptr: usize, length: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        let path = crate::uaccess::read_user_cstr(path_ptr);
+        let ino = match super::resolve_with_cwd(path) {
+            Ok(ino) => ino,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        match fs.truncate(ino, length as u64) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::EIO,
+        }
+    }
+}
+
 /// writev(fd, iov, iovcnt) — POSIX.1
 pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
     let cnt = iovcnt.min(16);
