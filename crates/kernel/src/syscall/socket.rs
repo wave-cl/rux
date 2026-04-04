@@ -6,6 +6,8 @@ const AF_INET: u32 = 2;
 const SOCK_STREAM: u32 = 1;
 const SOCK_DGRAM: u32 = 2;
 const SOCK_RAW: u32 = 3;
+const SOCK_NONBLOCK: usize = 0x800;
+const O_NONBLOCK: u32 = 0x800;
 
 const MAX_SOCKETS: usize = 16;
 
@@ -45,7 +47,7 @@ fn to_handle(raw: i16) -> rux_net::RawSocketHandle {
 pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
     if domain as u32 != AF_INET { return crate::errno::EAFNOSUPPORT; }
     let st = stype as u32 & 0xFF;
-    let sock_nonblock = stype & 0x800 != 0;
+    let sock_nonblock = stype & SOCK_NONBLOCK != 0;
     if st != SOCK_STREAM && st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
 
     unsafe {
@@ -90,7 +92,7 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
         fd_table[fd].active = true;
         fd_table[fd].is_socket = true;
         fd_table[fd].socket_idx = sock_idx as u8;
-        if sock_nonblock { fd_table[fd].flags |= 0x800; }
+        if sock_nonblock { fd_table[fd].flags |= O_NONBLOCK; }
 
         fd as isize
     }
@@ -169,7 +171,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
             }
 
             // Non-blocking: return EINPROGRESS
-            let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & 0x800) != 0;
+            let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
             if nonblock { return crate::errno::EINPROGRESS; }
 
             // Blocking: poll until established
@@ -258,7 +260,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & 0x800) != 0;
+        let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
 
         #[cfg(feature = "net")]
         {

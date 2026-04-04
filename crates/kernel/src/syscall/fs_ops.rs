@@ -469,6 +469,8 @@ pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
     }
 }
 
+const UTIME_NOW: u64 = 0x3FFFFFFF;
+
 /// utimensat(dirfd, path, times, flags) — POSIX.1-2008: set file timestamps.
 /// times is a pointer to two timespec structs (atime, mtime), or NULL for current time.
 pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize) -> isize {
@@ -482,8 +484,8 @@ pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize)
             let m_sec = *((times_ptr + 16) as *const u64);
             let a_nsec = *((times_ptr + 8) as *const u64);
             let m_nsec = *((times_ptr + 24) as *const u64);
-            let a = if a_nsec == 0x3FFFFFFF { now } else { a_sec };
-            let m = if m_nsec == 0x3FFFFFFF { now } else { m_sec };
+            let a = if a_nsec == UTIME_NOW { now } else { a_sec };
+            let m = if m_nsec == UTIME_NOW { now } else { m_sec };
             (a, m)
         };
         if path_ptr == 0 { return 0; }
@@ -500,10 +502,89 @@ pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize)
     }
 }
 
-/// readlinkat(dirfd, pathname, buf, bufsiz) — POSIX.1-2008
-/// Ignores dirfd (assumes AT_FDCWD / absolute paths).
-pub fn readlinkat(_dirfd: usize, path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
-    readlink(path_ptr, buf, bufsiz)
+/// readlinkat(dirfd, pathname, buf, bufsiz) — with dirfd support
+pub fn readlink_at(dirfd: usize, path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        let ino = match fs.lookup(dir_ino, fname) {
+            Ok(ino) => ino,
+            Err(_) => return crate::errno::ENOENT,
+        };
+        let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, bufsiz);
+        match fs.readlink(ino, user_buf) {
+            Ok(n) => n as isize,
+            Err(_) => crate::errno::EINVAL,
+        }
+    }
+}
+
+/// fchmodat(dirfd, path, mode) — with dirfd support
+pub fn chmod_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        let path = crate::uaccess::read_user_cstr(path_ptr);
+        let ino = match super::resolve_at(dirfd, path) {
+            Ok(ino) => ino,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        match fs.chmod(ino, mode as u32) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::ENOENT,
+        }
+    }
+}
+
+/// linkat(olddirfd, old, newdirfd, new, flags) — with dirfd support
+pub fn link_at(olddirfd: usize, old_ptr: usize, newdirfd: usize, new_ptr: usize) -> isize {
+    unsafe {
+        use rux_fs::{FileSystem, FileName};
+        let old_path = crate::uaccess::read_user_cstr(old_ptr);
+        let old_ino = match super::resolve_at(olddirfd, old_path) {
+            Ok(ino) => ino,
+            Err(e) => return e,
+        };
+        let (dir_ino, name) = match super::resolve_parent_at(newdirfd, new_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let fs = crate::kstate::fs();
+        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        match fs.link(dir_ino, fname, old_ino) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::EEXIST,
+        }
+    }
+}
+
+/// faccessat(dirfd, path, amode, flags) — check file accessibility
+pub fn faccessat(dirfd: usize, path_ptr: usize, amode: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        let path = crate::uaccess::read_user_cstr(path_ptr);
+        if path.is_empty() { return crate::errno::ENOENT; }
+        let ino = match super::resolve_at(dirfd, path) {
+            Ok(ino) => ino,
+            Err(_) => return crate::errno::ENOENT,
+        };
+        // F_OK (amode == 0): just check existence — already resolved
+        if amode == 0 { return 0; }
+        let fs = crate::kstate::fs();
+        let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
+        if fs.stat(ino, &mut stat).is_err() { return crate::errno::ENOENT; }
+        let mut req = 0u32;
+        if amode & 4 != 0 { req |= crate::perm::R_OK; }
+        if amode & 2 != 0 { req |= crate::perm::W_OK; }
+        if amode & 1 != 0 { req |= crate::perm::X_OK; }
+        if crate::perm::check_access(stat.mode, stat.uid, stat.gid, req) { 0 }
+        else { crate::errno::EACCES }
+    }
 }
 
 /// readlink(pathname, buf, bufsiz) — POSIX.1

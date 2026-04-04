@@ -3,6 +3,9 @@
 use rux_arch::ConsoleOps;
 use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
+
+const O_CREAT: usize = 0x40;
+const O_NONBLOCK: usize = 0x800;
 /// read(fd, buf, count) — POSIX.1
 /// readv(fd, iov, iovcnt) — scatter read
 pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
@@ -120,7 +123,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
         let path = crate::uaccess::read_user_cstr(path_ptr);
         if path.is_empty() { return crate::errno::ENOENT; }
 
-        let o_creat = flags & 0x40 != 0;
+        let o_creat = flags & O_CREAT != 0;
 
         match super::resolve_with_cwd(path) {
             Ok(ino) => {
@@ -179,7 +182,7 @@ pub fn openat(dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isize
         if dirfd < 64 {
             if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
                 let fs = crate::kstate::fs();
-                let o_creat = flags & 0x40 != 0;
+                let o_creat = flags & O_CREAT != 0;
                 // Resolve path relative to dir_ino
                 match rux_fs::path::resolve_path_at(fs, dir_ino, path) {
                     Ok(ino) => {

@@ -256,9 +256,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Lstat => posix::lstat(a0, a1),
         Syscall::Fstat => posix::fstat(a0, a1),
         Syscall::FstatAt => posix::fstatat(a0, a1, a2, a3),
-        Syscall::Faccessat => 0,
+        Syscall::Faccessat => posix::faccessat(a0, a1, a2),
         Syscall::Readlink => posix::readlink(a0, a1, a2),
-        Syscall::Readlinkat => posix::readlinkat(a0, a1, a2, a3),
+        Syscall::Readlinkat => posix::readlink_at(a0, a1, a2, a3),
 
         // ── Directory / path ops ──────────────────────────────────
         Syscall::Getcwd => posix::getcwd(a0, a1),
@@ -277,9 +277,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Permissions ───────────────────────────────────────────
         Syscall::Link => posix::link(a0, a1),
-        Syscall::Linkat => posix::link(a1, a3),   // linkat(olddirfd, old, newdirfd, new, flags)
-        Syscall::Chmod => posix::chmod(a0, a1),         // chmod(path, mode)
-        Syscall::Fchmodat => posix::chmod(a1, a2),      // fchmodat(dirfd, path, mode)
+        Syscall::Linkat => posix::link_at(a0, a1, a2, a3),
+        Syscall::Chmod => posix::chmod(a0, a1),
+        Syscall::Fchmodat => posix::chmod_at(a0, a1, a2),
         Syscall::Fchmod => posix::fchmod(a0, a1),       // fchmod(fd, mode)
         Syscall::Chown => posix::chown(a0, a1, a2),     // chown(path, uid, gid)
         Syscall::Fchownat => posix::fchownat(a0, a1, a2, a3),
@@ -331,9 +331,18 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Getdents64 => linux::getdents64(a0, a1, a2),
         Syscall::SetTidAddress => linux::set_tid_address(a0),
         Syscall::Poll => posix::ppoll(a0, a1, a2, a3),
-        Syscall::Gettimeofday => {
+        Syscall::Gettimeofday => unsafe {
             use rux_arch::TimerOps;
-            crate::arch::Arch::ticks() as isize
+            let ticks = crate::arch::Arch::ticks();
+            if a0 != 0 {
+                *(a0 as *mut u64) = ticks / 1000;                // tv_sec
+                *((a0 + 8) as *mut u64) = (ticks % 1000) * 1000; // tv_usec
+            }
+            if a1 != 0 {
+                *(a1 as *mut i32) = 0;   // tz_minuteswest
+                *((a1 + 4) as *mut i32) = 0; // tz_dsttime
+            }
+            0
         }
         Syscall::Sysinfo => linux::sysinfo(a0),
         Syscall::Statfs => linux::statfs(a0, a1),
