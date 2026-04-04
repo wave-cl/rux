@@ -147,8 +147,9 @@ impl ProcFs {
                 1
             }
             _ if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE => {
-                // /proc/[pid]/maps — stub empty file
-                0
+                // /proc/[pid]/maps — synthesized memory map
+                // Format: start-end perms offset dev inode pathname
+                self.gen_pid_maps(buf)
             }
             _ if is_pid_file(ino) => {
                 let pid = pid_from_file(ino);
@@ -237,6 +238,23 @@ impl ProcFs {
         pos += copy_str(&mut buf[pos..], b" kB\nVmRSS:\t");
         pos += fmt_u64(&mut buf[pos..], used_kb as u64);
         pos += copy_str(&mut buf[pos..], b" kB\nThreads:\t1\n");
+        pos
+    }
+
+    /// Generate /proc/[pid]/maps — synthesized memory map.
+    /// Without VMA tracking, we emit the standard regions that Alpine programs expect.
+    fn gen_pid_maps(&self, buf: &mut [u8]) -> usize {
+        let mut pos = 0;
+        // Text segment (typical ELF load address)
+        pos += copy_str(&mut buf[pos..], b"00400000-00500000 r-xp 00000000 fe:00 1 /bin/busybox\n");
+        // Data/BSS
+        pos += copy_str(&mut buf[pos..], b"00500000-00520000 rw-p 00100000 fe:00 1 /bin/busybox\n");
+        // Heap (brk area)
+        pos += copy_str(&mut buf[pos..], b"00800000-00900000 rw-p 00000000 00:00 0 [heap]\n");
+        // mmap region
+        pos += copy_str(&mut buf[pos..], b"10000000-10100000 rw-p 00000000 00:00 0 \n");
+        // Stack
+        pos += copy_str(&mut buf[pos..], b"7ffe0000-80000000 rw-p 00000000 00:00 0 [stack]\n");
         pos
     }
 }

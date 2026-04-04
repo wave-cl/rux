@@ -119,6 +119,10 @@ cp /etc/passwd /tmp/cp_test && wc -l /tmp/cp_test
 echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
 head -c 100 /dev/urandom > /tmp/rnd && wc -c /tmp/rnd
 du -s /bin | cut -f1
+ls /proc/self/fd
+cat /proc/self/maps | head -1
+echo a | cat | cat | cat
+echo p1 | sed 's/p/q/' | tr a-z A-Z
 exit
 CMDS
 } | \
@@ -221,6 +225,10 @@ check "cp file (copy)"        "1"
 check "cp + cat"              "hello"
 check "urandom write"         "100"
 check "du (statx)"            "/"
+check "proc/self/fd"          "0"
+check "proc/self/maps"        "r-xp"
+check "triple pipe"           "a"
+check "pipe chain"            "Q1"
 
 fi  # RUN_X86
 
@@ -297,6 +305,10 @@ cp /etc/passwd /tmp/cp_test && wc -l /tmp/cp_test
 echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
 head -c 100 /dev/urandom > /tmp/rnd && wc -c /tmp/rnd
 du -s /bin | cut -f1
+ls /proc/self/fd
+cat /proc/self/maps | head -1
+echo a | cat | cat | cat
+echo p1 | sed 's/p/q/' | tr a-z A-Z
 exit
 CMDS
 } | \
@@ -398,6 +410,10 @@ check "cp file (copy)"        "1"
 check "cp + cat"              "hello"
 check "urandom write"         "100"
 check "du (statx)"            "/"
+check "proc/self/fd"          "0"
+check "proc/self/maps"        "r-xp"
+check "triple pipe"           "a"
+check "pipe chain"            "Q1"
 
 fi  # RUN_AA64
 
