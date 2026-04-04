@@ -275,6 +275,34 @@ pub enum Syscall {
     Unknown(usize),
 }
 
+impl Syscall {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Syscall::Read => "read", Syscall::Write => "write",
+            Syscall::Open | Syscall::OpenAt => "open",
+            Syscall::Close => "close", Syscall::Poll => "poll",
+            Syscall::Mmap => "mmap", Syscall::Brk => "brk",
+            Syscall::Futex => "futex", Syscall::Nanosleep => "nanosleep",
+            Syscall::ClockNanosleep => "clock_nanosleep",
+            Syscall::EpollPwait | Syscall::EpollWait => "epoll_wait",
+            Syscall::Pselect6 => "pselect6",
+            Syscall::Connect => "connect", Syscall::Recvfrom => "recvfrom",
+            Syscall::Sendto => "sendto", Syscall::Socket => "socket",
+            Syscall::Clone3 => "clone3", Syscall::Execveat => "execveat",
+            Syscall::Exit | Syscall::ExitGroup => "exit",
+            Syscall::Wait4 => "wait4",
+            Syscall::Sigaction => "sigaction", Syscall::Sigprocmask => "sigprocmask",
+            Syscall::Getrandom => "getrandom",
+            Syscall::Ioctl => "ioctl", Syscall::Fcntl => "fcntl",
+            Syscall::Fstat | Syscall::FstatAt | Syscall::Stat => "stat",
+            Syscall::Statx => "statx",
+            Syscall::Getdents64 => "getdents64",
+            Syscall::Unknown(n) => "unknown",
+            _ => "other",
+        }
+    }
+}
+
 /// Dispatch a syscall by its architecture-independent identifier.
 /// All arguments are native-width (usize). The arch entry point casts
 /// from register-width to usize before calling.
