@@ -4,8 +4,6 @@
 //! layout. This avoids the complexity of modern virtio-pci capabilities.
 //! QEMU's virtio-blk-pci device supports both legacy and modern modes.
 
-use core::ptr;
-
 // ── Legacy virtio-pci I/O port offsets ─────────────────────────────
 // (relative to BAR0 I/O port base)
 

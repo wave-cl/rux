@@ -4,7 +4,7 @@
 //! Each packet has a virtio_net_hdr prefix (10 bytes for legacy).
 //! Polling-based — no interrupts.
 
-use super::queue::{Virtqueue, Descriptor, DESC_F_NEXT, DESC_F_WRITE};
+use super::queue::{Descriptor, DESC_F_NEXT, DESC_F_WRITE};
 use super::mmio::{VirtioMmio, VIRTIO_MAGIC};
 use core::sync::atomic::{fence, Ordering};
 

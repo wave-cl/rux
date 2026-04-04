@@ -3,7 +3,6 @@
 //! Descriptor table + available ring + used ring laid out in physically
 //! contiguous memory. Uses synchronous polling (no interrupts).
 
-use core::ptr;
 use core::sync::atomic::{fence, Ordering};
 
 /// Maximum queue size. 16 is plenty for a boot-time block driver.

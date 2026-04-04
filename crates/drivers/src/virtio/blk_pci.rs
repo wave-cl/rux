@@ -175,7 +175,7 @@ unsafe fn pci_read_sector(sector: u64, buf: *mut u8) -> Result<(), DriverError> 
     d2.flags = DESC_F_WRITE;
 
     // Submit to available ring
-    let avail_flags = STATE.avail_base as *mut u16;
+    let _avail_flags = STATE.avail_base as *mut u16;
     let avail_idx_ptr = (STATE.avail_base + 2) as *mut u16;
     let avail_ring = (STATE.avail_base + 4) as *mut u16;
 

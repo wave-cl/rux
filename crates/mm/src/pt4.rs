@@ -394,7 +394,7 @@ impl<A: ArchPaging> PageTable4Level<A> {
 
         // Lead-in: 4K pages until 2MB-aligned (or 1GB-aligned if using 1G)
         let min_align = if use_1g { ONE_GB } else { TWO_MB };
-        let aligned_start = (addr + min_align - 1) & !(min_align - 1);
+        let _aligned_start = (addr + min_align - 1) & !(min_align - 1);
 
         // 4K until first large-page boundary
         let first_2m = (addr + TWO_MB - 1) & !(TWO_MB - 1);

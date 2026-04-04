@@ -5,7 +5,7 @@
 
 use crate::{BlockDevice, DriverError};
 use super::mmio::{VirtioMmio, VIRTIO_MAGIC, STATUS_ACK, STATUS_DRIVER, STATUS_FEATURES_OK, STATUS_DRIVER_OK};
-use super::queue::{Virtqueue, Descriptor, QUEUE_SIZE, DESC_F_NEXT, DESC_F_WRITE};
+use super::queue::{Virtqueue, QUEUE_SIZE, DESC_F_NEXT, DESC_F_WRITE};
 
 // ── virtio-blk request types ───────────────────────────────────────
 
