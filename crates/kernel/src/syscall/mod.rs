@@ -226,6 +226,25 @@ pub enum Syscall {
     Listen, Accept, Accept4,
     // Phase 5 event/timer fds
     Eventfd2, TimerfdCreate, TimerfdSettime, TimerfdGettime,
+    // Batch 2: memory management
+    Madvise, Mincore, Mremap, Msync,
+    Mlock, Munlock, Mlockall, Munlockall,
+    // Batch 2: signal extensions
+    SigPending, SigTimedwait, SigQueueinfo, TgSigQueueinfo,
+    // Batch 2: splice / zero-copy I/O
+    Splice, Vmsplice, Tee,
+    // Batch 2: process misc
+    Setsid2, Getresuid, Getresgid, Setresuid, Setresgid,
+    SchedSetaffinity, SchedGetparam, SchedSetparam,
+    SchedGetscheduler, SchedSetscheduler,
+    // Batch 2: filesystem misc
+    Chroot, PivotRoot, Fadvise,
+    Inotify, InotifyAddWatch, InotifyRmWatch,
+    // Batch 2: misc
+    Syslog, Reboot, Setdomainname, Sethostname,
+    Pause, Getitimer,
+    Lchown, Setfsuid, Setfsgid,
+    MemfdCreate, CopyFileRange, Statx,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -468,6 +487,70 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::TimerfdCreate => crate::errno::ENOSYS,  // TODO: implement
         Syscall::TimerfdSettime => crate::errno::ENOSYS,
         Syscall::TimerfdGettime => crate::errno::ENOSYS,
+
+        // ── Batch 2: memory management ─────────────────────────────
+        Syscall::Madvise => 0, // hints are advisory — safe to ignore
+        Syscall::Mincore => crate::errno::ENOSYS,
+        Syscall::Mremap => crate::errno::ENOSYS, // TODO: implement
+        Syscall::Msync => 0, // write-through ext2, sync is no-op
+        Syscall::Mlock | Syscall::Munlock |
+        Syscall::Mlockall | Syscall::Munlockall => 0, // all pages are locked (no swap)
+
+        // ── Batch 2: signal extensions ────────────────────────────
+        Syscall::SigPending => {
+            // rt_sigpending(set, sigsetsize) — return pending signals
+            if a0 != 0 {
+                if crate::uaccess::validate_user_ptr(a0, 8).is_err() { return crate::errno::EFAULT; }
+                unsafe { *(a0 as *mut u64) = PROCESS.signal_hot.pending.0; }
+            }
+            0
+        }
+        Syscall::SigTimedwait => crate::errno::ENOSYS, // TODO: implement
+        Syscall::SigQueueinfo | Syscall::TgSigQueueinfo => crate::errno::ENOSYS,
+
+        // ── Batch 2: splice / zero-copy I/O ───────────────────────
+        Syscall::Splice | Syscall::Vmsplice | Syscall::Tee => crate::errno::ENOSYS,
+
+        // ── Batch 2: process misc ─────────────────────────────────
+        Syscall::Setsid2 => posix::setsid(), // alias
+        Syscall::Getresuid => unsafe {
+            if a0 != 0 { crate::uaccess::put_user(a0, PROCESS.uid); }
+            if a1 != 0 { crate::uaccess::put_user(a1, PROCESS.euid); }
+            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.uid); } // saved = real
+            0
+        }
+        Syscall::Getresgid => unsafe {
+            if a0 != 0 { crate::uaccess::put_user(a0, PROCESS.gid); }
+            if a1 != 0 { crate::uaccess::put_user(a1, PROCESS.egid); }
+            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.gid); }
+            0
+        }
+        Syscall::Setresuid => unsafe { PROCESS.uid = a0 as u32; PROCESS.euid = a1 as u32; 0 }
+        Syscall::Setresgid => unsafe { PROCESS.gid = a0 as u32; PROCESS.egid = a1 as u32; 0 }
+        Syscall::SchedSetaffinity | Syscall::SchedGetparam | Syscall::SchedSetparam |
+        Syscall::SchedGetscheduler | Syscall::SchedSetscheduler => 0, // single-CPU stubs
+
+        // ── Batch 2: filesystem misc ──────────────────────────────
+        Syscall::Chroot | Syscall::PivotRoot => crate::errno::ENOSYS, // no namespace support
+        Syscall::Fadvise => 0, // advisory — safe to ignore
+        Syscall::Inotify | Syscall::InotifyAddWatch | Syscall::InotifyRmWatch => crate::errno::ENOSYS,
+
+        // ── Batch 2: misc ─────────────────────────────────────────
+        Syscall::Syslog => crate::errno::ENOSYS,
+        Syscall::Reboot => crate::errno::ENOSYS,
+        Syscall::Setdomainname | Syscall::Sethostname => 0, // stubs
+        Syscall::Pause => {
+            // Suspend until signal — use nanosleep(very long)
+            unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
+            crate::errno::EINTR
+        }
+        Syscall::Getitimer => 0, // stub
+        Syscall::Lchown => posix::chown(a0, a1, a2), // same as chown for now
+        Syscall::Setfsuid => 0,
+        Syscall::Setfsgid => 0,
+        Syscall::MemfdCreate => crate::errno::ENOSYS,
+        Syscall::CopyFileRange => crate::errno::ENOSYS,
+        Syscall::Statx => crate::errno::ENOSYS, // TODO: implement
 
         Syscall::Rseq => crate::errno::ENOSYS,
 

@@ -530,6 +530,36 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[290] = Syscall::Eventfd2;
     t[283] = Syscall::TimerfdCreate; t[286] = Syscall::TimerfdSettime;
     t[287] = Syscall::TimerfdGettime;
+    // Batch 2: memory
+    t[28] = Syscall::Madvise;    t[27] = Syscall::Mincore;
+    t[25] = Syscall::Mremap;     t[26] = Syscall::Msync;
+    t[149] = Syscall::Mlock;     t[150] = Syscall::Munlock;
+    t[151] = Syscall::Mlockall;  t[152] = Syscall::Munlockall;
+    // Batch 2: signals
+    t[127] = Syscall::SigPending; t[128] = Syscall::SigTimedwait;
+    t[129] = Syscall::SigQueueinfo; t[297] = Syscall::TgSigQueueinfo;
+    // Batch 2: splice
+    t[275] = Syscall::Splice;    t[278] = Syscall::Vmsplice;
+    t[276] = Syscall::Tee;
+    // Batch 2: process
+    t[148] = Syscall::SchedGetparam; t[142] = Syscall::SchedSetparam;
+    t[145] = Syscall::SchedGetscheduler; t[144] = Syscall::SchedSetscheduler;
+    t[203] = Syscall::SchedSetaffinity;
+    t[118] = Syscall::Getresuid; t[120] = Syscall::Getresgid;
+    t[117] = Syscall::Setresuid; t[119] = Syscall::Setresgid;
+    // Batch 2: filesystem
+    t[161] = Syscall::Chroot;    t[155] = Syscall::PivotRoot;
+    t[221] = Syscall::Fadvise;
+    t[253] = Syscall::Inotify;   t[254] = Syscall::InotifyAddWatch;
+    t[255] = Syscall::InotifyRmWatch;
+    // Batch 2: misc
+    t[103] = Syscall::Syslog;    t[169] = Syscall::Reboot;
+    t[171] = Syscall::Setdomainname; t[170] = Syscall::Sethostname;
+    t[34] = Syscall::Pause;      t[36] = Syscall::Getitimer;
+    t[94] = Syscall::Lchown;
+    t[122] = Syscall::Setfsuid;  t[123] = Syscall::Setfsgid;
+    t[319] = Syscall::MemfdCreate; t[326] = Syscall::CopyFileRange;
+    t[332] = Syscall::Statx;
     t
 };
 
