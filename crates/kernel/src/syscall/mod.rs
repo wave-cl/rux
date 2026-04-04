@@ -504,10 +504,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Accept4 => socket::sys_accept(a0, a1, a2), // ignore flags for now
 
         // ── Phase 5 event/timer fds ───────────────────────────────
-        Syscall::Eventfd2 => crate::errno::ENOSYS,  // TODO: implement
-        Syscall::TimerfdCreate => crate::errno::ENOSYS,  // TODO: implement
-        Syscall::TimerfdSettime => crate::errno::ENOSYS,
-        Syscall::TimerfdGettime => crate::errno::ENOSYS,
+        Syscall::Eventfd2 => memory::eventfd2(a0, a1),
+        Syscall::TimerfdCreate => memory::timerfd_create(a0, a1),
+        Syscall::TimerfdSettime => memory::timerfd_settime(a0, a1, a2, a3),
+        Syscall::TimerfdGettime => memory::timerfd_gettime(a0, a1),
 
         // ── Batch 2: memory management ─────────────────────────────
         Syscall::Madvise => 0, // hints are advisory — safe to ignore

@@ -54,6 +54,16 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
     if super::socket::is_socket(fd) {
         return super::socket::sys_recvfrom(fd, buf, len, 0, 0, 0);
     }
+    if super::memory::is_eventfd(fd) {
+        if len < 8 { return crate::errno::EINVAL; }
+        if crate::uaccess::validate_user_ptr(buf, 8).is_err() { return crate::errno::EFAULT; }
+        return super::memory::eventfd_read(fd, buf);
+    }
+    if super::memory::is_timerfd(fd) {
+        if len < 8 { return crate::errno::EINVAL; }
+        if crate::uaccess::validate_user_ptr(buf, 8).is_err() { return crate::errno::EFAULT; }
+        return super::memory::timerfd_read(fd, buf);
+    }
     if fd == 0 && fdt::is_console_fd(0) {
         unsafe {
             let tty = &mut *(&raw mut crate::tty::TTY);
@@ -78,6 +88,11 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     // Socket write → sendto
     if super::socket::is_socket(fd) {
         return super::socket::sys_sendto(fd, buf, len, 0, 0, 0);
+    }
+    if super::memory::is_eventfd(fd) {
+        if len < 8 { return crate::errno::EINVAL; }
+        if crate::uaccess::validate_user_ptr(buf, 8).is_err() { return crate::errno::EFAULT; }
+        return super::memory::eventfd_write(fd, buf);
     }
     if fd <= 2 && fdt::is_console_fd(fd) {
         let write_len = len.min(65536); // Cap to prevent unbounded spin
@@ -233,6 +248,9 @@ pub fn close(fd: usize) -> isize {
     if super::socket::is_socket(fd) {
         return super::socket::sys_close_socket(fd);
     }
+    // eventfd / timerfd close — release slot, then fall through to fd close
+    super::memory::eventfd_close(fd);
+    super::memory::timerfd_close(fd);
     unsafe {
         // If closing a pipe end, wake any tasks blocked on that pipe so they
         // can see the new EOF / EPIPE condition.

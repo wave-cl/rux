@@ -171,6 +171,283 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
     0
 }
 
+// ── eventfd ────────────────────────────────────────────────────────
+
+const MAX_EVENTFD: usize = 8;
+
+struct EventFdSlot {
+    active: bool,
+    fd: usize,
+    counter: u64,
+    semaphore: bool, // EFD_SEMAPHORE: read returns 1, decrements by 1
+}
+
+static mut EVENTFDS: [EventFdSlot; MAX_EVENTFD] = {
+    const EMPTY: EventFdSlot = EventFdSlot { active: false, fd: 0, counter: 0, semaphore: false };
+    [EMPTY; MAX_EVENTFD]
+};
+
+/// eventfd2(initval, flags) → fd
+pub fn eventfd2(initval: usize, flags: usize) -> isize {
+    const EFD_SEMAPHORE: usize = 1;
+    const EFD_NONBLOCK: usize = 0x800;
+    unsafe {
+        let idx = match (0..MAX_EVENTFD).find(|&i| !EVENTFDS[i].active) {
+            Some(i) => i,
+            None => return crate::errno::ENOMEM,
+        };
+        let fd_table = &mut *fdt::FD_TABLE;
+        let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
+            Some(f) => f,
+            None => return crate::errno::ENOMEM,
+        };
+        fd_table[fd] = fdt::EMPTY_FD;
+        fd_table[fd].active = true;
+        if flags & EFD_NONBLOCK != 0 { fd_table[fd].flags |= 0x800; }
+        EVENTFDS[idx] = EventFdSlot {
+            active: true,
+            fd,
+            counter: initval as u64,
+            semaphore: flags & EFD_SEMAPHORE != 0,
+        };
+        fd as isize
+    }
+}
+
+fn find_eventfd(fd: usize) -> Option<usize> {
+    unsafe { (0..MAX_EVENTFD).find(|&i| EVENTFDS[i].active && EVENTFDS[i].fd == fd) }
+}
+
+/// Check if fd is an eventfd.
+pub fn is_eventfd(fd: usize) -> bool { find_eventfd(fd).is_some() }
+
+/// Read from eventfd: returns 8-byte u64 counter value, resets to 0.
+/// With EFD_SEMAPHORE: returns 1, decrements counter by 1.
+pub fn eventfd_read(fd: usize, buf: usize) -> isize {
+    let idx = match find_eventfd(fd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        let nonblock = fd < 64 && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
+        // Block until counter > 0
+        for _ in 0..30_000u32 {
+            if EVENTFDS[idx].counter > 0 {
+                let val = if EVENTFDS[idx].semaphore {
+                    EVENTFDS[idx].counter -= 1;
+                    1u64
+                } else {
+                    let v = EVENTFDS[idx].counter;
+                    EVENTFDS[idx].counter = 0;
+                    v
+                };
+                *(buf as *mut u64) = val;
+                return 8;
+            }
+            if nonblock { return crate::errno::EAGAIN; }
+            use rux_arch::HaltOps;
+            crate::arch::Arch::halt_until_interrupt();
+        }
+        crate::errno::EAGAIN
+    }
+}
+
+/// Write to eventfd: adds u64 value to counter.
+pub fn eventfd_write(fd: usize, buf: usize) -> isize {
+    let idx = match find_eventfd(fd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        let val = *(buf as *const u64);
+        if val == u64::MAX { return crate::errno::EINVAL; }
+        let new_val = EVENTFDS[idx].counter.saturating_add(val);
+        if new_val == u64::MAX { return crate::errno::EAGAIN; } // would overflow
+        EVENTFDS[idx].counter = new_val;
+        8
+    }
+}
+
+/// Close an eventfd slot.
+pub fn eventfd_close(fd: usize) {
+    if let Some(idx) = find_eventfd(fd) {
+        unsafe { EVENTFDS[idx].active = false; }
+    }
+}
+
+/// Check if eventfd has data (counter > 0) — for poll/epoll.
+pub fn eventfd_has_data(fd: usize) -> bool {
+    find_eventfd(fd).map(|i| unsafe { EVENTFDS[i].counter > 0 }).unwrap_or(false)
+}
+
+// ── timerfd ────────────────────────────────────────────────────────
+
+const MAX_TIMERFD: usize = 4;
+
+struct TimerFdSlot {
+    active: bool,
+    fd: usize,
+    /// Interval in nanoseconds (0 = one-shot).
+    interval_ns: u64,
+    /// Next expiry in kernel ticks (milliseconds).
+    next_expiry_ms: u64,
+    /// Number of expirations since last read.
+    expirations: u64,
+}
+
+static mut TIMERFDS: [TimerFdSlot; MAX_TIMERFD] = {
+    const EMPTY: TimerFdSlot = TimerFdSlot {
+        active: false, fd: 0, interval_ns: 0, next_expiry_ms: 0, expirations: 0,
+    };
+    [EMPTY; MAX_TIMERFD]
+};
+
+/// timerfd_create(clockid, flags) → fd
+pub fn timerfd_create(_clockid: usize, flags: usize) -> isize {
+    const TFD_NONBLOCK: usize = 0x800;
+    unsafe {
+        let idx = match (0..MAX_TIMERFD).find(|&i| !TIMERFDS[i].active) {
+            Some(i) => i,
+            None => return crate::errno::ENOMEM,
+        };
+        let fd_table = &mut *fdt::FD_TABLE;
+        let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
+            Some(f) => f,
+            None => return crate::errno::ENOMEM,
+        };
+        fd_table[fd] = fdt::EMPTY_FD;
+        fd_table[fd].active = true;
+        if flags & TFD_NONBLOCK != 0 { fd_table[fd].flags |= 0x800; }
+        TIMERFDS[idx] = TimerFdSlot {
+            active: true, fd, interval_ns: 0, next_expiry_ms: 0, expirations: 0,
+        };
+        fd as isize
+    }
+}
+
+fn find_timerfd(fd: usize) -> Option<usize> {
+    unsafe { (0..MAX_TIMERFD).find(|&i| TIMERFDS[i].active && TIMERFDS[i].fd == fd) }
+}
+
+pub fn is_timerfd(fd: usize) -> bool { find_timerfd(fd).is_some() }
+
+/// timerfd_settime(fd, flags, new_value_ptr, old_value_ptr) → 0
+/// new_value is struct itimerspec { it_interval: timespec, it_value: timespec }
+pub fn timerfd_settime(fd: usize, _flags: usize, new_ptr: usize, old_ptr: usize) -> isize {
+    if crate::uaccess::validate_user_ptr(new_ptr, 32).is_err() { return crate::errno::EFAULT; }
+    let idx = match find_timerfd(fd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        // Write old value if requested
+        if old_ptr != 0 {
+            if crate::uaccess::validate_user_ptr(old_ptr, 32).is_err() { return crate::errno::EFAULT; }
+            // Write zeros (simplified)
+            core::ptr::write_bytes(old_ptr as *mut u8, 0, 32);
+        }
+        // Read new itimerspec: { interval: {sec, nsec}, value: {sec, nsec} }
+        let interval_sec: u64 = crate::uaccess::get_user(new_ptr);
+        let interval_nsec: u64 = crate::uaccess::get_user(new_ptr + 8);
+        let value_sec: u64 = crate::uaccess::get_user(new_ptr + 16);
+        let value_nsec: u64 = crate::uaccess::get_user(new_ptr + 24);
+
+        let interval_ns = interval_sec * 1_000_000_000 + interval_nsec;
+        let value_ns = value_sec * 1_000_000_000 + value_nsec;
+
+        use rux_arch::TimerOps;
+        let now_ms = crate::arch::Arch::ticks();
+
+        TIMERFDS[idx].interval_ns = interval_ns;
+        TIMERFDS[idx].expirations = 0;
+        if value_ns == 0 {
+            // Disarm
+            TIMERFDS[idx].next_expiry_ms = 0;
+        } else {
+            TIMERFDS[idx].next_expiry_ms = now_ms + (value_ns / 1_000_000).max(1);
+        }
+    }
+    0
+}
+
+/// timerfd_gettime(fd, curr_value_ptr) → 0
+pub fn timerfd_gettime(fd: usize, value_ptr: usize) -> isize {
+    if crate::uaccess::validate_user_ptr(value_ptr, 32).is_err() { return crate::errno::EFAULT; }
+    let idx = match find_timerfd(fd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        // Write interval
+        let int_sec = TIMERFDS[idx].interval_ns / 1_000_000_000;
+        let int_nsec = TIMERFDS[idx].interval_ns % 1_000_000_000;
+        crate::uaccess::put_user(value_ptr, int_sec);
+        crate::uaccess::put_user(value_ptr + 8, int_nsec);
+
+        // Write remaining time
+        use rux_arch::TimerOps;
+        let now_ms = crate::arch::Arch::ticks();
+        let remaining_ms = TIMERFDS[idx].next_expiry_ms.saturating_sub(now_ms);
+        let rem_sec = remaining_ms / 1000;
+        let rem_nsec = (remaining_ms % 1000) * 1_000_000;
+        crate::uaccess::put_user(value_ptr + 16, rem_sec);
+        crate::uaccess::put_user(value_ptr + 24, rem_nsec);
+    }
+    0
+}
+
+/// Read from timerfd: returns u64 count of expirations since last read.
+/// Blocks until at least one expiration.
+pub fn timerfd_read(fd: usize, buf: usize) -> isize {
+    let idx = match find_timerfd(fd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    unsafe {
+        let nonblock = fd < 64 && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
+        for _ in 0..60_000u32 {
+            // Check for expirations
+            use rux_arch::TimerOps;
+            let now_ms = crate::arch::Arch::ticks();
+            if TIMERFDS[idx].next_expiry_ms > 0 && now_ms >= TIMERFDS[idx].next_expiry_ms {
+                TIMERFDS[idx].expirations += 1;
+                if TIMERFDS[idx].interval_ns > 0 {
+                    // Recurring: set next expiry
+                    TIMERFDS[idx].next_expiry_ms = now_ms + (TIMERFDS[idx].interval_ns / 1_000_000).max(1);
+                } else {
+                    // One-shot: disarm
+                    TIMERFDS[idx].next_expiry_ms = 0;
+                }
+            }
+            if TIMERFDS[idx].expirations > 0 {
+                let val = TIMERFDS[idx].expirations;
+                TIMERFDS[idx].expirations = 0;
+                *(buf as *mut u64) = val;
+                return 8;
+            }
+            if nonblock { return crate::errno::EAGAIN; }
+            use rux_arch::HaltOps;
+            crate::arch::Arch::halt_until_interrupt();
+        }
+        crate::errno::EAGAIN
+    }
+}
+
+pub fn timerfd_close(fd: usize) {
+    if let Some(idx) = find_timerfd(fd) {
+        unsafe { TIMERFDS[idx].active = false; }
+    }
+}
+
+pub fn timerfd_has_data(fd: usize) -> bool {
+    find_timerfd(fd).map(|idx| unsafe {
+        use rux_arch::TimerOps;
+        let now_ms = crate::arch::Arch::ticks();
+        TIMERFDS[idx].next_expiry_ms > 0 && now_ms >= TIMERFDS[idx].next_expiry_ms
+            || TIMERFDS[idx].expirations > 0
+    }).unwrap_or(false)
+}
+
 /// mmap(addr, len, prot, flags, fd, offset) — POSIX.1
 ///
 /// Supports MAP_ANONYMOUS (zeroed pages) and MAP_PRIVATE file-backed
@@ -463,24 +740,23 @@ pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -
 pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     if fds_ptr == 0 || nfds == 0 { return 0; }
 
-    // For socket FDs: poll network and retry until data arrives or timeout
-    let has_sockets = unsafe {
+    // Check if we have blocking-capable fds (sockets, eventfd, timerfd)
+    let needs_blocking = unsafe {
         (0..nfds.min(64)).any(|i| {
             let entry = (fds_ptr + i * 8) as *const u8;
             let fd = *(entry as *const i32) as usize;
-            fd < 64 && super::socket::is_socket(fd)
+            fd < 64 && (super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd))
         })
     };
 
-    let max_iters = if has_sockets && timeout_ms > 0 {
-        // Use actual timeout in ms. Each iteration with halt_until_interrupt ~1ms.
-        timeout_ms.min(30_000) // cap at 30 seconds
+    let max_iters = if needs_blocking && timeout_ms > 0 {
+        timeout_ms.min(30_000)
     } else { 1 };
 
     for _attempt in 0..max_iters {
         // Poll smoltcp (drains all available frames in one call)
         #[cfg(feature = "net")]
-        if has_sockets {
+        if needs_blocking {
             unsafe {
                 use rux_arch::TimerOps;
                 rux_net::poll(crate::arch::Arch::ticks());
@@ -513,6 +789,13 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
                         revents |= 1;
                     }
                 }
+            } else if f.active && is_eventfd(fd) {
+                // eventfd: readable if counter > 0, always writable
+                if events & 1 != 0 && eventfd_has_data(fd) { revents |= 1; }
+                if events & 4 != 0 { revents |= 4; }
+            } else if f.active && is_timerfd(fd) {
+                // timerfd: readable if expired
+                if events & 1 != 0 && timerfd_has_data(fd) { revents |= 1; }
             } else if f.active || fd <= 2 {
                 // Console fds and regular file fds are always ready
                 if events & 1 != 0 { revents |= 1; }   // POLLIN
