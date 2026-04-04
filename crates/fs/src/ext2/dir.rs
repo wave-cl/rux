@@ -74,6 +74,11 @@ pub(crate) unsafe fn lookup(fs: &Ext2Fs, dir_ino: u32, name: &[u8]) -> Result<u3
 
 /// Read directory entries starting at `offset` (byte offset into dir data).
 /// Writes the next entry into `entry` and returns true. Returns false when done.
+/// Cache for readdir: remembers the byte position of the last returned entry
+/// so sequential readdir calls don't restart from byte 0 every time.
+/// This turns O(N²) directory listing into O(N).
+static mut READDIR_CACHE: (u32, usize, usize) = (0, 0, 0); // (dir_ino, last_idx, last_byte_pos)
+
 pub(crate) unsafe fn readdir(
     fs: &Ext2Fs,
     dir_ino: u32,
@@ -84,11 +89,27 @@ pub(crate) unsafe fn readdir(
     let size = raw.size as usize;
     let bs = fs.block_size as usize;
 
-    // offset is a sequential index (0, 1, 2...), not a byte offset.
-    // Walk from byte 0 and skip `offset` valid entries to find the one we want.
+    // Use cached byte position if this is a sequential read of the same directory
+    let (start_pos, start_idx) = if READDIR_CACHE.0 == dir_ino
+        && READDIR_CACHE.1 < offset
+        && offset == READDIR_CACHE.1 + 1
+    {
+        (READDIR_CACHE.2, READDIR_CACHE.1 + 1)
+    } else if offset == 0 {
+        (0, 0)
+    } else if READDIR_CACHE.0 == dir_ino && READDIR_CACHE.1 == offset {
+        // Re-reading same entry (shouldn't happen but handle it)
+        // Walk from cached position of previous entry
+        let prev_offset = if offset > 0 { offset - 1 } else { 0 };
+        if READDIR_CACHE.1 == prev_offset { (READDIR_CACHE.2, prev_offset) }
+        else { (0, 0) }
+    } else {
+        (0, 0) // non-sequential: restart from beginning
+    };
+
     let mut buf = [0u8; 4096];
-    let mut pos = 0usize;
-    let mut idx = 0usize;
+    let mut pos = start_pos;
+    let mut idx = start_idx;
 
     while pos < size {
         let file_block = (pos / bs) as u32;
@@ -113,6 +134,8 @@ pub(crate) unsafe fn readdir(
                 entry.name_len = name_len.min(255) as u8;
                 entry.name[..entry.name_len as usize]
                     .copy_from_slice(&buf[off + 8..off + 8 + entry.name_len as usize]);
+                // Cache position for next sequential call
+                READDIR_CACHE = (dir_ino, offset, pos + rec_len);
                 return Ok(true);
             }
             idx += 1;
@@ -121,6 +144,8 @@ pub(crate) unsafe fn readdir(
         pos += rec_len;
     }
 
+    // Reset cache at end of directory
+    READDIR_CACHE = (0, 0, 0);
     Ok(false)
 }
 
