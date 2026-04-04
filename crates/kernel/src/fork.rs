@@ -111,11 +111,21 @@ pub unsafe fn sys_fork() -> isize {
     }).count();
     if live_children >= 32 { return crate::errno::EAGAIN; }
 
-    // Auto-reap zombie children to free task slots (SIGCHLD ignored)
+    // Auto-reap zombie children to free task slots + page tables
     for i in 0..MAX_PROCS {
         if TASK_TABLE[i].active && TASK_TABLE[i].ppid == my_pid
             && TASK_TABLE[i].state == TaskState::Zombie
         {
+            // Free child's page table (COW-aware)
+            let child_pt_root = TASK_TABLE[i].pt_root;
+            if child_pt_root != 0 {
+                let alloc = crate::kstate::alloc();
+                let child_pt = crate::arch::PageTable::from_root(
+                    rux_klib::PhysAddr::new(child_pt_root as usize)
+                );
+                child_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
+                TASK_TABLE[i].pt_root = 0;
+            }
             TASK_TABLE[i].active = false;
             TASK_TABLE[i].state = TaskState::Free;
         }
