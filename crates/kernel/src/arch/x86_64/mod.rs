@@ -86,6 +86,11 @@ impl rux_arch::ArchInfo for X86_64 {
     const MACHINE_NAME: &'static [u8] = b"x86_64";
 }
 
+impl rux_arch::MemoryLayout for X86_64 {
+    const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000; // 128 TiB
+    const INTERP_BASE: u64 = 0x40000000; // 1 GiB (above identity map)
+}
+
 impl super::StatLayout for X86_64 {
     const STAT_SIZE: usize = 144;
     const INO_OFF: usize = 8;
@@ -127,5 +132,27 @@ unsafe impl super::KernelMapOps for X86_64 {
         let dev_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::NO_CACHE);
         pt.identity_map_range(PhysAddr::new(0xFEE00000), 4096, dev_flags, alloc)
             .expect("lapic map");
+    }
+}
+
+/// Probe and initialize virtio-net via PCI. Called from boot.rs.
+#[cfg(feature = "net")]
+pub unsafe fn probe_and_init_net(alloc: &mut rux_mm::frame::BuddyAllocator, log: fn(&str)) {
+    if rux_drivers::pci::find_device(rux_drivers::pci::VIRTIO_VENDOR, 0x1000).is_none() {
+        return;
+    }
+    let rx_pg = alloc.alloc_order(2).ok();
+    let tx_pg = alloc.alloc_order(2).ok();
+    if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
+        core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 16384);
+        core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 16384);
+        if rux_drivers::virtio::net_pci::init(rx.as_usize(), tx.as_usize()) {
+            crate::boot::finish_net_init(
+                rux_drivers::virtio::net_pci::mac(),
+                |f| rux_drivers::virtio::net_pci::send(f),
+                |b| rux_drivers::virtio::net_pci::recv(b),
+                "virtio-net-pci", log,
+            );
+        }
     }
 }

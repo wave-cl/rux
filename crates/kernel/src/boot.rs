@@ -75,50 +75,9 @@ pub unsafe fn boot(params: BootParams) -> ! {
         vfs_ptr, alloc_ptr, &cmdparams, params.virtio_mmio_base, log,
     );
 
-    // Probe for virtio-net device (arch-specific probe, shared init)
-    #[cfg(all(target_arch = "aarch64", feature = "net"))]
-    {
-        use rux_mm::FrameAllocator;
-        let alloc = &mut *alloc_ptr;
-        if let Some(net_base) = rux_drivers::virtio::net::probe_mmio() {
-            let rx_pg = alloc.alloc_order(1).ok();
-            let tx_pg = alloc.alloc_order(1).ok();
-            if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
-                core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 8192);
-                core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 8192);
-                if rux_drivers::virtio::net::init_mmio(net_base, rx.as_usize(), tx.as_usize()) {
-                    finish_net_init(
-                        rux_drivers::virtio::net::mac(),
-                        |f| rux_drivers::virtio::net::send(f),
-                        |b| rux_drivers::virtio::net::recv(b),
-                        "virtio-net", log,
-                    );
-                }
-            }
-        }
-    }
-
-    #[cfg(all(target_arch = "x86_64", feature = "net"))]
-    {
-        use rux_mm::FrameAllocator;
-        if rux_drivers::pci::find_device(rux_drivers::pci::VIRTIO_VENDOR, 0x1000).is_some() {
-            let alloc = &mut *alloc_ptr;
-            let rx_pg = alloc.alloc_order(2).ok();
-            let tx_pg = alloc.alloc_order(2).ok();
-            if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
-                core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 16384);
-                core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 16384);
-                if rux_drivers::virtio::net_pci::init(rx.as_usize(), tx.as_usize()) {
-                    finish_net_init(
-                        rux_drivers::virtio::net_pci::mac(),
-                        |f| rux_drivers::virtio::net_pci::send(f),
-                        |b| rux_drivers::virtio::net_pci::recv(b),
-                        "virtio-net-pci", log,
-                    );
-                }
-            }
-        }
-    }
+    // Probe for virtio-net device (arch-specific driver, shared stack init)
+    #[cfg(feature = "net")]
+    crate::arch::probe_and_init_net(&mut *alloc_ptr, log);
 
     // Mount procfs at /proc and devfs at /dev
     {
@@ -187,7 +146,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
 /// Complete virtio-net initialization: configure smoltcp stack and print MAC.
 /// Called from both aarch64 (MMIO) and x86_64 (PCI) probe paths.
 #[cfg(feature = "net")]
-unsafe fn finish_net_init(
+pub unsafe fn finish_net_init(
     mac: [u8; 6],
     send: fn(&[u8]) -> bool,
     recv: fn(&mut [u8]) -> Option<usize>,

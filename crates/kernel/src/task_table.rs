@@ -79,10 +79,7 @@ pub struct TaskSlot {
     pub futex_addr: usize,      // address being waited on (WaitingForFutex)
 
     // ── FPU/SIMD state ──────────────────────────────────────────────
-    #[cfg(target_arch = "x86_64")]
-    pub fpu_state: rux_arch::x86_64::context::FpuState,
-    #[cfg(target_arch = "aarch64")]
-    pub fpu_state: rux_arch::aarch64::context::FpuState,
+    pub fpu_state: rux_arch::FpuState,
 }
 
 impl TaskSlot {
@@ -104,10 +101,7 @@ impl TaskSlot {
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
             waiting_pipe_id: 0,
-            #[cfg(target_arch = "x86_64")]
-            fpu_state: rux_arch::x86_64::context::FpuState::new(),
-            #[cfg(target_arch = "aarch64")]
-            fpu_state: rux_arch::aarch64::context::FpuState::new(),
+            fpu_state: rux_arch::FpuState::new(),
         }
     }
 }

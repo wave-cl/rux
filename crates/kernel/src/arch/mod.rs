@@ -36,6 +36,12 @@ pub type ArchPte = rux_arch::aarch64::pte::Aarch64Pte;
 
 pub use rux_arch::StatLayout;
 
+/// Re-export arch-specific net probe (used by boot.rs).
+#[cfg(all(target_arch = "x86_64", not(feature = "native"), feature = "net"))]
+pub use x86_64::probe_and_init_net;
+#[cfg(all(target_arch = "aarch64", not(feature = "native"), feature = "net"))]
+pub use aarch64::probe_and_init_net;
+
 /// Fill a Linux struct stat buffer from VFS InodeStat.
 /// Delegates to the `StatLayout::fill_stat` default method in rux-arch.
 pub unsafe fn fill_linux_stat<A: StatLayout>(buf: usize, s: &rux_fs::InodeStat) {

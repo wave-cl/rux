@@ -428,3 +428,16 @@ pub trait SigactionLayout {
         }
     }
 }
+
+/// Architecture-specific memory layout constants.
+///
+/// Provides virtual address limits and base addresses that differ per arch.
+/// Used by demand paging, ELF loading, and address space management.
+pub trait MemoryLayout {
+    /// Upper limit of user-space virtual addresses (exclusive).
+    /// x86_64: 0x0000_8000_0000_0000 (128 TiB), aarch64: 0x1_0000_0000 (4 GiB)
+    const USER_ADDR_LIMIT: u64;
+    /// Base virtual address for the dynamic linker (ld.so).
+    /// Must not overlap kernel identity map or user binary.
+    const INTERP_BASE: u64;
+}

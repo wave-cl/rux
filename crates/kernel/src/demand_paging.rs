@@ -3,12 +3,7 @@
 /// Used by both x86_64 and aarch64 fault handlers.
 /// Provides: demand page allocation, COW resolution, and SIGSEGV delivery.
 
-/// Upper limit of user-space virtual addresses.
-/// Must cover all possible user mappings including stack (0x80000000).
-#[cfg(target_arch = "x86_64")]
-const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000;
-#[cfg(target_arch = "aarch64")]
-const USER_ADDR_LIMIT: u64 = 0x0001_0000_0000; // 4GB — full TTBR0 range
+use rux_arch::MemoryLayout;
 
 /// Allocate and map a zero-filled RWX user page at the faulting address.
 /// Returns true if the page was successfully mapped.
@@ -40,13 +35,13 @@ pub unsafe fn demand_page(addr: usize) -> bool {
 /// should deliver SIGSEGV or panic (kernel fault).
 pub unsafe fn handle_user_fault(addr: u64, is_write: bool) -> bool {
     // COW resolution for write faults to user addresses
-    if is_write && addr < USER_ADDR_LIMIT {
+    if is_write && addr < crate::arch::Arch::USER_ADDR_LIMIT {
         if crate::cow::handle_cow_fault(addr as usize).is_ok() {
             return true;
         }
     }
     // Demand paging for any fault at a valid user address (>= 0x1000 avoids null guard)
-    if addr >= 0x1000 && addr < USER_ADDR_LIMIT {
+    if addr >= 0x1000 && addr < crate::arch::Arch::USER_ADDR_LIMIT {
         if demand_page(addr as usize) {
             return true;
         }

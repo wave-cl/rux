@@ -70,6 +70,11 @@ impl rux_arch::ArchInfo for Aarch64 {
     const MACHINE_NAME: &'static [u8] = b"aarch64";
 }
 
+impl rux_arch::MemoryLayout for Aarch64 {
+    const USER_ADDR_LIMIT: u64 = 0x0001_0000_0000; // 4 GiB (full TTBR0 range)
+    const INTERP_BASE: u64 = 0x20000000; // 512 MiB (avoids aarch64 identity map)
+}
+
 impl super::StatLayout for Aarch64 {
     const STAT_SIZE: usize = 128;
     const INO_OFF: usize = 8;
@@ -109,5 +114,26 @@ unsafe impl super::KernelMapOps for Aarch64 {
         // virtio-mmio region (for ext2 root disk access from any page table)
         pt.identity_map_range(PhysAddr::new(0x0a000000), 0x10000, dev_flags, alloc)
             .expect("virtio-mmio map");
+    }
+}
+
+/// Probe and initialize virtio-net via MMIO. Called from boot.rs.
+#[cfg(feature = "net")]
+pub unsafe fn probe_and_init_net(alloc: &mut rux_mm::frame::BuddyAllocator, log: fn(&str)) {
+    if let Some(net_base) = rux_drivers::virtio::net::probe_mmio() {
+        let rx_pg = alloc.alloc_order(1).ok();
+        let tx_pg = alloc.alloc_order(1).ok();
+        if let (Some(rx), Some(tx)) = (rx_pg, tx_pg) {
+            core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 8192);
+            core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 8192);
+            if rux_drivers::virtio::net::init_mmio(net_base, rx.as_usize(), tx.as_usize()) {
+                crate::boot::finish_net_init(
+                    rux_drivers::virtio::net::mac(),
+                    |f| rux_drivers::virtio::net::send(f),
+                    |b| rux_drivers::virtio::net::recv(b),
+                    "virtio-net", log,
+                );
+            }
+        }
     }
 }

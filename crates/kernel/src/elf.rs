@@ -225,19 +225,12 @@ unsafe fn load_dynamic_interp(
     let interp_elf = rux_elf::parse_elf(&interp_hdr).expect("interp ELF parse failed");
 
     // 4. Load interpreter at a base address outside the kernel identity map.
-    // x86_64: identity map 0-128MB → 0x40000000 (1GB) is safe user VA.
-    // aarch64: identity map 0x40000000-0x48000000 → 0x20000000 (512MB) avoids collision.
-    #[cfg(target_arch = "x86_64")]
-    const INTERP_BASE: u64 = 0x40000000;
-    #[cfg(target_arch = "aarch64")]
-    const INTERP_BASE: u64 = 0x20000000;
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    const INTERP_BASE: u64 = 0x20000000;
     // Randomize interpreter base for ASLR (0-255 page offset = 0-1MB)
     let interp_base = {
+        use rux_arch::MemoryLayout;
         use rux_arch::TimerOps;
         let interp_entropy = ((crate::arch::Arch::ticks() >> 16) & 0xFF) as u64;
-        INTERP_BASE + interp_entropy * 4096
+        crate::arch::Arch::INTERP_BASE + interp_entropy * 4096
     };
     let mut interp_reader = VfsReader { ino: interp_ino };
     let mut pt_adapter = PtAdapter { pt: upt };
