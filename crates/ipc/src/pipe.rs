@@ -8,7 +8,7 @@ const PIPE_BUF_SIZE: usize = 4096;
 const MAX_PIPES: usize = 32;
 
 /// Maximum concurrent processes (must match kernel's MAX_PROCS).
-const MAX_WAITERS: usize = 16;
+const MAX_WAITERS: usize = 32;
 
 struct PipeBuf {
     buf: [u8; PIPE_BUF_SIZE],

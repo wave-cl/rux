@@ -55,11 +55,11 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
         } else {
             0 // root
         };
-        let mut offset = if fd < 64 { (*rux_fs::fdtable::FD_TABLE)[fd].offset } else { 0 };
+        let mut offset = if fd < rux_fs::fdtable::MAX_FDS { (*rux_fs::fdtable::FD_TABLE)[fd].offset } else { 0 };
         let result = rux_fs::getdents::pack_getdents64(
             crate::kstate::fs(), dir_ino, buf_ptr as *mut u8, bufsize, &mut offset,
         );
-        if fd < 64 { (*rux_fs::fdtable::FD_TABLE)[fd].offset = offset; }
+        if fd < rux_fs::fdtable::MAX_FDS { (*rux_fs::fdtable::FD_TABLE)[fd].offset = offset; }
         result
     }
 }

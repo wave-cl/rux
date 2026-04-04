@@ -149,7 +149,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         if eventfd_has_data(fd) { revents |= EPOLLIN; }
                     } else if is_timerfd(fd) {
                         if timerfd_has_data(fd) { revents |= EPOLLIN; }
-                    } else if fd < 64 && (*fdt::FD_TABLE)[fd].is_pipe {
+                    } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].is_pipe {
                         // Pipe: check if data available in the pipe buffer
                         let pid = (*fdt::FD_TABLE)[fd].pipe_id;
                         if crate::pipe::has_data(pid) { revents |= EPOLLIN; }
@@ -162,7 +162,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         if super::socket::socket_can_write(fd) { revents |= EPOLLOUT; }
                     } else if is_eventfd(fd) {
                         revents |= EPOLLOUT; // eventfd always writable
-                    } else if fd < 64 && (*fdt::FD_TABLE)[fd].is_pipe && (*fdt::FD_TABLE)[fd].pipe_write {
+                    } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].is_pipe && (*fdt::FD_TABLE)[fd].pipe_write {
                         revents |= EPOLLOUT; // write end of pipe always writable (simplified)
                     } else if !is_timerfd(fd) {
                         revents |= EPOLLOUT; // regular files always writable
@@ -241,7 +241,7 @@ pub fn eventfd_read(fd: usize, buf: usize) -> isize {
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = fd < 64 && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
+        let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
         // Block until counter > 0
         for _ in 0..30_000u32 {
             if EVENTFDS[idx].counter > 0 {
@@ -416,7 +416,7 @@ pub fn timerfd_read(fd: usize, buf: usize) -> isize {
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = fd < 64 && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
+        let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
         for _ in 0..60_000u32 {
             // Check for expirations
             use rux_arch::TimerOps;
@@ -498,7 +498,7 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
         if prot & PROT_EXEC != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::EXECUTE); }
         if prot == 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
 
-        if mmap_flags & MAP_ANONYMOUS == 0 && fd < 64 {
+        if mmap_flags & MAP_ANONYMOUS == 0 && fd < rux_fs::fdtable::MAX_FDS {
             // File-backed: allocate pages and read file data
             use rux_fs::FileSystem;
             let fs = crate::kstate::fs();
@@ -714,7 +714,7 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
 
     let has_sockets = (0..nfds).any(|fd| {
         ((read_set | write_set) & (1u64 << fd)) != 0
-            && fd < 64
+            && fd < rux_fs::fdtable::MAX_FDS
             && super::socket::is_socket(fd)
     });
 
@@ -822,7 +822,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
         (0..nfds.min(64)).any(|i| {
             let entry = (fds_ptr + i * 8) as *const u8;
             let fd = *(entry as *const i32) as usize;
-            fd < 64 && (super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd))
+            fd < rux_fs::fdtable::MAX_FDS && (super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd))
         })
     };
 

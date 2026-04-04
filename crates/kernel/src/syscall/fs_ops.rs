@@ -64,7 +64,7 @@ pub fn fstatat(dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize
         let fs = crate::kstate::fs();
 
         // AT_EMPTY_PATH: stat the FD itself
-        if flags & AT_EMPTY_PATH != 0 && path.is_empty() && dirfd < 64 {
+        if flags & AT_EMPTY_PATH != 0 && path.is_empty() && dirfd < rux_fs::fdtable::MAX_FDS {
             if let Some(ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
                 let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
                 if fs.stat(ino, &mut vfs_stat).is_err() { return crate::errno::ENOENT; }
@@ -103,7 +103,7 @@ pub fn statx(dirfd: usize, pathname: usize, flags: usize, _mask: usize, buf: usi
         let path = crate::uaccess::read_user_cstr(pathname);
         let fs = crate::kstate::fs();
 
-        let ino = if flags & AT_EMPTY_PATH != 0 && path.is_empty() && dirfd < 64 {
+        let ino = if flags & AT_EMPTY_PATH != 0 && path.is_empty() && dirfd < rux_fs::fdtable::MAX_FDS {
             match rux_fs::fdtable::get_fd_inode(dirfd) {
                 Some(ino) => ino,
                 None => return crate::errno::EBADF,

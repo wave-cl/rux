@@ -174,7 +174,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
             }
 
             // Non-blocking: return EINPROGRESS
-            let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
+            let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
             if nonblock { return crate::errno::EINPROGRESS; }
 
             // Blocking: poll until established
@@ -268,7 +268,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
+        let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
 
         #[cfg(feature = "net")]
         {
@@ -373,7 +373,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
         #[cfg(feature = "net")]
         {
             use rux_arch::TimerOps;
-            let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
+            let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
             let listen_handle = to_handle(SOCKETS[idx].smol_handle_raw);
             let max_iters = if nonblock { 10u32 } else { 60_000u32 };
 

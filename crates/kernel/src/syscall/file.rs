@@ -77,7 +77,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         }
     }
     unsafe {
-        if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+        if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
             return pipe_io(fd, buf, len, false);
         }
         fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
@@ -106,7 +106,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     }
     unsafe {
         // O_APPEND: seek to end of file before writing
-        if fd < 64 && (*fdt::FD_TABLE)[fd].active
+        if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active
             && (*fdt::FD_TABLE)[fd].flags & 0x400 != 0  // O_APPEND = 0x400
             && !(*fdt::FD_TABLE)[fd].is_pipe
             && !(*fdt::FD_TABLE)[fd].is_console
@@ -118,7 +118,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
                 (*fdt::FD_TABLE)[fd].offset = stat.size as usize;
             }
         }
-        let result = if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+        let result = if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
             pipe_io(fd, buf, len, true)
         } else {
             fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
@@ -134,7 +134,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
             return crate::errno::EPIPE;
         }
         // Update mtime on successful file write (skip pipes/console)
-        if result > 0 && fd < 64 {
+        if result > 0 && fd < rux_fs::fdtable::MAX_FDS {
             let f = &(*fdt::FD_TABLE)[fd];
             if f.active && !f.is_console && !f.is_pipe {
                 use rux_fs::FileSystem;
@@ -209,7 +209,7 @@ pub fn openat(dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isize
             return open(pathname, flags, mode);
         }
         // Relative path + real dirfd: resolve relative to dirfd's directory inode
-        if dirfd < 64 {
+        if dirfd < rux_fs::fdtable::MAX_FDS {
             if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
                 let fs = crate::kstate::fs();
                 let o_creat = flags & O_CREAT != 0;
@@ -270,7 +270,7 @@ pub fn close(fd: usize) -> isize {
     unsafe {
         // If closing a pipe end, wake any tasks blocked on that pipe so they
         // can see the new EOF / EPIPE condition.
-        let pipe_id = if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+        let pipe_id = if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
             Some((*fdt::FD_TABLE)[fd].pipe_id)
         } else {
             None
@@ -324,7 +324,7 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
         3 => {
             // F_GETFL
             unsafe {
-                if fd < 64 && (*fdt::FD_TABLE)[fd].active {
+                if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active {
                     (*fdt::FD_TABLE)[fd].flags as isize
                 } else {
                     0
@@ -334,7 +334,7 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
         4 => {
             // F_SETFL — store the flags (O_NONBLOCK, O_APPEND, etc.)
             unsafe {
-                if fd < 64 && (*fdt::FD_TABLE)[fd].active {
+                if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active {
                     (*fdt::FD_TABLE)[fd].flags = arg as u32;
                 }
             }

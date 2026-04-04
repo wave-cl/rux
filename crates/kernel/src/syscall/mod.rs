@@ -122,7 +122,7 @@ pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, i
     if path.first() == Some(&b'/') || dirfd == at_fdcwd {
         return resolve_with_cwd(path);
     }
-    if dirfd < 64 {
+    if dirfd < rux_fs::fdtable::MAX_FDS {
         if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
             let fs = crate::kstate::fs();
             return rux_fs::path::resolve_path_at(fs, dir_ino, path).map_err(|_| -2isize);
@@ -139,7 +139,7 @@ pub unsafe fn resolve_parent_at(dirfd: usize, path_ptr: usize) -> Result<(rux_fs
         return resolve_parent_and_name(path_ptr);
     }
     // Relative path with dirfd
-    if dirfd < 64 {
+    if dirfd < rux_fs::fdtable::MAX_FDS {
         if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
             let fs = crate::kstate::fs();
             if let Some(slash) = path.iter().rposition(|&b| b == b'/') {
