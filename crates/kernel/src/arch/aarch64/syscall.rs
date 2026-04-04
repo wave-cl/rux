@@ -265,6 +265,7 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[32] = Syscall::Flock;
     t[103] = Syscall::SetItimer;
     t[72] = Syscall::Pselect6;
+    t[115] = Syscall::ClockNanosleep;
     t[50] = Syscall::Fchdir;
     t[46] = Syscall::Flock; // ftruncate → stub as no-op (same as flock)
     // Sockets
