@@ -25,13 +25,33 @@ pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
     }
 }
 
+/// Blocking pipe I/O loop: retries on EAGAIN, wakes waiters on success.
+unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
+    let pipe_id = (*fdt::FD_TABLE)[fd].pipe_id;
+    loop {
+        let r = if is_write {
+            rux_ipc::pipe::write_ex(pipe_id, buf as *const u8, len, true)
+        } else {
+            rux_ipc::pipe::read_ex(pipe_id, buf as *mut u8, len, true)
+        };
+        if r != crate::errno::EAGAIN {
+            if r > 0 { crate::pipe::wake_pipe_waiters(pipe_id); }
+            return r;
+        }
+        let eof_val = if is_write { crate::errno::EPIPE } else { 0 };
+        if !can_pipe_block() { return eof_val; }
+        pipe_block(pipe_id);
+        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
+            return eof_val;
+        }
+    }
+}
+
 pub fn read(fd: usize, buf: usize, len: usize) -> isize {
-    // Socket read → recvfrom
     if super::socket::is_socket(fd) {
         return super::socket::sys_recvfrom(fd, buf, len, 0, 0, 0);
     }
     if fd == 0 && fdt::is_console_fd(0) {
-        // stdin from console — route through TTY line discipline
         unsafe {
             let tty = &mut *(&raw mut crate::tty::TTY);
             let ptr = buf as *mut u8;
@@ -44,20 +64,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
     }
     unsafe {
         if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
-            let pipe_id = (*fdt::FD_TABLE)[fd].pipe_id;
-            loop {
-                let r = rux_ipc::pipe::read_ex(pipe_id, buf as *mut u8, len, true);
-                if r != -11 {
-                    if r > 0 { crate::pipe::wake_pipe_waiters(pipe_id); }
-                    return r;
-                }
-                if !can_pipe_block() { return 0; }
-                pipe_block(pipe_id);
-                // After waking, re-check that the FD is still a valid pipe
-                if fd >= 64 || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
-                    return 0;
-                }
-            }
+            return pipe_io(fd, buf, len, false);
         }
         fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
     }
@@ -80,19 +87,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     }
     unsafe {
         let result = if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
-            let pipe_id = (*fdt::FD_TABLE)[fd].pipe_id;
-            loop {
-                let r = rux_ipc::pipe::write_ex(pipe_id, buf as *const u8, len, true);
-                if r != -11 {
-                    if r > 0 { crate::pipe::wake_pipe_waiters(pipe_id); }
-                    break r;
-                }
-                if !can_pipe_block() { break crate::errno::EPIPE; }
-                pipe_block(pipe_id);
-                if fd >= 64 || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
-                    break crate::errno::EPIPE;
-                }
-            }
+            pipe_io(fd, buf, len, true)
         } else {
             fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
         };

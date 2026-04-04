@@ -483,6 +483,23 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 
 // ── Generic signal delivery ─────────────────────────────────────────────
 
+/// Post-syscall processing: deliver pending signals and check for reschedule.
+/// Called by both x86_64 and aarch64 syscall return paths.
+#[inline]
+pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
+    let ret = if (*(&raw const PROCESS)).signal_hot.has_deliverable() {
+        crate::uaccess::stac();
+        let r = generic_deliver_signal::<S>(result);
+        crate::uaccess::clac();
+        r
+    } else {
+        result
+    };
+    let sched = crate::scheduler::get();
+    if sched.need_resched { sched.schedule(); }
+    ret
+}
+
 /// Deliver a pending signal to the user-space handler.
 /// Thin wrapper around `rux_proc::signal::deliver_signal` that supplies kernel state.
 pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64) -> i64 {

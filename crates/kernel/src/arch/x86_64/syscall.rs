@@ -320,21 +320,8 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     let sc = translate_x86_64(nr as usize);
     let result = crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, a3 as usize, a4 as usize) as i64;
 
-    // Check for pending signals before returning to userspace
-    unsafe {
-        if (*(&raw const crate::syscall::PROCESS)).signal_hot.has_deliverable() {
-            crate::uaccess::stac(); // signal frame is on user stack
-            let sig_result = crate::syscall::generic_deliver_signal::<super::X86_64>(result);
-            crate::uaccess::clac();
-            return sig_result;
-        }
-        // Check for pending reschedule (set by timer tick or fork).
-        let sched = crate::scheduler::get();
-        if sched.need_resched {
-            sched.schedule();
-        }
-    }
-    result
+    // Signal delivery + reschedule check (shared with aarch64)
+    unsafe { crate::syscall::post_syscall::<super::X86_64>(result) }
 }
 
 /// Signal frame layout on user stack (x86_64).
