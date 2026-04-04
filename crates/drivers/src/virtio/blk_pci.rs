@@ -14,6 +14,18 @@ const VIRTIO_BLK_T_IN: u32 = 0;
 const VIRTIO_BLK_T_OUT: u32 = 1;
 const VIRTIO_BLK_S_OK: u8 = 0;
 
+/// Driver lock — prevents concurrent access to virtio descriptor ring.
+static DRIVER_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn driver_lock() {
+    while DRIVER_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+}
+fn driver_unlock() {
+    DRIVER_LOCK.store(false, core::sync::atomic::Ordering::Release);
+}
+
 const STATUS_ACK: u8 = 1;
 const STATUS_DRIVER: u8 = 2;
 const STATUS_DRIVER_OK: u8 = 4;
@@ -131,6 +143,13 @@ impl VirtioBlkPci {
 
 /// Read a single sector using the global PCI state.
 unsafe fn pci_read_sector(sector: u64, buf: *mut u8) -> Result<(), DriverError> {
+    driver_lock();
+    let r = pci_read_sector_inner(sector, buf);
+    driver_unlock();
+    r
+}
+
+unsafe fn pci_read_sector_inner(sector: u64, buf: *mut u8) -> Result<(), DriverError> {
     if !STATE.initialized { return Err(DriverError::InvalidState); }
     if STATE.num_free < 3 { return Err(DriverError::ResourceBusy); }
 
@@ -220,6 +239,13 @@ unsafe fn pci_read_sector(sector: u64, buf: *mut u8) -> Result<(), DriverError> 
 
 /// Write a single sector using the global PCI state.
 unsafe fn pci_write_sector(sector: u64, buf: *const u8) -> Result<(), DriverError> {
+    driver_lock();
+    let r = pci_write_sector_inner(sector, buf);
+    driver_unlock();
+    r
+}
+
+unsafe fn pci_write_sector_inner(sector: u64, buf: *const u8) -> Result<(), DriverError> {
     if !STATE.initialized { return Err(DriverError::InvalidState); }
     if STATE.num_free < 3 { return Err(DriverError::ResourceBusy); }
 

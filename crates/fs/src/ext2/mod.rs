@@ -120,6 +120,9 @@ impl Ext2Fs {
 
     /// Read a filesystem block into `buf`. Uses the block cache.
     pub(crate) unsafe fn read_block(&self, block_no: u64, buf: &mut [u8]) -> Result<(), VfsError> {
+        // Bounds check: prevent reading beyond the disk (256K blocks = 256MB max)
+        if block_no > 262144 { return Err(VfsError::IoError); }
+
         let bs = self.block_size as usize;
         let inner = &mut *self.inner.get();
 
