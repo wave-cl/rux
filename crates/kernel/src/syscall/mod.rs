@@ -245,6 +245,27 @@ pub enum Syscall {
     Pause, Getitimer,
     Lchown, Setfsuid, Setfsgid,
     MemfdCreate, CopyFileRange, Statx,
+    // Batch 3: POSIX IPC
+    Semget, Semop, Semctl, Shmget, Shmat, Shmdt, Shmctl,
+    Msgget, Msgsnd, Msgrcv, Msgctl,
+    // Batch 3: process extensions
+    Clone3, Waitid, Execveat,
+    ProcessVmReadv, ProcessVmWritev,
+    Ptrace, SetSid, GetSid2,
+    // Batch 3: resource limits
+    Getrlimit2, Setrlimit,
+    // Batch 3: timer/clock
+    ClockSettime, ClockGettime2, TimerCreate, TimerSettime, TimerGettime, TimerGetoverrun, TimerDelete,
+    // Batch 3: filesystem extended
+    Readahead, FallocateRange, Quotactl,
+    OpenByHandleAt, NameToHandleAt,
+    // Batch 3: misc Linux
+    Kcmp, Getrandom2, Pidfd, PidfdSendSignal,
+    IoUringSetup, IoUringEnter, IoUringRegister,
+    Close2, Dup3_2,
+    Ppoll2,
+    RecvFrom2, SendTo2,
+    Socketpair, Gethostname,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -551,6 +572,69 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::MemfdCreate => crate::errno::ENOSYS,
         Syscall::CopyFileRange => crate::errno::ENOSYS,
         Syscall::Statx => crate::errno::ENOSYS, // TODO: implement
+
+        // ── Batch 3: POSIX IPC ─────────────────────────────────────
+        Syscall::Semget | Syscall::Semop | Syscall::Semctl => crate::errno::ENOSYS,
+        Syscall::Shmget | Syscall::Shmat | Syscall::Shmdt | Syscall::Shmctl => crate::errno::ENOSYS,
+        Syscall::Msgget | Syscall::Msgsnd | Syscall::Msgrcv | Syscall::Msgctl => crate::errno::ENOSYS,
+
+        // ── Batch 3: process extensions ───────────────────────────
+        Syscall::Clone3 => crate::errno::ENOSYS, // musl falls back to clone
+        Syscall::Waitid => crate::errno::ENOSYS, // musl uses wait4
+        Syscall::Execveat => crate::errno::ENOSYS, // musl uses execve
+        Syscall::ProcessVmReadv | Syscall::ProcessVmWritev => crate::errno::ENOSYS,
+        Syscall::Ptrace => crate::errno::ENOSYS,
+        Syscall::SetSid => posix::setsid(),
+        Syscall::GetSid2 => 0, // return session leader pid (stub: 0)
+
+        // ── Batch 3: resource limits ──────────────────────────────
+        Syscall::Getrlimit2 => {
+            // getrlimit(resource, rlim) — return infinity for all resources
+            if a1 != 0 {
+                if crate::uaccess::validate_user_ptr(a1, 16).is_err() { return crate::errno::EFAULT; }
+                unsafe {
+                    *(a1 as *mut u64) = u64::MAX; // rlim_cur = RLIM_INFINITY
+                    *((a1 + 8) as *mut u64) = u64::MAX; // rlim_max = RLIM_INFINITY
+                }
+            }
+            0
+        }
+        Syscall::Setrlimit => 0, // accept but ignore
+
+        // ── Batch 3: timer/clock ──────────────────────────────────
+        Syscall::ClockSettime => crate::errno::EPERM, // not allowed
+        Syscall::ClockGettime2 => posix::clock_gettime(a0, a1), // alias
+        Syscall::TimerCreate | Syscall::TimerSettime | Syscall::TimerGettime |
+        Syscall::TimerGetoverrun | Syscall::TimerDelete => crate::errno::ENOSYS,
+
+        // ── Batch 3: filesystem extended ──────────────────────────
+        Syscall::Readahead => 0, // advisory — no-op
+        Syscall::FallocateRange => 0, // same as fallocate
+        Syscall::Quotactl => crate::errno::ENOSYS,
+        Syscall::OpenByHandleAt | Syscall::NameToHandleAt => crate::errno::ENOSYS,
+
+        // ── Batch 3: misc Linux ───────────────────────────────────
+        Syscall::Kcmp => crate::errno::ENOSYS,
+        Syscall::Getrandom2 => posix::getrandom(a0, a1, a2), // alias
+        Syscall::Pidfd | Syscall::PidfdSendSignal => crate::errno::ENOSYS,
+        Syscall::IoUringSetup | Syscall::IoUringEnter | Syscall::IoUringRegister => crate::errno::ENOSYS,
+        Syscall::Close2 => posix::close(a0), // alias
+        Syscall::Dup3_2 => posix::dup3(a0, a1, a2), // alias
+        Syscall::Ppoll2 => posix::ppoll(a0, a1, a2, a3), // alias
+        Syscall::RecvFrom2 => socket::sys_recvfrom(a0, a1, a2, a3, a4, 0),
+        Syscall::SendTo2 => socket::sys_sendto(a0, a1, a2, a3, a4, 0),
+        Syscall::Socketpair => crate::errno::ENOSYS,
+        Syscall::Gethostname => {
+            // gethostname(buf, len) — write hostname to user buffer
+            if crate::uaccess::validate_user_ptr(a0, a1.min(256)).is_err() { return crate::errno::EFAULT; }
+            unsafe {
+                let hostname = b"rux";
+                let len = hostname.len().min(a1);
+                core::ptr::copy_nonoverlapping(hostname.as_ptr(), a0 as *mut u8, len);
+                if len < a1 { *(a0 as *mut u8).add(len) = 0; }
+            }
+            0
+        }
 
         Syscall::Rseq => crate::errno::ENOSYS,
 

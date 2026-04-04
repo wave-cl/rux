@@ -196,10 +196,10 @@ fn translate_aarch64(nr: usize) -> crate::syscall::Syscall {
 }
 
 /// Compile-time syscall number → Syscall enum table for aarch64 Linux.
-const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
+const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 437] = {
     use crate::syscall::Syscall;
     let u = Syscall::Unknown(9999); // sentinel — overwritten for valid entries
-    let mut t = [u; 294];
+    let mut t = [u; 437];
     // File I/O
     t[56] = Syscall::OpenAt;     t[57] = Syscall::Close;
     t[63] = Syscall::Read;       t[64] = Syscall::Write;
@@ -303,7 +303,7 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     // Phase 5 event/timer fds
     t[19] = Syscall::Eventfd2;
     t[85] = Syscall::TimerfdCreate; t[86] = Syscall::TimerfdSettime;
-    t[107] = Syscall::TimerfdGettime;
+    t[87] = Syscall::TimerfdGettime;
     // Batch 2: memory
     t[233] = Syscall::Madvise;   t[232] = Syscall::Mincore;
     t[216] = Syscall::Mremap;    t[227] = Syscall::Msync;
@@ -334,6 +334,32 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[152] = Syscall::Setfsuid;  t[153] = Syscall::Setfsgid;
     t[279] = Syscall::MemfdCreate; t[285] = Syscall::CopyFileRange;
     t[291] = Syscall::Statx;
+    // Batch 3: POSIX IPC
+    t[190] = Syscall::Semget;    t[193] = Syscall::Semop;
+    t[191] = Syscall::Semctl;    t[194] = Syscall::Shmget;
+    t[196] = Syscall::Shmat;     t[197] = Syscall::Shmdt;
+    t[195] = Syscall::Shmctl;    t[186] = Syscall::Msgget;
+    t[189] = Syscall::Msgsnd;    t[188] = Syscall::Msgrcv;
+    t[187] = Syscall::Msgctl;
+    // Batch 3: process
+    t[435] = Syscall::Clone3;    t[95] = Syscall::Waitid;
+    t[281] = Syscall::Execveat;  t[270] = Syscall::ProcessVmReadv;
+    t[271] = Syscall::ProcessVmWritev; t[117] = Syscall::Ptrace;
+    // Batch 3: timer/clock
+    t[112] = Syscall::ClockSettime; t[107] = Syscall::TimerCreate;
+    t[110] = Syscall::TimerSettime; t[108] = Syscall::TimerGettime;
+    t[109] = Syscall::TimerGetoverrun; t[111] = Syscall::TimerDelete;
+    // Batch 3: filesystem
+    t[213] = Syscall::Readahead; t[60] = Syscall::Quotactl;
+    t[264] = Syscall::NameToHandleAt; t[265] = Syscall::OpenByHandleAt;
+    // Batch 3: misc
+    t[272] = Syscall::Kcmp;
+    t[434] = Syscall::Pidfd;     t[424] = Syscall::PidfdSendSignal;
+    t[425] = Syscall::IoUringSetup; t[426] = Syscall::IoUringEnter;
+    t[427] = Syscall::IoUringRegister;
+    t[436] = Syscall::Close2;    // close_range
+    t[199] = Syscall::Socketpair;
+    t[73] = Syscall::Ppoll2;     // ppoll (alias to ppoll handler)
     t
 };
 

@@ -412,10 +412,10 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
 /// Compile-time syscall number → Syscall enum table for x86_64 Linux.
 /// Index = Linux syscall number. Unknown entries are Syscall::Unknown(0)
 /// (never returned — translate_x86_64 uses .get() which returns None for gaps).
-const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
+const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     use crate::syscall::Syscall;
     let u = Syscall::Unknown(0); // placeholder for gaps
-    let mut t = [u; 335];
+    let mut t = [u; 437];
     // File I/O
     t[0] = Syscall::Read;        t[1] = Syscall::Write;
     t[19] = Syscall::Readv;
@@ -560,6 +560,33 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     t[122] = Syscall::Setfsuid;  t[123] = Syscall::Setfsgid;
     t[319] = Syscall::MemfdCreate; t[326] = Syscall::CopyFileRange;
     t[332] = Syscall::Statx;
+    // Batch 3: POSIX IPC
+    t[64] = Syscall::Semget;     t[65] = Syscall::Semop;
+    t[66] = Syscall::Semctl;     t[29] = Syscall::Shmget;
+    t[30] = Syscall::Shmat;      t[67] = Syscall::Shmdt;
+    t[31] = Syscall::Shmctl;     t[68] = Syscall::Msgget;
+    t[69] = Syscall::Msgsnd;     t[70] = Syscall::Msgrcv;
+    t[71] = Syscall::Msgctl;
+    // Batch 3: process
+    t[435] = Syscall::Clone3;    t[247] = Syscall::Waitid;
+    t[322] = Syscall::Execveat;  t[310] = Syscall::ProcessVmReadv;
+    t[311] = Syscall::ProcessVmWritev; t[101] = Syscall::Ptrace;
+    // Batch 3: resource limits
+    t[160] = Syscall::Setrlimit;
+    // Batch 3: timer/clock
+    t[227] = Syscall::ClockSettime; t[222] = Syscall::TimerCreate;
+    t[223] = Syscall::TimerSettime; t[224] = Syscall::TimerGettime;
+    t[225] = Syscall::TimerGetoverrun; t[226] = Syscall::TimerDelete;
+    // Batch 3: filesystem
+    t[187] = Syscall::Readahead; t[179] = Syscall::Quotactl;
+    t[303] = Syscall::NameToHandleAt; t[304] = Syscall::OpenByHandleAt;
+    // Batch 3: misc
+    t[312] = Syscall::Kcmp;
+    t[434] = Syscall::Pidfd;     t[424] = Syscall::PidfdSendSignal;
+    t[425] = Syscall::IoUringSetup; t[426] = Syscall::IoUringEnter;
+    t[427] = Syscall::IoUringRegister;
+    t[436] = Syscall::Close2;    // close_range
+    t[53] = Syscall::Socketpair;
     t
 };
 
