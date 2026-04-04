@@ -376,6 +376,7 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
         // TCSETS / TCSETSW / TCSETSF: set terminal attributes
         0x5402 | 0x5403 | 0x5404 => {
             if arg != 0 {
+                if crate::uaccess::validate_user_ptr(arg, 60).is_err() { return crate::errno::EFAULT; }
                 unsafe {
                     let tty = &mut *(&raw mut crate::tty::TTY);
                     let lflag = *((arg + 12) as *const u32);
@@ -388,12 +389,14 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
         }
         TIOCGPGRP => {
             if arg != 0 {
+                if crate::uaccess::validate_user_ptr(arg, 4).is_err() { return crate::errno::EFAULT; }
                 unsafe { *(arg as *mut i32) = crate::tty::TTY.foreground_pgid as i32; }
             }
             0
         }
         TIOCSPGRP => {
             if arg != 0 {
+                if crate::uaccess::validate_user_ptr(arg, 4).is_err() { return crate::errno::EFAULT; }
                 unsafe { crate::tty::TTY.foreground_pgid = *(arg as *const i32) as u32; }
             }
             0

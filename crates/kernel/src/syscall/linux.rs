@@ -7,7 +7,7 @@
 
 /// pipe2(pipefd, flags) — create a pipe.
 pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
-    if pipefd_ptr == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(pipefd_ptr, 8).is_err() { return crate::errno::EFAULT; }
     match crate::pipe::create() {
         Ok((_pipe_id, read_fd, write_fd)) => {
             unsafe {

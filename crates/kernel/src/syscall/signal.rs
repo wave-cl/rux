@@ -13,6 +13,9 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
         None => return crate::errno::EINVAL,
     };
     if sig == Signal::Kill || sig == Signal::Stop { return crate::errno::EINVAL; }
+    // Validate user pointers for sigaction struct (32 bytes on x86_64, 24 on aarch64)
+    if act_ptr != 0 && crate::uaccess::validate_user_ptr(act_ptr, 32).is_err() { return crate::errno::EFAULT; }
+    if oldact_ptr != 0 && crate::uaccess::validate_user_ptr(oldact_ptr, 32).is_err() { return crate::errno::EFAULT; }
 
     unsafe {
         let cold = &mut (*(&raw mut super::PROCESS)).signal_cold;

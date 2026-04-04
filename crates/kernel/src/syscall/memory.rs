@@ -248,6 +248,8 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
 /// mprotect(addr, len, prot) — POSIX.1: change page protection.
 pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
     if addr & 0xFFF != 0 { return crate::errno::EINVAL; }
+    use rux_arch::MemoryLayout;
+    if len > crate::arch::Arch::USER_ADDR_LIMIT as usize { return crate::errno::EINVAL; }
     unsafe {
         let upt = super::current_user_page_table();
         let aligned_len = (len + 0xFFF) & !0xFFF;
@@ -275,8 +277,9 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
 /// Returns number of fds with events, or 0 on timeout.
 /// ppoll wrapper: reads timeout from timespec pointer
 pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -> isize {
-    // timeout_ptr: NULL = wait forever, valid pointer = read timespec
-    // Guard against invalid pointers (0xFFFFFFFF, low addresses in null guard)
+    if fds_ptr != 0 && nfds > 0 {
+        if crate::uaccess::validate_user_ptr(fds_ptr, nfds.min(64) * 8).is_err() { return crate::errno::EFAULT; }
+    }
     let timeout_ms = if timeout_ptr >= 0x10000 && timeout_ptr < 0x8000_0000_0000 {
         unsafe {
             let sec: u64 = crate::uaccess::get_user(timeout_ptr);

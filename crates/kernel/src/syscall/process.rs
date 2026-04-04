@@ -86,6 +86,7 @@ pub fn exit(status: i32) -> ! {
 /// - pid > 0: wait for specific PID
 /// - options & 1 (WNOHANG): non-blocking
 pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
+    if wstatus_ptr != 0 && crate::uaccess::validate_user_ptr(wstatus_ptr, 4).is_err() { return crate::errno::EFAULT; }
     unsafe {
         use crate::task_table::*;
 
