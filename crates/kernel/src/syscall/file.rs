@@ -10,12 +10,12 @@ const O_NONBLOCK: usize = 0x800;
 /// readv(fd, iov, iovcnt) — scatter read
 pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
     if iovcnt == 0 { return 0; }
+    let cnt = iovcnt.min(16);
+    if crate::uaccess::validate_user_ptr(iov_ptr, cnt * 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
-        // Read first iov entry and delegate to read()
-        // (simplified: only uses first buffer for now)
         let iov = iov_ptr as *const [usize; 2];
         let mut total: isize = 0;
-        for i in 0..iovcnt.min(16) {
+        for i in 0..cnt {
             let base = (*iov.add(i))[0];
             let len = (*iov.add(i))[1];
             if base == 0 || len == 0 { continue; }
@@ -80,13 +80,13 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         return super::socket::sys_sendto(fd, buf, len, 0, 0, 0);
     }
     if fd <= 2 && fdt::is_console_fd(fd) {
-        // Write raw bytes to console without \n→\r\n conversion.
-        // User programs handle their own line endings.
+        let write_len = len.min(65536); // Cap to prevent unbounded spin
+        if crate::uaccess::validate_user_ptr(buf, write_len).is_err() { return crate::errno::EFAULT; }
         unsafe {
             let ptr = buf as *const u8;
-            for i in 0..len { Arch::write_byte(*ptr.add(i)); }
+            for i in 0..write_len { Arch::write_byte(*ptr.add(i)); }
         }
-        return len as isize;
+        return write_len as isize;
     }
     unsafe {
         let result = if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
@@ -311,11 +311,12 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
 
 /// writev(fd, iov, iovcnt) — POSIX.1
 pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
+    let cnt = iovcnt.min(16);
+    if crate::uaccess::validate_user_ptr(iov_ptr, cnt * 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
-        // iovec: { iov_base: *mut u8, iov_len: usize } — two usize fields
         let iov = iov_ptr as *const [usize; 2];
         let mut total: isize = 0;
-        for i in 0..iovcnt {
+        for i in 0..cnt {
             let base = (*iov.add(i))[0];
             let len = (*iov.add(i))[1];
             let n = write(fd, base, len);
@@ -415,7 +416,7 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
             let written = write(out_fd, buf.as_ptr() as usize, n as usize);
             if written < 0 { return if total > 0 { total } else { written }; }
             total += written;
-            remaining -= n as usize;
+            remaining = remaining.saturating_sub(n as usize);
         }
         total
     }

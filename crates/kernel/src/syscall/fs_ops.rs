@@ -207,10 +207,8 @@ pub fn creat(path_ptr: usize) -> isize {
             Ok(ino) => {
                 let now = super::current_time_secs();
                 let _ = fs.utimes(ino, now, now);
-                let cstr = path_ptr as *const u8;
-                let mut len = 0usize;
-                while *cstr.add(len) != 0 && len < 256 { len += 1; }
-                fdt::sys_open(core::slice::from_raw_parts(cstr, len), crate::kstate::fs())
+                // Open by inode directly — avoid re-reading path from user memory (TOCTOU)
+                fdt::sys_open_ino(ino, 0o02, crate::kstate::fs()) // O_RDWR
             }
             Err(_) => crate::errno::EEXIST,
         }
@@ -480,6 +478,7 @@ pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize)
         let (atime, mtime) = if times_ptr == 0 {
             (now, now)
         } else {
+            if crate::uaccess::validate_user_ptr(times_ptr, 32).is_err() { return crate::errno::EFAULT; }
             let a_sec = *(times_ptr as *const u64);
             let m_sec = *((times_ptr + 16) as *const u64);
             let a_nsec = *((times_ptr + 8) as *const u64);

@@ -181,7 +181,8 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
 pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
         let len = super::PROCESS.fs_ctx.cwd_path_len;
-        if buf == 0 || size < len + 1 { return crate::errno::ERANGE; }
+        if crate::uaccess::validate_user_ptr(buf, size.max(1)).is_err() { return crate::errno::EFAULT; }
+        if size < len + 1 { return crate::errno::ERANGE; }
         // dispatch() provides stac/clac wrapping — no inner pair needed
         let ptr = buf as *mut u8;
         for i in 0..len {
@@ -194,7 +195,7 @@ pub fn getcwd(buf: usize, size: usize) -> isize {
 
 /// uname(buf) — POSIX.1
 pub fn uname(buf: usize) -> isize {
-    if buf == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(buf, 325).is_err() { return crate::errno::EFAULT; }
     // dispatch() provides stac/clac wrapping for SMAP
     unsafe {
         let ptr = buf as *mut u8;
@@ -233,7 +234,7 @@ pub fn uname(buf: usize) -> isize {
     0
 }
 pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
-    if tp == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(tp, 16).is_err() { return crate::errno::EFAULT; }
     let ticks = Arch::ticks();
     unsafe {
         crate::uaccess::put_user(tp, ticks / 1000);
@@ -243,7 +244,7 @@ pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
 }
 
 pub fn nanosleep(req_ptr: usize) -> isize {
-    if req_ptr == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(req_ptr, 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let tv_sec: u64 = crate::uaccess::get_user(req_ptr);
         let tv_nsec: u64 = crate::uaccess::get_user(req_ptr + 8);

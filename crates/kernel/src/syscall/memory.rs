@@ -14,6 +14,9 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
     const PROT_EXEC: usize = 4;
 
     if len == 0 { return crate::errno::EINVAL; }
+    // Guard against integer overflow in alignment arithmetic
+    use rux_arch::MemoryLayout;
+    if len > crate::arch::Arch::USER_ADDR_LIMIT as usize { return crate::errno::ENOMEM; }
 
     unsafe {
         let aligned_len = (len + 0xFFF) & !0xFFF;

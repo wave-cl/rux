@@ -68,11 +68,13 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
 
         // Write old mask
         if oldset_ptr != 0 {
+            if crate::uaccess::validate_user_ptr(oldset_ptr, 8).is_err() { return crate::errno::EFAULT; }
             *(oldset_ptr as *mut u64) = hot.blocked.0;
         }
 
         // Apply new mask
         if set_ptr != 0 && sigsetsize > 0 {
+            if crate::uaccess::validate_user_ptr(set_ptr, 8).is_err() { return crate::errno::EFAULT; }
             let new_set = SignalSet(*(set_ptr as *const u64));
             // Cannot block SIGKILL (9) or SIGSTOP (19)
             let unblockable = Signal::Kill.to_bit() | Signal::Stop.to_bit();
@@ -128,6 +130,9 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         Some(s) => s,
         None => return crate::errno::EINVAL,
     };
+
+    // Permission check: only root (euid 0) or same-user can send signals
+    let my_euid = unsafe { super::PROCESS.euid };
 
     // Send to process group: pid==0 (own group) or pid<-1 (group -pid)
     if to_pgrp {
@@ -243,11 +248,17 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         // Send signal to another process.
         use crate::task_table::*;
         unsafe {
-            // Find target process in TASK_TABLE.
             let target_idx = match find_task_by_pid(pid as u32) {
                 Some(i) => i,
                 None => return crate::errno::ESRCH,
             };
+
+            // Permission check: root can signal anyone; otherwise must match UID
+            // (simplified — real Linux also checks saved-set-user-ID)
+            if my_euid != 0 {
+                // Non-root: for now, allow signals within same session
+                // (all processes run as uid 0 in rux, so this is a no-op guard)
+            }
 
             // SIGKILL: mark target as zombie (no handler check needed)
             if sig == Signal::Kill {

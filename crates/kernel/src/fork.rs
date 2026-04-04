@@ -103,6 +103,11 @@ unsafe fn enqueue_child(child_idx: usize) {
 /// # Safety
 /// Manipulates page tables, kernel stacks, and scheduler state.
 pub unsafe fn sys_fork() -> isize {
+    // Per-parent fork limit to prevent fork bombs
+    let my_pid = TASK_TABLE[current_task_idx()].pid;
+    let children = (0..MAX_PROCS).filter(|&i| TASK_TABLE[i].active && TASK_TABLE[i].ppid == my_pid).count();
+    if children >= 16 { return crate::errno::EAGAIN; }
+
     let child_idx = match alloc_task_slot() {
         Some(idx) => idx,
         None => return crate::errno::EAGAIN,

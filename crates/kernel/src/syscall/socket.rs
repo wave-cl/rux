@@ -114,7 +114,7 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
         Some(i) => i,
         None => return crate::errno::EBADF,
     };
-    if addr_ptr == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let port = u16::from_be_bytes([
             crate::uaccess::get_user::<u8>(addr_ptr + 2),
@@ -133,6 +133,7 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
 
 /// connect(fd, addr, addrlen)
 pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
+    if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
     let idx = match unsafe { resolve_socket(fd) } {
         Some(i) => i,
         None => return crate::errno::EBADF,
@@ -152,9 +153,11 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
         let sock = &mut SOCKETS[idx];
         sock.connected_ip = dst_ip;
         sock.connected_port = dst_port;
-        sock.connected = true;
 
-        if sock.sock_type != SOCK_STREAM { return 0; } // UDP connect = just store addr
+        if sock.sock_type != SOCK_STREAM {
+            sock.connected = true; // UDP connect: just store addr
+            return 0;
+        }
         if addr_ptr == 0 { return crate::errno::EFAULT; }
 
         #[cfg(feature = "net")]
@@ -177,7 +180,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
             // Blocking: poll until established
             for _ in 0..30_000u32 {
                 rux_net::poll(crate::arch::Arch::ticks());
-                if rux_net::tcp_can_send(handle) { return 0; }
+                if rux_net::tcp_can_send(handle) { SOCKETS[idx].connected = true; return 0; }
                 if !rux_net::tcp_is_active(handle) { return crate::errno::ECONNREFUSED; }
                 use rux_arch::HaltOps;
                 crate::arch::Arch::halt_until_interrupt();
@@ -196,7 +199,9 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
         None => return crate::errno::EBADF,
     };
     unsafe {
+        if buf_ptr != 0 && crate::uaccess::validate_user_ptr(buf_ptr, len.min(1400)).is_err() { return crate::errno::EFAULT; }
         let (dst_ip, dst_port) = if addr_ptr != 0 {
+            if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
             let p = u16::from_be_bytes([
                 crate::uaccess::get_user::<u8>(addr_ptr + 2),
                 crate::uaccess::get_user::<u8>(addr_ptr + 3),
@@ -255,6 +260,9 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
 
 /// recvfrom(fd, buf, len, flags, src_addr, addrlen)
 pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
+    if buf_ptr != 0 && crate::uaccess::validate_user_ptr(buf_ptr, len.min(4096)).is_err() { return crate::errno::EFAULT; }
+    if addr_ptr != 0 && crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
+    if addrlen_ptr != 0 && crate::uaccess::validate_user_ptr(addrlen_ptr, 4).is_err() { return crate::errno::EFAULT; }
     let idx = match unsafe { resolve_socket(fd) } {
         Some(i) => i,
         None => return crate::errno::EBADF,
@@ -372,7 +380,7 @@ pub fn sys_close_socket(fd: usize) -> isize {
 // ── sendmsg / recvmsg / sendmmsg / recvmmsg ─────────────────────────
 
 pub fn sys_sendmsg(fd: usize, msghdr_ptr: usize) -> isize {
-    if msghdr_ptr == 0 { return crate::errno::EINVAL; }
+    if crate::uaccess::validate_user_ptr(msghdr_ptr, 56).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let msg_name: usize = crate::uaccess::get_user(msghdr_ptr);
         let msg_namelen: u32 = crate::uaccess::get_user(msghdr_ptr + 8);
@@ -386,7 +394,7 @@ pub fn sys_sendmsg(fd: usize, msghdr_ptr: usize) -> isize {
 }
 
 pub fn sys_recvmsg(fd: usize, msghdr_ptr: usize) -> isize {
-    if msghdr_ptr == 0 { return crate::errno::EINVAL; }
+    if crate::uaccess::validate_user_ptr(msghdr_ptr, 56).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let msg_name: usize = crate::uaccess::get_user(msghdr_ptr);
         let msg_iov: usize = crate::uaccess::get_user(msghdr_ptr + 16);
@@ -438,6 +446,8 @@ pub fn sys_recvmmsg(fd: usize, msgvec_ptr: usize, vlen: usize) -> isize {
 // ── getsockopt / getsockname / getpeername ──────────────────────────
 
 pub fn sys_getsockopt(_fd: usize, _level: usize, optname: usize, optval: usize, optlen: usize) -> isize {
+    if optval != 0 && crate::uaccess::validate_user_ptr(optval, 4).is_err() { return crate::errno::EFAULT; }
+    if optlen != 0 && crate::uaccess::validate_user_ptr(optlen, 4).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let val = match optname {
             4 => 0i32,     // SO_ERROR = success
@@ -452,6 +462,7 @@ pub fn sys_getsockopt(_fd: usize, _level: usize, optname: usize, optval: usize, 
 
 pub fn sys_getsockname(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
     if addr_ptr == 0 { return 0; }
+    if crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let sa = addr_ptr as *mut u8;
         *sa.add(0) = 2; *sa.add(1) = 0;
@@ -472,6 +483,7 @@ pub fn sys_getsockname(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
 
 pub fn sys_getpeername(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
     if addr_ptr == 0 { return 0; }
+    if crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
         let sa = addr_ptr as *mut u8;
