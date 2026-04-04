@@ -92,6 +92,7 @@ exception_vectors:
     ldr     x11, [sp, #256]
     msr     elr_el1, x10
     msr     spsr_el1, x11
+    isb
     ldp     x0,  x1,  [sp, #0]
     ldp     x2,  x3,  [sp, #16]
     ldp     x4,  x5,  [sp, #32]
