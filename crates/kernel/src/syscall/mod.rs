@@ -335,10 +335,12 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             use rux_arch::TimerOps;
             let ticks = crate::arch::Arch::ticks();
             if a0 != 0 {
+                if crate::uaccess::validate_user_ptr(a0, 16).is_err() { return crate::errno::EFAULT; }
                 *(a0 as *mut u64) = ticks / 1000;                // tv_sec
                 *((a0 + 8) as *mut u64) = (ticks % 1000) * 1000; // tv_usec
             }
             if a1 != 0 {
+                if crate::uaccess::validate_user_ptr(a1, 8).is_err() { return crate::errno::EFAULT; }
                 *(a1 as *mut i32) = 0;   // tz_minuteswest
                 *((a1 + 4) as *mut i32) = 0; // tz_dsttime
             }
@@ -380,7 +382,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Getpeername => socket::sys_getpeername(a0, a1, a2),
         Syscall::Sendmsg => socket::sys_sendmsg(a0, a1),
         Syscall::Recvmsg => socket::sys_recvmsg(a0, a1),
-        Syscall::Shutdown => 0,
+        Syscall::Shutdown => socket::sys_shutdown(a0, a1),
         Syscall::Sendmmsg => socket::sys_sendmmsg(a0, a1, a2),
         Syscall::Recvmmsg => socket::sys_recvmmsg(a0, a1, a2),
 

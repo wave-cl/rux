@@ -335,11 +335,15 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
 
     match request {
         TIOCGWINSZ => {
-            if arg != 0 { unsafe { *(arg as *mut [u16; 4]) = [24, 80, 0, 0]; } }
+            if arg != 0 {
+                if crate::uaccess::validate_user_ptr(arg, 8).is_err() { return crate::errno::EFAULT; }
+                unsafe { *(arg as *mut [u16; 4]) = [24, 80, 0, 0]; }
+            }
             0
         }
         TCGETS => {
             if arg != 0 {
+                if crate::uaccess::validate_user_ptr(arg, 60).is_err() { return crate::errno::EFAULT; }
                 unsafe {
                     let tty = &*(&raw const crate::tty::TTY);
                     let ptr = arg as *mut u8;

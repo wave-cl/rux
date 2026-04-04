@@ -325,6 +325,21 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
     }
 }
 
+/// shutdown(fd, how) — shut down part of a full-duplex connection
+pub fn sys_shutdown(fd: usize, how: usize) -> isize {
+    // how: 0=SHUT_RD, 1=SHUT_WR, 2=SHUT_RDWR
+    #[cfg(feature = "net")]
+    unsafe {
+        let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
+        if SOCKETS[idx].sock_type == SOCK_STREAM && SOCKETS[idx].smol_handle_raw >= 0 {
+            if how == 1 || how == 2 {
+                rux_net::tcp_close(to_handle(SOCKETS[idx].smol_handle_raw));
+            }
+        }
+    }
+    0
+}
+
 /// close a socket
 pub fn sys_close_socket(fd: usize) -> isize {
     unsafe {

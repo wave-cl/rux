@@ -79,7 +79,7 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> 
 /// statfs(path, buf) — Linux filesystem stats.
 /// Used by `df` to show disk space.
 pub fn statfs(_path_ptr: usize, buf_ptr: usize) -> isize {
-    if buf_ptr == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(buf_ptr, 120).is_err() { return crate::errno::EFAULT; }
     unsafe {
         use rux_mm::FrameAllocator;
         let total_frames = 16384usize;
@@ -116,7 +116,7 @@ pub fn set_tid_address(tidptr: usize) -> isize {
 /// sysinfo(info) — Linux-specific system information.
 /// Used by `free`, `uptime`, and other utilities.
 pub fn sysinfo(info_ptr: usize) -> isize {
-    if info_ptr == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(info_ptr, 112).is_err() { return crate::errno::EFAULT; }
     unsafe {
         use rux_arch::TimerOps;
         let ticks = crate::arch::Arch::ticks();

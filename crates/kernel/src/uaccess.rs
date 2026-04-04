@@ -6,6 +6,22 @@
 
 use rux_arch::UserAccessOps;
 
+// ── Pointer validation ──────────────────────────────────────────────
+
+/// Validate that a user pointer + length is entirely within user address space.
+/// Returns EFAULT if the pointer is in the null guard page, in kernel space,
+/// or if ptr+len overflows the user limit.
+#[inline]
+pub fn validate_user_ptr(ptr: usize, len: usize) -> Result<(), isize> {
+    use rux_arch::MemoryLayout;
+    let limit = crate::arch::Arch::USER_ADDR_LIMIT as usize;
+    if ptr < 0x1000 || ptr >= limit || ptr.wrapping_add(len) > limit {
+        Err(crate::errno::EFAULT)
+    } else {
+        Ok(())
+    }
+}
+
 // ── SMAP/PAN primitives ─────────────────────────────────────────────
 
 /// Begin user memory access (arch-specific: STAC on x86_64, no-op on aarch64).

@@ -177,8 +177,12 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
         }
     } else { 5_000 };
 
-    let read_set = if readfds_ptr != 0 { unsafe { *(readfds_ptr as *const u64) } } else { 0 };
-    let write_set = if writefds_ptr != 0 { unsafe { *(writefds_ptr as *const u64) } } else { 0 };
+    let read_set = if readfds_ptr != 0 && crate::uaccess::validate_user_ptr(readfds_ptr, 8).is_ok() {
+        unsafe { *(readfds_ptr as *const u64) }
+    } else { 0 };
+    let write_set = if writefds_ptr != 0 && crate::uaccess::validate_user_ptr(writefds_ptr, 8).is_ok() {
+        unsafe { *(writefds_ptr as *const u64) }
+    } else { 0 };
 
     let has_sockets = unsafe {
         (0..nfds).any(|fd| {
