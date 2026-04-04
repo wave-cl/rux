@@ -118,7 +118,7 @@ pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
 /// Resolve a path relative to a directory FD (for *at syscalls).
 /// If dirfd is AT_FDCWD (-100) or path is absolute, falls back to CWD.
 pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, isize> {
-    let at_fdcwd = (-100i32) as usize;
+    let at_fdcwd = (-100isize) as usize;
     if path.first() == Some(&b'/') || dirfd == at_fdcwd {
         return resolve_with_cwd(path);
     }
@@ -134,7 +134,7 @@ pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, i
 /// Resolve (dirfd, path_ptr) to a parent inode + basename, handling *at semantics.
 pub unsafe fn resolve_parent_at(dirfd: usize, path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
     let path = crate::uaccess::read_user_cstr(path_ptr);
-    let at_fdcwd = (-100i32) as usize;
+    let at_fdcwd = (-100isize) as usize;
     if path.first() == Some(&b'/') || dirfd == at_fdcwd {
         return resolve_parent_and_name(path_ptr);
     }

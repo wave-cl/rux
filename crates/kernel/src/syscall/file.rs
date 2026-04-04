@@ -204,7 +204,7 @@ pub fn openat(dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isize
     unsafe {
         let path = crate::uaccess::read_user_cstr(pathname);
         // If path is absolute or dirfd is AT_FDCWD (-100), resolve normally
-        let at_fdcwd = (-100i32) as usize;
+        let at_fdcwd = (-100isize) as usize;
         if path.first() == Some(&b'/') || dirfd == at_fdcwd {
             return open(pathname, flags, mode);
         }
