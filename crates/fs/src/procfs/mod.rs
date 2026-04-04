@@ -491,6 +491,17 @@ fn fmt_cpu_stat(buf: &mut [u8], ticks: u64) -> usize {
     pos += copy_str(&mut buf[pos..], b"cpu  0 0 0 ");
     pos += fmt_u64(&mut buf[pos..], ticks);
     pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0\n");
+    // Per-CPU line (htop expects at least cpu0)
+    pos += copy_str(&mut buf[pos..], b"cpu0 0 0 0 ");
+    pos += fmt_u64(&mut buf[pos..], ticks);
+    pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0\n");
+    // Additional fields htop requires
+    pos += copy_str(&mut buf[pos..], b"intr 0\n");
+    pos += copy_str(&mut buf[pos..], b"ctxt 0\n");
+    pos += copy_str(&mut buf[pos..], b"btime 1700000000\n");
+    pos += copy_str(&mut buf[pos..], b"processes 1\n");
+    pos += copy_str(&mut buf[pos..], b"procs_running 1\n");
+    pos += copy_str(&mut buf[pos..], b"procs_blocked 0\n");
     pos
 }
 
