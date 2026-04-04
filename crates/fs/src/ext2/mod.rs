@@ -322,8 +322,14 @@ impl FileSystem for Ext2Fs {
             let child_ino = dir::remove_entry(self, dir_ino as u32, name.as_bytes())?;
             let mut raw = self.read_inode_raw(child_ino)?;
             raw.links_count = raw.links_count.saturating_sub(1);
-            self.write_inode_raw(child_ino, &raw)?;
-            // TODO: free blocks if links_count == 0
+            if raw.links_count == 0 {
+                // Free all data blocks and the inode itself
+                let _ = self.truncate(child_ino as u64, 0);
+                // Free inode (mark as unused in inode bitmap)
+                let _ = alloc::free_inode(self, child_ino);
+            } else {
+                self.write_inode_raw(child_ino, &raw)?;
+            }
             Ok(())
         }
     }

@@ -104,8 +104,37 @@ pub(crate) unsafe fn alloc_inode(fs: &Ext2Fs) -> Result<u32, VfsError> {
     Err(VfsError::NoSpace)
 }
 
+/// Free an inode back to the bitmap.
+pub(crate) unsafe fn free_inode(fs: &Ext2Fs, ino: u32) -> Result<(), VfsError> {
+    if ino < 2 { return Ok(()); } // never free root inode or inode 0
+    let adj = ino - 1; // inodes are 1-based
+    let group = adj / fs.inodes_per_group;
+    let bit = adj % fs.inodes_per_group;
+
+    let mut bgd_buf = [0u8; 4096];
+    let mut bitmap_buf = [0u8; 4096];
+
+    let bgd_offset = group * 32;
+    let bgd_block = fs.bgdt_block as u64 + (bgd_offset / fs.block_size) as u64;
+    let bgd_off = (bgd_offset % fs.block_size) as usize;
+    fs.read_block(bgd_block, &mut bgd_buf)?;
+
+    let inode_bitmap_block = le32(&bgd_buf, bgd_off + 4) as u64;
+    fs.read_block(inode_bitmap_block, &mut bitmap_buf)?;
+
+    let byte = bit as usize / 8;
+    let mask = 1u8 << (bit % 8);
+    bitmap_buf[byte] &= !mask;
+    fs.write_block(inode_bitmap_block, &bitmap_buf)?;
+
+    let free_inodes = le16(&bgd_buf, bgd_off + 14);
+    set_le16(&mut bgd_buf, bgd_off + 14, free_inodes + 1);
+    fs.write_block(bgd_block, &bgd_buf)?;
+
+    Ok(())
+}
+
 /// Free a block back to the bitmap.
-#[allow(dead_code)]
 pub(crate) unsafe fn free_block(fs: &Ext2Fs, block_num: u32) -> Result<(), VfsError> {
     let first_data_block = if fs.block_size == 1024 { 1u32 } else { 0u32 };
     if block_num <= first_data_block { return Ok(()); } // never free superblock/boot block
