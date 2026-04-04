@@ -2,8 +2,6 @@
 
 use rux_fs::fdtable as fdt;
 use crate::arch::StatLayout;
-#[allow(dead_code)]
-type Arch = crate::arch::Arch;
 const STAT_MODE_OFF: usize = <crate::arch::Arch as StatLayout>::MODE_OFF;
 const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::BLKSIZE_OFF;
 /// stat(pathname, statbuf) — POSIX.1 (follows symlinks)

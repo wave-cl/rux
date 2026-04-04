@@ -43,7 +43,7 @@ const UDP_TX_BUF_SIZE: usize = 4096;
 // ── Static storage (no alloc) ──────────────────────────────────────
 
 static mut DEVICE: VirtioDevice = VirtioDevice::empty();
-static mut CONFIGURED: bool = false;
+static CONFIGURED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static mut OUR_IP: [u8; 4] = [0; 4];
 
 // Socket storage for smoltcp
@@ -107,7 +107,7 @@ pub unsafe fn init(
 
     IFACE = Some(iface);
     SOCKETS = Some(SocketSet::new(&mut *(&raw mut SOCKET_STORAGE) as &mut [SocketStorage<'static>]));
-    CONFIGURED = true;
+    CONFIGURED.store(true, core::sync::atomic::Ordering::Release);
 }
 
 /// Poll the network stack. Call from timer ISR and before socket operations.
@@ -115,7 +115,7 @@ pub unsafe fn init(
 /// # Safety
 /// Must not be called concurrently with other network functions.
 pub unsafe fn poll(timestamp_millis: u64) {
-    if !CONFIGURED { return; }
+    if !CONFIGURED.load(core::sync::atomic::Ordering::Acquire) { return; }
     let iface = IFACE.as_mut().unwrap_unchecked();
     let sockets = SOCKETS.as_mut().unwrap_unchecked();
     let now = Instant::from_millis(timestamp_millis as i64);
@@ -123,7 +123,7 @@ pub unsafe fn poll(timestamp_millis: u64) {
 }
 
 pub fn is_configured() -> bool {
-    unsafe { CONFIGURED }
+    CONFIGURED.load(core::sync::atomic::Ordering::Acquire)
 }
 
 pub fn our_ip() -> [u8; 4] {

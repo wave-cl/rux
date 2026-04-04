@@ -7,6 +7,7 @@ use rux_arch::MemoryLayout;
 
 /// Allocate and map a zero-filled RWX user page at the faulting address.
 /// Returns true if the page was successfully mapped.
+#[inline]
 pub unsafe fn demand_page(addr: usize) -> bool {
     use rux_mm::FrameAllocator;
     let alloc = crate::kstate::alloc();
@@ -33,6 +34,7 @@ pub unsafe fn demand_page(addr: usize) -> bool {
 /// Attempts COW resolution (for write faults), then demand paging.
 /// Returns true if the fault was resolved; false means the caller
 /// should deliver SIGSEGV or panic (kernel fault).
+#[inline]
 pub unsafe fn handle_user_fault(addr: u64, is_write: bool) -> bool {
     // COW resolution for write faults to user addresses
     if is_write && addr < crate::arch::Arch::USER_ADDR_LIMIT {
