@@ -117,6 +117,25 @@ unsafe impl super::KernelMapOps for Aarch64 {
     }
 }
 
+/// Static storage for the MMIO virtio-blk driver (needs 'static for ext2 ref).
+static mut VIRTIO_BLK_MMIO: core::mem::MaybeUninit<rux_drivers::virtio::blk::VirtioBlk> = core::mem::MaybeUninit::uninit();
+
+/// Probe and initialize virtio-blk via MMIO. Returns (device_ptr, capacity_sectors).
+pub unsafe fn probe_blk(vq_addr: usize, log: fn(&str)) -> Option<(*const dyn rux_drivers::BlockDevice, u64)> {
+    let base = rux_drivers::virtio::blk::probe_virtio_blk()?;
+    log("rux: virtio-blk: probing at 0x");
+    { use rux_arch::ConsoleOps; let mut hb = [0u8; 16]; Aarch64::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, base)); }
+    log("\n");
+    match rux_drivers::virtio::blk::VirtioBlk::new(base, vq_addr) {
+        Ok(blk) => {
+            let cap = blk.capacity_sectors();
+            VIRTIO_BLK_MMIO.write(blk);
+            Some((VIRTIO_BLK_MMIO.assume_init_ref() as *const _, cap))
+        }
+        Err(_) => { log("rux: virtio-blk: init failed\n"); None }
+    }
+}
+
 /// Probe and initialize virtio-net via MMIO. Called from boot.rs.
 #[cfg(feature = "net")]
 pub unsafe fn probe_and_init_net(alloc: &mut rux_mm::frame::BuddyAllocator, log: fn(&str)) {

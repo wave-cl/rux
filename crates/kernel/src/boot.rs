@@ -171,74 +171,32 @@ pub unsafe fn finish_net_init(
 
 // ── ext2 root mount ──────────────────────────────────────────────────────
 
-/// Static storage for the ext2 filesystem and virtio-blk drivers.
+/// Static storage for the ext2 filesystem.
 static mut EXT2_FS: core::mem::MaybeUninit<rux_fs::ext2::Ext2Fs> = core::mem::MaybeUninit::uninit();
-static mut VIRTIO_BLK_MMIO: core::mem::MaybeUninit<rux_drivers::virtio::blk::VirtioBlk> = core::mem::MaybeUninit::uninit();
-#[cfg(target_arch = "x86_64")]
-static mut VIRTIO_BLK_PCI: core::mem::MaybeUninit<rux_drivers::virtio::blk_pci::VirtioBlkPci> = core::mem::MaybeUninit::uninit();
 
 /// Try to probe a virtio-blk device and mount ext2 as root.
-/// Tries PCI on x86_64, MMIO on aarch64. Falls back gracefully.
+/// Device probing is arch-specific (PCI on x86_64, MMIO on aarch64).
 unsafe fn try_mount_ext2_root(
     vfs_ptr: *mut rux_fs::vfs::Vfs,
     alloc_ptr: *mut rux_mm::frame::BuddyAllocator,
     _cmdparams: &crate::cmdline::CmdlineParams,
-    virtio_mmio_base: usize,
+    _virtio_mmio_base: usize,
     log: fn(&str),
 ) -> bool {
-    use rux_mm::FrameAllocator;
     let alloc = &mut *alloc_ptr;
 
     // Allocate contiguous 32KB (order 3 = 8 pages) for virtqueue.
-    // Must be contiguous: the device calculates used ring offset from PFN.
     let vq_page = match alloc.alloc_order(3) {
         Ok(p) => p,
         Err(_) => { log("rux: virtio-blk: no memory for virtqueue\n"); return false; }
     };
     core::ptr::write_bytes(vq_page.as_usize() as *mut u8, 0, 32768);
 
-    // ── Platform-specific probe ────────────────────────────────────
-    let blk_dev: *const dyn rux_drivers::BlockDevice;
-    let capacity: u64;
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        log("rux: probing PCI for virtio-blk...\n");
-        match rux_drivers::virtio::blk_pci::VirtioBlkPci::probe(vq_page.as_usize()) {
-            Ok(blk) => {
-                capacity = blk.capacity_sectors();
-                VIRTIO_BLK_PCI.write(blk);
-                blk_dev = VIRTIO_BLK_PCI.assume_init_ref() as *const rux_drivers::virtio::blk_pci::VirtioBlkPci;
-            }
-            Err(_) => {
-                log("rux: no virtio-blk-pci device found\n");
-                return false;
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if virtio_mmio_base == 0 { return false; }
-        let base = match rux_drivers::virtio::blk::probe_virtio_blk() {
-            Some(b) => b,
-            None => { log("rux: no virtio-blk device found\n"); return false; }
-        };
-        log("rux: virtio-blk: probing at 0x");
-        { let mut hb = [0u8; 16]; crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, base)); }
-        log("\n");
-        match rux_drivers::virtio::blk::VirtioBlk::new(base, vq_page.as_usize()) {
-            Ok(blk) => {
-                capacity = blk.capacity_sectors();
-                VIRTIO_BLK_MMIO.write(blk);
-                blk_dev = VIRTIO_BLK_MMIO.assume_init_ref() as *const rux_drivers::virtio::blk::VirtioBlk;
-            }
-            Err(_) => { log("rux: virtio-blk: init failed\n"); return false; }
-        }
-    }
-
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    { return false; }
+    // Arch-specific probe: PCI or MMIO
+    let (blk_dev, capacity) = match crate::arch::probe_blk(vq_page.as_usize(), log) {
+        Some(r) => r,
+        None => return false,
+    };
 
     log("rux: virtio-blk: ");
     { let mut buf = [0u8; 10]; log(rux_klib::fmt::u32_to_str(&mut buf, (capacity / 2048) as u32)); }

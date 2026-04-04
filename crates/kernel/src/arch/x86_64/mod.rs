@@ -135,6 +135,22 @@ unsafe impl super::KernelMapOps for X86_64 {
     }
 }
 
+/// Static storage for the PCI virtio-blk driver (needs 'static for ext2 ref).
+static mut VIRTIO_BLK_PCI: core::mem::MaybeUninit<rux_drivers::virtio::blk_pci::VirtioBlkPci> = core::mem::MaybeUninit::uninit();
+
+/// Probe and initialize virtio-blk via PCI. Returns (device_ptr, capacity_sectors).
+pub unsafe fn probe_blk(vq_addr: usize, log: fn(&str)) -> Option<(*const dyn rux_drivers::BlockDevice, u64)> {
+    log("rux: probing PCI for virtio-blk...\n");
+    match rux_drivers::virtio::blk_pci::VirtioBlkPci::probe(vq_addr) {
+        Ok(blk) => {
+            let cap = blk.capacity_sectors();
+            VIRTIO_BLK_PCI.write(blk);
+            Some((VIRTIO_BLK_PCI.assume_init_ref() as *const _, cap))
+        }
+        Err(_) => { log("rux: no virtio-blk-pci device found\n"); None }
+    }
+}
+
 /// Probe and initialize virtio-net via PCI. Called from boot.rs.
 #[cfg(feature = "net")]
 pub unsafe fn probe_and_init_net(alloc: &mut rux_mm::frame::BuddyAllocator, log: fn(&str)) {
