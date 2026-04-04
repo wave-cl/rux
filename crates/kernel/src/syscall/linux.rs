@@ -145,6 +145,10 @@ pub fn fstatfs(_fd: usize, buf_ptr: usize) -> isize {
 
 /// set_tid_address(tidptr) — Linux: store clear_child_tid pointer, return tid.
 pub fn set_tid_address(tidptr: usize) -> isize {
+    // Validate now — this pointer is dereferenced later on thread exit
+    if tidptr != 0 && crate::uaccess::validate_user_ptr(tidptr, 4).is_err() {
+        return crate::errno::EFAULT;
+    }
     unsafe {
         use crate::task_table::*;
         TASK_TABLE[current_task_idx()].clear_child_tid = tidptr;

@@ -281,7 +281,7 @@ pub fn nanosleep(req_ptr: usize) -> isize {
 /// prlimit64(pid, resource, new_limit, old_limit) — Linux
 /// getrandom(buf, buflen, flags) — fill buffer with random bytes
 pub fn getrandom(buf_ptr: usize, len: usize, _flags: usize) -> isize {
-    if buf_ptr == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(buf_ptr, len).is_err() { return crate::errno::EFAULT; }
     unsafe {
         // Use the same xorshift64 PRNG as /dev/urandom
         use rux_arch::TimerOps;
