@@ -78,28 +78,42 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> 
 
 /// statfs(path, buf) — Linux filesystem stats.
 /// Used by `df` to show disk space.
-pub fn statfs(_path_ptr: usize, buf_ptr: usize) -> isize {
+pub fn statfs(path_ptr: usize, buf_ptr: usize) -> isize {
     if crate::uaccess::validate_user_ptr(buf_ptr, 120).is_err() { return crate::errno::EFAULT; }
     unsafe {
         use rux_mm::FrameAllocator;
-        let total_frames = 16384usize;
-        let free_frames = crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK);
-
         let w = core::mem::size_of::<usize>();
         let p = buf_ptr;
-        // Zero the struct (120 bytes on 64-bit)
-        for i in 0..120 { *(buf_ptr as *mut u8).add(i) = 0; }
+        for i in 0..120 { *(p as *mut u8).add(i) = 0; }
 
-        *(p as *mut usize) = 0x858458F6; // f_type: RAMFS_MAGIC
-        *((p + w) as *mut usize) = 4096;  // f_bsize: block size
-        *((p + 2*w) as *mut usize) = total_frames; // f_blocks
-        *((p + 3*w) as *mut usize) = free_frames;  // f_bfree
-        *((p + 4*w) as *mut usize) = free_frames;  // f_bavail
-        *((p + 5*w) as *mut usize) = 65536;        // f_files (max inodes)
-        *((p + 6*w) as *mut usize) = 65536;        // f_ffree
-        // f_fsid at 7*w (8 bytes) = 0
-        *((p + 9*w) as *mut usize) = 255;          // f_namelen
-        *((p + 10*w) as *mut usize) = 4096;        // f_frsize
+        // Determine filesystem type from path
+        let path = crate::uaccess::read_user_cstr(path_ptr);
+        let is_proc = path.starts_with(b"/proc");
+        let is_dev = path.starts_with(b"/dev");
+        let is_sys = path.starts_with(b"/sys");
+
+        if is_proc || is_dev || is_sys {
+            // Virtual filesystem: no real blocks
+            let magic: usize = if is_proc { 0x9FA0 } else { 0x1373 }; // PROC_SUPER_MAGIC / DEVFS
+            *(p as *mut usize) = magic;
+            *((p + w) as *mut usize) = 4096;  // f_bsize
+            *((p + 9*w) as *mut usize) = 255;  // f_namelen
+            *((p + 10*w) as *mut usize) = 4096; // f_frsize
+        } else {
+            // Real filesystem: report frame allocator stats
+            let alloc = crate::kstate::alloc();
+            let total = alloc.total_frames();
+            let free = alloc.available_frames(rux_mm::PageSize::FourK);
+            *(p as *mut usize) = 0xEF53;        // f_type: EXT2_SUPER_MAGIC
+            *((p + w) as *mut usize) = 4096;     // f_bsize
+            *((p + 2*w) as *mut usize) = total;  // f_blocks
+            *((p + 3*w) as *mut usize) = free;   // f_bfree
+            *((p + 4*w) as *mut usize) = free;   // f_bavail
+            *((p + 5*w) as *mut usize) = 65536;  // f_files
+            *((p + 6*w) as *mut usize) = 65536;  // f_ffree
+            *((p + 9*w) as *mut usize) = 255;    // f_namelen
+            *((p + 10*w) as *mut usize) = 4096;  // f_frsize
+        }
     }
     0
 }
