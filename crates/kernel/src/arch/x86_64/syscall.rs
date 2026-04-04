@@ -490,7 +490,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 335] = {
     // Time / info
     t[96] = Syscall::Gettimeofday; t[97] = Syscall::Getrlimit;
     t[99] = Syscall::Sysinfo;    t[228] = Syscall::ClockGettime;
-    t[137] = Syscall::Statfs;    t[138] = Syscall::Statfs;
+    t[137] = Syscall::Statfs;    t[138] = Syscall::Fstatfs;
     // Linux extensions
     t[157] = Syscall::Prctl;     t[186] = Syscall::Gettid;
     t[200] = Syscall::Tkill;     t[202] = Syscall::Futex;

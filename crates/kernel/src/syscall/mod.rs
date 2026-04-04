@@ -209,6 +209,7 @@ pub enum Syscall {
     Getsockname, Getpeername, Sendmsg, Recvmsg, Shutdown, Sendmmsg, Recvmmsg,
     // Additional syscalls for musl/Alpine
     Getrandom, ClockGetres, Dup3, Sysctl, Flock, SetItimer, Pselect6, ClockNanosleep,
+    Fstatfs,
     // Stubs that return specific values
     Prlimit64, Rseq,
     // Architecture-specific (handled by ArchSpecificOps)
@@ -348,6 +349,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         }
         Syscall::Sysinfo => linux::sysinfo(a0),
         Syscall::Statfs => linux::statfs(a0, a1),
+        Syscall::Fstatfs => linux::fstatfs(a0, a1),
         Syscall::Prlimit64 => posix::prlimit64(a0, a1, a2, a3),
 
         // ── Stubs: accepted but no-op ─────────────────────────────

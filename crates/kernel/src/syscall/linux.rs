@@ -118,6 +118,31 @@ pub fn statfs(path_ptr: usize, buf_ptr: usize) -> isize {
     0
 }
 
+/// fstatfs(fd, buf) — Linux filesystem stats by file descriptor.
+pub fn fstatfs(_fd: usize, buf_ptr: usize) -> isize {
+    if crate::uaccess::validate_user_ptr(buf_ptr, 120).is_err() { return crate::errno::EFAULT; }
+    unsafe {
+        use rux_mm::FrameAllocator;
+        let w = core::mem::size_of::<usize>();
+        let p = buf_ptr;
+        for i in 0..120 { *(p as *mut u8).add(i) = 0; }
+        // Return generic ext2 stats (fd could point to any filesystem)
+        let alloc = crate::kstate::alloc();
+        let total = alloc.total_frames();
+        let free = alloc.available_frames(rux_mm::PageSize::FourK);
+        *(p as *mut usize) = 0xEF53;        // EXT2_SUPER_MAGIC
+        *((p + w) as *mut usize) = 4096;
+        *((p + 2*w) as *mut usize) = total;
+        *((p + 3*w) as *mut usize) = free;
+        *((p + 4*w) as *mut usize) = free;
+        *((p + 5*w) as *mut usize) = 65536;
+        *((p + 6*w) as *mut usize) = 65536;
+        *((p + 9*w) as *mut usize) = 255;
+        *((p + 10*w) as *mut usize) = 4096;
+    }
+    0
+}
+
 /// set_tid_address(tidptr) — Linux: store clear_child_tid pointer, return tid.
 pub fn set_tid_address(tidptr: usize) -> isize {
     unsafe {
