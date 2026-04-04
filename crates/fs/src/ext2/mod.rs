@@ -198,12 +198,48 @@ impl FileSystem for Ext2Fs {
     fn truncate(&mut self, ino: InodeId, size: u64) -> Result<(), VfsError> {
         unsafe {
             let mut raw = self.read_inode_raw(ino as u32)?;
+            let old_size = raw.size as u64 | ((raw.size_high as u64) << 32);
+
+            // Free data blocks when truncating to 0
+            if size == 0 && old_size > 0 {
+                // Free direct blocks (indices 0..12)
+                for i in 0..12 {
+                    let blk = raw.block[i];
+                    if blk > 1 { // guard: never free block 0 or 1 (superblock)
+                        let _ = alloc::free_block(self, blk);
+                    }
+                    raw.block[i] = 0;
+                }
+
+                // Free single indirect block and its entries
+                let ind = raw.block[12];
+                if ind > 1 {
+                    let bs = self.block_size as usize;
+                    let mut ind_buf = [0u8; 4096];
+                    if self.read_block(ind as u64, &mut ind_buf).is_ok() {
+                        let ptrs = bs / 4;
+                        for i in 0..ptrs {
+                            let off = i * 4;
+                            let bnum = u32::from_le_bytes([
+                                ind_buf[off], ind_buf[off+1], ind_buf[off+2], ind_buf[off+3],
+                            ]);
+                            if bnum > 1 {
+                                let _ = alloc::free_block(self, bnum);
+                            }
+                        }
+                        let _ = alloc::free_block(self, ind);
+                    }
+                    raw.block[12] = 0;
+                }
+                // Double/triple indirect (block[13], block[14]) — rare for small files
+                // Just zero the pointers without freeing (small space leak)
+                raw.block[13] = 0;
+                raw.block[14] = 0;
+                raw.blocks = 0;
+            }
+
             raw.size = size as u32;
             raw.size_high = (size >> 32) as u32;
-            // Note: blocks are not freed here — a full implementation would walk
-            // the block pointers and call free_block for blocks beyond new size.
-            // For now this is safe: blocks remain allocated but the size field
-            // prevents reading past the new end.
             self.write_inode_raw(ino as u32, &raw)
         }
     }

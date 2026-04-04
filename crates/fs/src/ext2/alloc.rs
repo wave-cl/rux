@@ -108,6 +108,7 @@ pub(crate) unsafe fn alloc_inode(fs: &Ext2Fs) -> Result<u32, VfsError> {
 #[allow(dead_code)]
 pub(crate) unsafe fn free_block(fs: &Ext2Fs, block_num: u32) -> Result<(), VfsError> {
     let first_data_block = if fs.block_size == 1024 { 1u32 } else { 0u32 };
+    if block_num <= first_data_block { return Ok(()); } // never free superblock/boot block
     let adj = block_num - first_data_block;
     let group = adj / fs.blocks_per_group;
     let bit = adj % fs.blocks_per_group;
@@ -131,6 +132,15 @@ pub(crate) unsafe fn free_block(fs: &Ext2Fs, block_num: u32) -> Result<(), VfsEr
     let free_blocks = le16(&bgd_buf, bgd_off + 12);
     set_le16(&mut bgd_buf, bgd_off + 12, free_blocks + 1);
     fs.write_block(bgd_block, &bgd_buf)?;
+
+    // Invalidate cache entry for the freed block so stale data isn't served
+    let inner = &mut *fs.inner.get();
+    for entry in inner.cache.iter_mut() {
+        if entry.valid && entry.block_no == block_num as u64 {
+            entry.valid = false;
+            break;
+        }
+    }
 
     Ok(())
 }
