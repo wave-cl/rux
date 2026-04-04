@@ -38,20 +38,24 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
         if prot & PROT_EXEC != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::EXECUTE); }
         if prot == 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
 
-        // Allocate zeroed pages
-        super::map_user_pages(result, result + aligned_len, pg_flags);
-
-        // File-backed MAP_PRIVATE: read file data at the specified offset
         if mmap_flags & MAP_ANONYMOUS == 0 && fd < 64 {
+            // File-backed: allocate pages and read file data
             use rux_fs::FileSystem;
             let fs = crate::kstate::fs();
             let ino = (*rux_fs::fdtable::FD_TABLE)[fd].ino;
             if (*rux_fs::fdtable::FD_TABLE)[fd].active && ino != 0 {
+                super::map_user_pages(result, result + aligned_len, pg_flags);
                 let file_offset = offset as u64;
                 let dst = core::slice::from_raw_parts_mut(result as *mut u8, len);
                 let _ = fs.read(ino, file_offset, dst);
             }
+        } else if mmap_flags & MAP_FIXED != 0 {
+            // MAP_FIXED anonymous (BSS replacement by ld.so): allocate eagerly
+            // because the old pages were just munmap'd and accessed immediately
+            super::map_user_pages(result, result + aligned_len, pg_flags);
         }
+        // Non-MAP_FIXED anonymous: lazy — demand pager maps zero pages on fault.
+        // Saves hundreds of frames for malloc buffers, guard pages, etc.
 
         result as isize
     }

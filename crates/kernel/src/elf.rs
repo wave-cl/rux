@@ -60,12 +60,26 @@ pub unsafe fn load_elf_from_inode(
     // Read ELF header (first 4KB is enough for header + program headers)
     let mut hdr_buf = [0u8; 4096];
     let _n = fs.read(ino, 0, &mut hdr_buf).unwrap_or(0);
-    let elf_info = parse_elf(&hdr_buf).expect("ELF parse failed");
+    let elf_info = match parse_elf(&hdr_buf) {
+        Some(info) => info,
+        None => {
+            use rux_arch::ConsoleOps;
+            crate::arch::Arch::write_str("rux: exec: bad ELF\n");
+            crate::syscall::posix::exit(1);
+        }
+    };
 
     // Build user page table with kernel identity map
     let mut upt = {
         use crate::arch::KernelMapOps;
-        let mut upt = crate::arch::PageTable::new(alloc).expect("user pt");
+        let mut upt = match crate::arch::PageTable::new(alloc) {
+            Ok(pt) => pt,
+            Err(_) => {
+                use rux_arch::ConsoleOps;
+                crate::arch::Arch::write_str("rux: exec: out of memory\n");
+                crate::syscall::posix::exit(1);
+            }
+        };
         crate::arch::Arch::map_kernel_pages(&mut upt, alloc);
         upt
     };

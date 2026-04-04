@@ -266,6 +266,7 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 294] = {
     t[103] = Syscall::SetItimer;
     t[72] = Syscall::Pselect6;
     t[115] = Syscall::ClockNanosleep;
+    t[276] = Syscall::Renameat; // renameat2 → same handler
     t[50] = Syscall::Fchdir;
     t[46] = Syscall::Flock; // ftruncate → stub as no-op (same as flock)
     // Sockets

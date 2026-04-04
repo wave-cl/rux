@@ -90,7 +90,10 @@ pub unsafe fn map_user_pages(
     // the binary layout changed (closure vtable dispatch issue).
     for pa in (start_va as u64..end_va as u64).step_by(4096) {
         use rux_mm::FrameAllocator;
-        let frame = alloc.alloc(rux_mm::PageSize::FourK).expect("mmap page");
+        let frame = match alloc.alloc(rux_mm::PageSize::FourK) {
+            Ok(f) => f,
+            Err(_) => break, // OOM: stop allocating, partial map is ok
+        };
         core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
         let va = rux_klib::VirtAddr::new(pa as usize);
         let _ = upt.unmap_4k(va);
