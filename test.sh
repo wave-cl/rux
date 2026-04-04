@@ -115,6 +115,10 @@ cut -d: -f1 /etc/passwd
 echo hello | tr a-z A-Z
 echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 cat /proc/$$/stat | cut -d" " -f5
+cp /etc/passwd /tmp/cp_test && wc -l /tmp/cp_test
+echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
+head -c 100 /dev/urandom > /tmp/rnd && wc -c /tmp/rnd
+du -s /bin | cut -f1
 exit
 CMDS
 } | \
@@ -213,6 +217,10 @@ check "tr (uppercase)"         "HELLO"
 check "tee"                    "testdata"
 check "ps shows process"       "PID"
 check "proc stat pgid"         "1"
+check "cp file (copy)"        "1"
+check "cp + cat"              "hello"
+check "urandom write"         "100"
+check "du (statx)"            "/"
 
 fi  # RUN_X86
 
@@ -285,6 +293,10 @@ echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
 cat /proc/$$/stat | cut -d" " -f5
+cp /etc/passwd /tmp/cp_test && wc -l /tmp/cp_test
+echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
+head -c 100 /dev/urandom > /tmp/rnd && wc -c /tmp/rnd
+du -s /bin | cut -f1
 exit
 CMDS
 } | \
@@ -382,6 +394,10 @@ check "tr (uppercase)"         "HELLO"
 check "tee"                    "testdata"
 check "ps shows process"       "PID"
 check "proc stat pgid"         "1"
+check "cp file (copy)"        "1"
+check "cp + cat"              "hello"
+check "urandom write"         "100"
+check "du (statx)"            "/"
 
 fi  # RUN_AA64
 
