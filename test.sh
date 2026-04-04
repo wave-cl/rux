@@ -168,8 +168,10 @@ head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
 cat /etc/issue
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
-apk update 2>&1 | tail -1
 echo all_tests_done
+apk update 2>&1 | tail -1
+apk add --no-interactive curl 2>&1 | tail -1
+curl --version 2>&1 | head -1
 exit
 CMDS
 } | \
@@ -294,6 +296,8 @@ check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
 check "apk update"           "OK:"
+check "apk add curl"         "packages"
+check "curl version"         "curl"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
