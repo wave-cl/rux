@@ -396,16 +396,29 @@ impl FileSystem for ProcFs {
             return Ok(true);
         }
 
-        // /proc/[pid]/fd — list open FDs (0, 1, 2 always)
+        // /proc/[pid]/fd — list open FDs from actual fd table
         if is_pid_fd_dir(dir) {
-            if offset >= 3 { return Ok(false); } // just 0, 1, 2
             let pid = dir - PID_FD_DIR_BASE;
-            let fd_num = offset as u64;
-            buf.ino = 10000 + pid * 64 + fd_num;
-            buf.kind = InodeType::Symlink;
-            buf.name_len = 1;
-            buf.name[0] = b'0' + offset as u8;
-            return Ok(true);
+            unsafe {
+                let ft = &*crate::fdtable::FD_TABLE;
+                // Find the Nth active fd (offset = entry index, not fd number)
+                let mut count = 0usize;
+                for fd in 0..crate::fdtable::MAX_FDS {
+                    if ft[fd].active {
+                        if count == offset {
+                            buf.ino = 10000 + pid * 64 + fd as u64;
+                            buf.kind = InodeType::Symlink;
+                            // Write fd number as string
+                            let s = fd_to_str(fd);
+                            buf.name_len = s.len() as u8;
+                            buf.name[..s.len()].copy_from_slice(s.as_bytes());
+                            return Ok(true);
+                        }
+                        count += 1;
+                    }
+                }
+            }
+            return Ok(false);
         }
 
         Err(VfsError::NotADirectory)
@@ -431,14 +444,25 @@ impl FileSystem for ProcFs {
             buf[..len].copy_from_slice(&s[..len]);
             return Ok(len);
         }
-        // /proc/[pid]/fd/N → /dev/console (or similar)
+        // /proc/[pid]/fd/N → target path
         if ino >= 10000 {
-            let fd = ino % 64;
-            if fd <= 2 {
-                let s = b"/dev/console";
-                let len = s.len().min(buf.len());
-                buf[..len].copy_from_slice(&s[..len]);
-                return Ok(len);
+            let fd = (ino % 64) as usize;
+            unsafe {
+                let ft = &*crate::fdtable::FD_TABLE;
+                if fd < crate::fdtable::MAX_FDS && ft[fd].active {
+                    let s = if ft[fd].is_console {
+                        b"/dev/console" as &[u8]
+                    } else if ft[fd].is_pipe {
+                        b"pipe:" as &[u8]
+                    } else if ft[fd].is_socket {
+                        b"socket:" as &[u8]
+                    } else {
+                        b"/dev/vda" as &[u8] // file on ext2
+                    };
+                    let len = s.len().min(buf.len());
+                    buf[..len].copy_from_slice(&s[..len]);
+                    return Ok(len);
+                }
             }
         }
         Err(VfsError::NotSupported)
@@ -450,6 +474,18 @@ impl FileSystem for ProcFs {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/// Format a file descriptor number as a string (no alloc).
+fn fd_to_str(fd: usize) -> &'static str {
+    // Common fds as static strings to avoid formatting
+    match fd {
+        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
+        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
+        10 => "10", 11 => "11", 12 => "12", 13 => "13", 14 => "14",
+        15 => "15", 16 => "16", 17 => "17", 18 => "18", 19 => "19",
+        _ => "??",
+    }
+}
 
 fn parse_u64(s: &[u8]) -> Option<u64> {
     if s.is_empty() { return None; }

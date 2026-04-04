@@ -145,15 +145,27 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                 if e.events & EPOLLIN != 0 {
                     if super::socket::is_socket(fd) {
                         if super::socket::socket_has_data(fd) { revents |= EPOLLIN; }
+                    } else if is_eventfd(fd) {
+                        if eventfd_has_data(fd) { revents |= EPOLLIN; }
+                    } else if is_timerfd(fd) {
+                        if timerfd_has_data(fd) { revents |= EPOLLIN; }
+                    } else if fd < 64 && (*fdt::FD_TABLE)[fd].is_pipe {
+                        // Pipe: check if data available in the pipe buffer
+                        let pid = (*fdt::FD_TABLE)[fd].pipe_id;
+                        if crate::pipe::has_data(pid) { revents |= EPOLLIN; }
                     } else {
-                        revents |= EPOLLIN; // regular FDs are always readable
+                        revents |= EPOLLIN; // regular files always readable
                     }
                 }
                 if e.events & EPOLLOUT != 0 {
                     if super::socket::is_socket(fd) {
                         if super::socket::socket_can_write(fd) { revents |= EPOLLOUT; }
-                    } else {
-                        revents |= EPOLLOUT;
+                    } else if is_eventfd(fd) {
+                        revents |= EPOLLOUT; // eventfd always writable
+                    } else if fd < 64 && (*fdt::FD_TABLE)[fd].is_pipe && (*fdt::FD_TABLE)[fd].pipe_write {
+                        revents |= EPOLLOUT; // write end of pipe always writable (simplified)
+                    } else if !is_timerfd(fd) {
+                        revents |= EPOLLOUT; // regular files always writable
                     }
                 }
                 if revents != 0 {

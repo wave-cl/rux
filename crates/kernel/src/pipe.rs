@@ -6,6 +6,11 @@ pub use rux_ipc::pipe::{read, write, close, dup_ref, reset};
 /// Pipe function pointers — maps directly to rux_ipc::pipe functions.
 pub static PIPE: &rux_fs::fdtable::PipeFns = &rux_ipc::PIPE_FNS;
 
+/// Check if a pipe has data available (or EOF — writers closed).
+pub fn has_data(pipe_id: u8) -> bool {
+    rux_ipc::pipe::has_data(pipe_id)
+}
+
 /// Create a new pipe. Returns (pipe_id, read_fd, write_fd) or error.
 pub fn create() -> Result<(u8, isize, isize), isize> {
     rux_fs::fdtable::create_pipe(PIPE)

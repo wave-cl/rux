@@ -33,6 +33,14 @@ static mut PIPES: [PipeBuf; MAX_PIPES] = {
     [EMPTY; MAX_PIPES]
 };
 
+/// Check if a pipe has data available for reading (or EOF).
+pub fn has_data(pipe_id: u8) -> bool {
+    unsafe {
+        let p = &PIPES[pipe_id as usize];
+        p.active && (p.count > 0 || p.writers == 0)
+    }
+}
+
 /// Allocate a pipe slot. Returns pipe_id or -EMFILE.
 pub fn alloc() -> Result<u8, isize> {
     unsafe {
