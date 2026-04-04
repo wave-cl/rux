@@ -171,6 +171,7 @@ cat /etc/passwd | grep root | wc -l
 echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
 test -d /proc && echo proc_is_dir
 wc -c /bin/busybox | awk '{print ($1 > 100) ? "big" : "small"}'
+head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
 xargs echo < /etc/hostname
 exit
 CMDS
@@ -293,6 +294,7 @@ check "pipe chain grep"      "1"
 check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "awk"                  "big"
+check "2KB write"            "2048"
 check "xargs"                "rux"
 
 fi  # RUN_X86
@@ -386,6 +388,7 @@ cat /etc/passwd | grep root | wc -l
 echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
 test -d /proc && echo proc_is_dir
 wc -c /bin/busybox | awk '{print ($1 > 100) ? "big" : "small"}'
+head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
 exit
@@ -505,6 +508,7 @@ check "pipe chain grep"      "1"
 check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "awk"                  "big"
+check "2KB write"            "2048"
 check "subshell"             "subshell_ok"
 check "fork + pipe"          "2"
 
