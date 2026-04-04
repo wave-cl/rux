@@ -130,7 +130,7 @@ impl ProcFs {
             }
             INO_MOUNTS => {
                 // Linux /proc/mounts format: device mountpoint fstype options dump pass
-                let s = b"rootfs / ramfs rw 0 0\nproc /proc proc ro 0 0\ndev /dev devfs rw 0 0\n";
+                let s = b"/dev/vda / ext2 rw,relatime 0 0\nproc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\ndevtmpfs /dev devtmpfs rw,nosuid 0 0\n";
                 let len = s.len().min(buf.len());
                 buf[..len].copy_from_slice(&s[..len]);
                 len
