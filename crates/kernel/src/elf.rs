@@ -57,9 +57,37 @@ pub unsafe fn load_elf_from_inode(
 
     let fs = crate::kstate::fs();
 
-    // Read ELF header (first 4KB is enough for header + program headers)
+    // Read file header (first 4KB)
     let mut hdr_buf = [0u8; 4096];
-    let _n = fs.read(ino, 0, &mut hdr_buf).unwrap_or(0);
+    let n = fs.read(ino, 0, &mut hdr_buf).unwrap_or(0);
+
+    // Shebang support: #! /path/to/interpreter [arg]
+    if n >= 2 && hdr_buf[0] == b'#' && hdr_buf[1] == b'!' {
+        // Parse interpreter path from the first line
+        let line_end = hdr_buf[2..n.min(256)].iter().position(|&b| b == b'\n').unwrap_or(n.min(256) - 2);
+        let line = &hdr_buf[2..2 + line_end];
+        // Skip leading spaces
+        let start = line.iter().position(|&b| b != b' ').unwrap_or(0);
+        let interp = &line[start..];
+        // Find end of interpreter path (space or end of line)
+        let interp_end = interp.iter().position(|&b| b == b' ' || b == b'\t').unwrap_or(interp.len());
+        let interp_path = &interp[..interp_end];
+
+        if !interp_path.is_empty() {
+            // Resolve the interpreter and exec it
+            let interp_ino = match rux_fs::path::resolve_path(fs, interp_path) {
+                Ok(ino) => ino,
+                Err(_) => {
+                    use rux_arch::ConsoleOps;
+                    crate::arch::Arch::write_str("rux: shebang interp not found\n");
+                    crate::syscall::posix::exit(127);
+                }
+            };
+            // Re-exec with the interpreter (it will load the script as argv[1])
+            load_elf_from_inode(interp_ino as u64, alloc);
+        }
+    }
+
     let elf_info = match parse_elf(&hdr_buf) {
         Some(info) => info,
         None => {
