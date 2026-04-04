@@ -155,7 +155,7 @@ pml4:   .skip 4096
 pdpt:   .skip 4096
 pd:     .skip 4096
 
-/* Boot stack — 128 KiB */
+/* Boot stack — 128 KiB (boot init: ELF load + ext2 + net + page tables) */
 .align 16
 boot_stack:
     .skip 131072

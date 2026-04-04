@@ -31,18 +31,16 @@ SECTIONS {
         __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
+        /* Mark end of Rust statics — kernel_main zeros up to here. */
+        . = ALIGN(4096);
+        __bss_rust_end = .;
+        /* Boot page tables + stack: still in .bss (LOAD segment) but
+         * kernel_main skips zeroing this region (page tables are live). */
+        *(.boot_bss)
         __bss_end = .;
     }
 
-    /* Boot page tables + stack — separate from .bss so kernel_main can
-     * safely zero all of .bss without destroying live page tables/stack. */
-    .boot_bss : ALIGN(4096) {
-        *(.boot_bss)
-    }
-
-    /* End of kernel image — page-aligned, above all code/data/BSS.
-     * Boot code uses this to place the frame allocator and ramfs
-     * dynamically, preventing overlap when BSS grows (e.g., MAX_PROCS). */
+    /* End of kernel image — page-aligned, above all code/data/BSS. */
     . = ALIGN(4096);
     _end = .;
 

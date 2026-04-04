@@ -39,14 +39,15 @@ use arch::Arch;
 #[cfg(not(feature = "native"))]
 #[no_mangle]
 pub extern "C" fn kernel_main(arg: usize) -> ! {
-    // Zero BSS explicitly — x86_64 multiboot may not zero large BSS sections.
-    // Page tables and boot stack live in .boot_bss (separate section, not zeroed).
-    // All Rust statics are in .bss which we zero here before any access.
+    // Zero Rust BSS statics explicitly — QEMU multiboot may not zero large
+    // BSS sections reliably. We zero __bss_start..__bss_rust_end which covers
+    // all Rust statics but NOT the boot page tables/stack (in .boot_bss,
+    // placed after __bss_rust_end in the linker script).
     #[cfg(target_arch = "x86_64")]
     {
-        extern "C" { static __bss_start: u8; static __bss_end: u8; }
+        extern "C" { static __bss_start: u8; static __bss_rust_end: u8; }
         let start = unsafe { &__bss_start as *const u8 as usize };
-        let end = unsafe { &__bss_end as *const u8 as usize };
+        let end = unsafe { &__bss_rust_end as *const u8 as usize };
         if end > start {
             unsafe { core::ptr::write_bytes(start as *mut u8, 0, end - start); }
         }
