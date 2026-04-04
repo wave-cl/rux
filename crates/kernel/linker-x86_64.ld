@@ -8,6 +8,11 @@ SECTIONS {
         KEEP(*(.multiboot2))
     }
 
+    /* PVH entry note — QEMU reads this to enter 64-bit kernel directly */
+    .note : ALIGN(4) {
+        KEEP(*(.note.rux))
+    }
+
     .text : ALIGN(4096) {
         __text_start = .;
         *(.text .text.*)
@@ -47,6 +52,7 @@ SECTIONS {
     /DISCARD/ : {
         *(.eh_frame)
         *(.comment)
-        *(.note*)
+        *(.note.GNU-stack)
+        *(.note.gnu.*)
     }
 }

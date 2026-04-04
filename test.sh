@@ -33,6 +33,39 @@ $RUN_X86 && {
     rust-objcopy --output-target=elf32-i386 \
         target/x86_64-unknown-none/debug/rux-kernel \
         target/x86_64-unknown-none/debug/rux-kernel.elf32
+    # Fix elf32 BSS memsz: rust-objcopy truncates it during elf64→elf32.
+    # Patch the last PT_LOAD header's memsz to match the ELF64 original.
+    python3 -c "
+import struct, sys
+with open(sys.argv[1], 'r+b') as f:
+    f.seek(28); phoff = struct.unpack('<I', f.read(4))[0]
+    f.seek(42); phsz = struct.unpack('<H', f.read(2))[0]
+    f.seek(44); phnum = struct.unpack('<H', f.read(2))[0]
+    # Find last PT_LOAD (type=1) and patch memsz
+    for i in range(phnum):
+        off = phoff + i * phsz
+        f.seek(off); ptype = struct.unpack('<I', f.read(4))[0]
+        if ptype == 1:
+            f.seek(off + 4); p_offset = struct.unpack('<I', f.read(4))[0]
+            f.seek(off + 8); p_vaddr = struct.unpack('<I', f.read(4))[0]
+            f.seek(off + 16); p_filesz = struct.unpack('<I', f.read(4))[0]
+            f.seek(off + 20); p_memsz = struct.unpack('<I', f.read(4))[0]
+            if p_filesz == 0 and p_memsz > 0:
+                # This is the BSS segment — read correct memsz from ELF64
+                with open(sys.argv[2], 'rb') as f64:
+                    f64.seek(32); ph64off = struct.unpack('<Q', f64.read(8))[0]
+                    f64.seek(54); ph64sz = struct.unpack('<H', f64.read(2))[0]
+                    f64.seek(56); ph64num = struct.unpack('<H', f64.read(2))[0]
+                    for j in range(ph64num):
+                        o64 = ph64off + j * ph64sz
+                        f64.seek(o64); pt = struct.unpack('<I', f64.read(4))[0]
+                        f64.seek(o64 + 32); fs64 = struct.unpack('<Q', f64.read(8))[0]
+                        f64.seek(o64 + 40); ms64 = struct.unpack('<Q', f64.read(8))[0]
+                        if pt == 1 and fs64 == 0 and ms64 > 0:
+                            f.seek(off + 20)
+                            f.write(struct.pack('<I', ms64))
+                            break
+" target/x86_64-unknown-none/debug/rux-kernel.elf32 target/x86_64-unknown-none/debug/rux-kernel
 }
 $RUN_AA64 && cargo build --target aarch64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
 

@@ -25,14 +25,23 @@ multiboot_header:
     .long _pvh_start             /* entry point (32-bit, but we handle it) */
     .long 0                      /* padding for 8-byte descsz */
 
-/* Entry point — 32-bit protected mode, no paging */
+/* PVH entry point — 32-bit protected mode, no paging, EBX = hvm_start_info.
+ * QEMU uses this when loading an ELF64 with -kernel (reads the Xen note).
+ * We ignore the hvm_start_info and treat it like multiboot (EBX=0). */
 .section .text
 .code32
+.global _pvh_start
+_pvh_start:
+    cli
+    xorl %ebx, %ebx          /* No multiboot info — kernel_main handles EBX=0 */
+    jmp _start_common
+
+/* Multiboot entry point — 32-bit protected mode, EBX = multiboot info */
 .global _start
 _start:
-    /* Disable interrupts */
     cli
 
+_start_common:
     /* Save multiboot info pointer (ebx) to esi — edi will be clobbered
      * by the page table setup (rep stosl uses edi). esi is preserved
      * through the page table init and long mode transition. */
