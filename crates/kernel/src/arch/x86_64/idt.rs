@@ -310,27 +310,6 @@ pub unsafe fn load() {
 
 /// Rust dispatch function called from the assembly common handler.
 #[no_mangle]
-/// Demand page: allocate and map a zero-filled RW user page at the faulting address.
-unsafe fn demand_page_x86(addr: usize) -> bool {
-    use rux_mm::FrameAllocator;
-    let alloc = crate::kstate::alloc();
-    let frame = match alloc.alloc(rux_mm::PageSize::FourK) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-    core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
-    let va = rux_klib::VirtAddr::new(addr & !0xFFF);
-    let flags = rux_mm::MappingFlags::READ
-        .or(rux_mm::MappingFlags::WRITE)
-        .or(rux_mm::MappingFlags::EXECUTE)
-        .or(rux_mm::MappingFlags::USER);
-    let mut upt = crate::syscall::current_user_page_table();
-    let _ = upt.unmap_4k(va);
-    match upt.map_4k(va, frame, flags, alloc) {
-        Ok(()) => true,
-        Err(_) => false,
-    }
-}
 
 #[no_mangle]
 pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {
@@ -361,34 +340,12 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             let user = error_code & 4 != 0;
             let write = error_code & 2 != 0;
 
-            // Try COW resolution for any write fault to a user-space address.
-            // This covers both user-mode faults (CPL=3 writes to COW page) and
-            // kernel-mode faults (CPL=0 writes to user COW page via sys_read etc.).
-            // User-space canonical range: VA < 0x0000_8000_0000_0000.
-            if write && cr2 < 0x0000_8000_0000_0000u64 {
-                if unsafe { crate::cow::handle_cow_fault(cr2 as usize).is_ok() } {
-                    return; // COW resolved — resume faulting instruction
-                }
+            // Shared fault resolution: COW → demand page → SIGSEGV
+            if unsafe { crate::demand_paging::handle_user_fault(cr2, write) } {
+                return;
             }
 
-            // Demand paging: if the fault is at a user address (not present),
-            // allocate and map a zero page. Handles BSS, mmap lazy alloc, etc.
-            let present = error_code & 1 != 0;
-            if !present && cr2 < 0x0000_8000_0000_0000u64 && cr2 >= 0x1000 {
-                if unsafe { demand_page_x86(cr2 as usize) } {
-                    return; // page mapped — resume faulting instruction
-                }
-            }
-            // Also handle permission faults (page present but wrong perms)
-            if present && cr2 < 0x0000_8000_0000_0000u64 && cr2 >= 0x1000 {
-                if unsafe { demand_page_x86(cr2 as usize) } {
-                    return;
-                }
-            }
-
-            // Fault not resolvable. If the address is in user space, kill
-            // the process (SIGSEGV) regardless of whether the fault came
-            // from user or kernel mode (kernel may read user ptrs in syscalls).
+            // Unresolvable user-space fault → kill process (SIGSEGV)
             if cr2 < 0x0000_8000_0000_0000u64 {
                 unsafe {
                     use rux_arch::ConsoleOps;

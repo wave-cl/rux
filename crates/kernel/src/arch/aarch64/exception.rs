@@ -30,22 +30,10 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             let ec = esr_ec(esr);
             match ec {
                 0b100100 | 0b100101 => {
-                    // Kernel-mode data abort — may be a COW fault caused by the
-                    // kernel writing to a user COW page (e.g. sys_read into a
-                    // user buffer whose page hasn't been touched since fork).
-                    // User addresses have top 16 bits = 0 (TTBR0 range).
+                    // Kernel-mode data abort (kernel accessing user address)
                     let wnr = esr & (1 << 6) != 0;
-                    let dfsc = esr & 0x3F;
-                    let is_perm = dfsc == 0x0F || dfsc == 0x0E || dfsc == 0x0D;
-                    if wnr && is_perm && (far & 0xFFFF_0000_0000_0000u64 == 0) {
-                        if unsafe { crate::cow::handle_cow_fault(far as usize).is_ok() } {
-                            return; // COW resolved
-                        }
-                    }
-                    // Demand paging: translation fault at user address → map zero page
-                    let is_translation = dfsc == 0x05 || dfsc == 0x06 || dfsc == 0x07;
-                    if (is_translation || is_perm) && far < 0x8000_0000 && far >= 0x1000 {
-                        if unsafe { demand_page(far as usize) } { return; }
+                    if unsafe { crate::demand_paging::handle_user_fault(far, wnr) } {
+                        return;
                     }
                     dump_user_fault("KERNEL DATA ABORT", far, esr, _frame);
                 }
@@ -53,8 +41,7 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     dump_user_fault("KERNEL INSTR ABORT", far, esr, _frame);
                 }
                 0b010101 => {
-                    // SVC (syscall from EL0)
-                    // TODO: syscall dispatch
+                    // SVC from EL1 — should not happen (user SVC handled in exc_type==2)
                 }
                 _ => {
                     super::console::write_str("rux: sync EC=");
@@ -83,26 +70,15 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     super::syscall::handle_syscall(_frame as *mut u8);
                 }
                 0b100100 | 0b100101 => {
-                    // Data abort from EL0.
-                    // ISS bits: [6]=WnR (write), [5:0]=DFSC (fault status)
-                    let wnr = esr & (1 << 6) != 0;   // write fault
-                    let dfsc = esr & 0x3F;
-                    let is_perm = dfsc == 0x0F || dfsc == 0x0E || dfsc == 0x0D;  // permission fault level 1/2/3
-                    if wnr && is_perm {
-                        if unsafe { crate::cow::handle_cow_fault(far as usize).is_ok() } {
-                            return; // COW resolved
-                        }
+                    // User data abort — shared COW + demand paging resolution
+                    let wnr = esr & (1 << 6) != 0;
+                    if unsafe { crate::demand_paging::handle_user_fault(far, wnr) } {
+                        return;
                     }
-                    // Demand paging: translation or permission fault → map zero page
-                    let is_translation = dfsc == 0x05 || dfsc == 0x06 || dfsc == 0x07;
-                    if (is_translation || is_perm) && far < 0x8000_0000 && far >= 0x1000 {
-                        if unsafe { demand_page(far as usize) } { return; }
-                    }
-                    // Unresolvable user fault → kill process (SIGSEGV)
                     super::console::write_str("rux: SIGSEGV at ");
                     write_hex(far as usize);
                     super::console::write_str("\n");
-                    unsafe { crate::syscall::posix::exit(139); } // 128 + SIGSEGV
+                    unsafe { crate::syscall::posix::exit(139); }
                 }
                 0b100000 | 0b100001 => {
                     super::console::write_str("rux: SIGSEGV (instr) at ");
@@ -135,28 +111,6 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
     }
 }
 
-/// Demand page: allocate and map a zero-filled page at the faulting address.
-/// Returns true if the page was mapped, false if allocation failed.
-unsafe fn demand_page(addr: usize) -> bool {
-    use rux_mm::FrameAllocator;
-    let alloc = crate::kstate::alloc();
-    let frame = match alloc.alloc(rux_mm::PageSize::FourK) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-    core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
-    let va = rux_klib::VirtAddr::new(addr & !0xFFF);
-    let flags = rux_mm::MappingFlags::READ
-        .or(rux_mm::MappingFlags::WRITE)
-        .or(rux_mm::MappingFlags::EXECUTE)
-        .or(rux_mm::MappingFlags::USER);
-    let mut upt = crate::syscall::current_user_page_table();
-    let _ = upt.unmap_4k(va); // remove any stale entry
-    match upt.map_4k(va, frame, flags, alloc) {
-        Ok(()) => true,
-        Err(_) => false,
-    }
-}
 
 fn dump_user_fault(label: &str, far: u64, esr: u64, frame: *const u8) {
     let s = super::console::write_str;
@@ -203,19 +157,10 @@ fn panic_console(msg: &str, addr: u64) {
     super::exit::exit_qemu(super::exit::EXIT_FAILURE);
 }
 
-fn write_hex(mut n: usize) {
-    super::console::write_str("0x");
-    if n == 0 {
-        super::console::write_byte(b'0');
-        return;
-    }
+/// Print a hex value using the shared formatter.
+#[inline]
+fn write_hex(n: usize) {
     let mut buf = [0u8; 16];
-    let mut i = 16;
-    while n > 0 && i > 0 {
-        i -= 1;
-        let d = (n & 0xF) as u8;
-        buf[i] = if d < 10 { b'0' + d } else { b'a' + d - 10 };
-        n >>= 4;
-    }
-    super::console::write_bytes(&buf[i..]);
+    super::console::write_str("0x");
+    super::console::write_bytes(rux_klib::fmt::usize_to_hex(&mut buf, n));
 }

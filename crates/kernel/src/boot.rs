@@ -75,7 +75,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
         vfs_ptr, alloc_ptr, &cmdparams, params.virtio_mmio_base, log,
     );
 
-    // Probe for virtio-net device
+    // Probe for virtio-net device (arch-specific probe, shared init)
     #[cfg(all(target_arch = "aarch64", feature = "net"))]
     {
         use rux_mm::FrameAllocator;
@@ -87,34 +87,21 @@ pub unsafe fn boot(params: BootParams) -> ! {
                 core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 8192);
                 core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 8192);
                 if rux_drivers::virtio::net::init_mmio(net_base, rx.as_usize(), tx.as_usize()) {
-                    let mac = rux_drivers::virtio::net::mac();
-                    rux_net::init(
-                        |frame| rux_drivers::virtio::net::send(frame),
-                        |buf| rux_drivers::virtio::net::recv(buf),
-                        mac,
-                        [10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0],
+                    finish_net_init(
+                        rux_drivers::virtio::net::mac(),
+                        |f| rux_drivers::virtio::net::send(f),
+                        |b| rux_drivers::virtio::net::recv(b),
+                        "virtio-net", log,
                     );
-                    log("rux: virtio-net: MAC=");
-                    let mut hb = [0u8; 3];
-                    for i in 0..6 {
-                        let hi = mac[i] >> 4;
-                        let lo = mac[i] & 0xF;
-                        hb[0] = if hi < 10 { b'0' + hi } else { b'a' + hi - 10 };
-                        hb[1] = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
-                        hb[2] = if i < 5 { b':' } else { b'\n' };
-                        crate::arch::Arch::write_bytes(&hb);
-                    }
                 }
             }
         }
     }
 
-    // x86_64: probe PCI for virtio-net (only allocate if device found)
     #[cfg(all(target_arch = "x86_64", feature = "net"))]
     {
         use rux_mm::FrameAllocator;
-        let has_net = rux_drivers::pci::find_device(rux_drivers::pci::VIRTIO_VENDOR, 0x1000).is_some();
-        if has_net {
+        if rux_drivers::pci::find_device(rux_drivers::pci::VIRTIO_VENDOR, 0x1000).is_some() {
             let alloc = &mut *alloc_ptr;
             let rx_pg = alloc.alloc_order(2).ok();
             let tx_pg = alloc.alloc_order(2).ok();
@@ -122,23 +109,12 @@ pub unsafe fn boot(params: BootParams) -> ! {
                 core::ptr::write_bytes(rx.as_usize() as *mut u8, 0, 16384);
                 core::ptr::write_bytes(tx.as_usize() as *mut u8, 0, 16384);
                 if rux_drivers::virtio::net_pci::init(rx.as_usize(), tx.as_usize()) {
-                    let mac = rux_drivers::virtio::net_pci::mac();
-                    rux_net::init(
-                        |frame| rux_drivers::virtio::net_pci::send(frame),
-                        |buf| rux_drivers::virtio::net_pci::recv(buf),
-                        mac,
-                        [10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0],
+                    finish_net_init(
+                        rux_drivers::virtio::net_pci::mac(),
+                        |f| rux_drivers::virtio::net_pci::send(f),
+                        |b| rux_drivers::virtio::net_pci::recv(b),
+                        "virtio-net-pci", log,
                     );
-                    log("rux: virtio-net-pci: MAC=");
-                    let mut hb = [0u8; 3];
-                    for i in 0..6 {
-                        let hi = mac[i] >> 4;
-                        let lo = mac[i] & 0xF;
-                        hb[0] = if hi < 10 { b'0' + hi } else { b'a' + hi - 10 };
-                        hb[1] = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
-                        hb[2] = if i < 5 { b':' } else { b'\n' };
-                        crate::arch::Arch::write_bytes(&hb);
-                    }
                 }
             }
         }
@@ -204,6 +180,34 @@ pub unsafe fn boot(params: BootParams) -> ! {
     };
     let alloc = &mut *alloc_ptr;
     crate::elf::load_elf_from_inode(init_ino as u64, alloc);
+}
+
+// ── Shared net init helper ────────────────────────────────────────────────
+
+/// Complete virtio-net initialization: configure smoltcp stack and print MAC.
+/// Called from both aarch64 (MMIO) and x86_64 (PCI) probe paths.
+#[cfg(feature = "net")]
+unsafe fn finish_net_init(
+    mac: [u8; 6],
+    send: fn(&[u8]) -> bool,
+    recv: fn(&mut [u8]) -> Option<usize>,
+    name: &str,
+    log: fn(&str),
+) {
+    use rux_arch::ConsoleOps;
+    rux_net::init(send, recv, mac, [10, 0, 2, 15], [10, 0, 2, 2], [255, 255, 255, 0]);
+    log("rux: ");
+    crate::arch::Arch::write_bytes(name.as_bytes());
+    log(": MAC=");
+    let mut hb = [0u8; 3];
+    for i in 0..6 {
+        let hi = mac[i] >> 4;
+        let lo = mac[i] & 0xF;
+        hb[0] = if hi < 10 { b'0' + hi } else { b'a' + hi - 10 };
+        hb[1] = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
+        hb[2] = if i < 5 { b':' } else { b'\n' };
+        crate::arch::Arch::write_bytes(&hb);
+    }
 }
 
 // ── ext2 root mount ──────────────────────────────────────────────────────

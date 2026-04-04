@@ -11,6 +11,7 @@ pub mod perm;
 mod kstate;
 pub mod pipe;
 pub mod cow;
+pub mod demand_paging;
 pub mod tty;
 pub mod pgtrack;
 pub mod syscall;
