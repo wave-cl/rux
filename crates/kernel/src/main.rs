@@ -2,24 +2,23 @@
 #![cfg_attr(not(feature = "native"), no_main)]
 
 mod arch;
-
 mod scheduler;
 mod elf;
-pub mod boot;
-pub mod cmdline;
-pub mod perm;
+mod boot;
+mod cmdline;
+mod perm;
 mod kstate;
-pub mod pipe;
-pub mod cow;
-pub mod demand_paging;
-pub mod tty;
-pub mod pgtrack;
-pub mod syscall;
-pub mod uaccess;
-pub mod task_table;
-pub mod percpu;
-pub mod fork;
-pub mod errno;
+mod pipe;
+mod cow;
+mod demand_paging;
+mod tty;
+mod pgtrack;
+mod syscall;
+mod uaccess;
+mod task_table;
+mod percpu;
+mod fork;
+mod errno;
 
 #[cfg(feature = "native")]
 mod tests;

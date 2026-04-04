@@ -1,7 +1,0 @@
-[package]
-name = "rux-sync"
-version = "0.8.0"
-edition = "2021"
-
-[dependencies]
-rux-arch = { path = "../arch" }

@@ -11,7 +11,6 @@ net = ["rux-net"]
 [dependencies]
 rux-klib = { path = "../klib" }
 rux-arch = { path = "../arch" }
-rux-boot = { path = "../boot" }
 rux-mm = { path = "../mm" }
 rux-sched = { path = "../sched" }
 rux-proc = { path = "../proc" }

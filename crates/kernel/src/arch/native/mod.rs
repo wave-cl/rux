@@ -280,3 +280,21 @@ impl FlatPageTable {
     pub fn root_phys(&self) -> PhysAddr { PhysAddr::new(0) }
     pub fn free_user_address_space(&self, _alloc: &mut dyn FrameAllocator) {}
 }
+
+// ── MemoryLayout ─────────────────────────────────────────────────────
+
+impl rux_arch::MemoryLayout for NativeArch {
+    const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000; // Match x86_64 for tests
+    const INTERP_BASE: u64 = 0x40000000;
+}
+
+// ── Device probe stubs ───────────────────────────────────────────────
+
+/// No block device in native mode.
+pub unsafe fn probe_blk(_vq_addr: usize, _log: fn(&str)) -> Option<(*const dyn rux_drivers::BlockDevice, u64)> {
+    None
+}
+
+/// No network device in native mode.
+#[cfg(feature = "net")]
+pub unsafe fn probe_and_init_net(_alloc: &mut rux_mm::frame::BuddyAllocator, _log: fn(&str)) {}

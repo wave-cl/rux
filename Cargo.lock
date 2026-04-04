@@ -92,7 +92,6 @@ name = "rux-kernel"
 version = "0.8.0"
 dependencies = [
  "rux-arch",
- "rux-boot",
  "rux-drivers",
  "rux-elf",
  "rux-fs",
@@ -136,13 +135,6 @@ dependencies = [
 [[package]]
 name = "rux-sched"
 version = "0.8.0"
-
-[[package]]
-name = "rux-sync"
-version = "0.8.0"
-dependencies = [
- "rux-arch",
-]
 
 [[package]]
 name = "smoltcp"

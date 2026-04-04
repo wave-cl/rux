@@ -45,6 +45,10 @@ pub use aarch64::probe_and_init_net;
 pub use x86_64::probe_blk;
 #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
 pub use aarch64::probe_blk;
+#[cfg(feature = "native")]
+pub use native::probe_blk;
+#[cfg(all(feature = "native", feature = "net"))]
+pub use native::probe_and_init_net;
 
 /// Fill a Linux struct stat buffer from VFS InodeStat.
 /// Delegates to the `StatLayout::fill_stat` default method in rux-arch.
