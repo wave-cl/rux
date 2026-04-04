@@ -552,22 +552,22 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
 
 /// sendfile(out_fd, in_fd, offset, count) — Linux (widely used by busybox cat)
 pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -> isize {
-    unsafe {
-        let mut buf = [0u8; 4096];
-        let mut total: isize = 0;
-        let mut remaining = count;
+    // Use the high-level read/write which handle special devices (console,
+    // /dev/zero, /dev/urandom, pipes, sockets) — not the low-level sys_read_fd.
+    let mut buf = [0u8; 4096];
+    let mut total: isize = 0;
+    let mut remaining = count;
 
-        while remaining > 0 {
-            let chunk = remaining.min(4096);
-            let n = fdt::sys_read_fd(in_fd, buf.as_mut_ptr(), chunk, crate::kstate::fs(), &crate::pipe::PIPE);
-            if n <= 0 { break; }
-            let written = write(out_fd, buf.as_ptr() as usize, n as usize);
-            if written < 0 { return if total > 0 { total } else { written }; }
-            total += written;
-            remaining = remaining.saturating_sub(n as usize);
-        }
-        total
+    while remaining > 0 {
+        let chunk = remaining.min(4096);
+        let n = read(in_fd, buf.as_ptr() as usize, chunk);
+        if n <= 0 { break; }
+        let written = write(out_fd, buf.as_ptr() as usize, n as usize);
+        if written < 0 { return if total > 0 { total } else { written }; }
+        total += written;
+        remaining = remaining.saturating_sub(n as usize);
     }
+    total
 }
 
 /// Check if the current process can safely block on a pipe.

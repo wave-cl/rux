@@ -242,12 +242,13 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
         if fs.stat(f.ino, &mut stat).is_err() {
             return -5; // -EIO
         }
+        let is_char_dev = stat.mode & 0xF000 == 0x2000; // S_IFCHR
         let size = stat.size as usize;
-        if f.offset >= size {
-            return 0; // EOF
+        if !is_char_dev && f.offset >= size {
+            return 0; // EOF (skip for character devices — they generate data)
         }
 
-        let to_read = len.min(size - f.offset);
+        let to_read = if is_char_dev { len } else { len.min(size - f.offset) };
         let user_buf = core::slice::from_raw_parts_mut(buf, to_read);
         match fs.read(f.ino, f.offset as u64, user_buf) {
             Ok(n) => {
