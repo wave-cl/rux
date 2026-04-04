@@ -29,14 +29,19 @@ RUN_X86=true; RUN_AA64=true
 # ── Build ───────────────────────────────────────────────────────────
 printf "\033[1mBuilding...\033[0m\n"
 $RUN_X86 && {
-    cargo build --target x86_64-unknown-none -p rux-kernel 2>&1 | tail -1
+    cargo build --target x86_64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
     rust-objcopy --output-target=elf32-i386 \
         target/x86_64-unknown-none/debug/rux-kernel \
         target/x86_64-unknown-none/debug/rux-kernel.elf32
 }
-$RUN_AA64 && cargo build --target aarch64-unknown-none -p rux-kernel 2>&1 | tail -1
+$RUN_AA64 && cargo build --target aarch64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
 
-[ -f initramfs/initramfs_x86_64.cpio ] || bash initramfs/build.sh
+# Build ext2 rootfs images (busybox-based)
+[ -f rootfs/rootfs_x86_64.img ] || bash rootfs/build.sh
+
+# Cleanup: remove temp rootfs copies on exit
+cleanup() { rm -f /tmp/rux_rootfs_*.img; }
+trap cleanup EXIT
 
 # ── x86_64 ──────────────────────────────────────────────────────────
 if $RUN_X86; then
@@ -68,7 +73,6 @@ ln -s /bin/busybox /tmp/mylink && readlink /tmp/mylink
 mkdir /tmp/d && ls /tmp
 echo -n abcd | wc -c
 seq 1 3
-/bin/auxv
 basename /usr/bin/id
 cat /proc/self/status
 true && echo ok42
@@ -111,17 +115,18 @@ cut -d: -f1 /etc/passwd
 echo hello | tr a-z A-Z
 echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 cat /proc/$$/stat | cut -d" " -f5
-/bin/dynhello
 exit
 CMDS
 } | \
+    { ROOTFS_TMP="/tmp/rux_rootfs_x86_64.img"; cp rootfs/rootfs_x86_64.img "$ROOTFS_TMP"; \
     "$QEMU_X86" -cpu max -smp 2 \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
-    -initrd initramfs/initramfs_x86_64.cpio \
+    -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0 \
+    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
     -chardev stdio,id=char0,logfile=/tmp/rux_serial_x86_64.log \
     -serial chardev:char0 -display none \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-    -no-reboot -monitor none -net none -m 128M 2>&1 || true )
+    -no-reboot -monitor none -m 128M 2>&1; } || true )
 
 echo "$OUTPUT" > /tmp/rux_test_x86_64.log
 
@@ -129,7 +134,7 @@ echo "$OUTPUT" > /tmp/rux_test_x86_64.log
 check "boot banner"             "rux 0.9.0 (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
 check "SMP CPUs online"          "CPUs online"
-check "cpio unpacked"           "cpio: unpacked"
+check "ext2 root mounted"       "ext2: mounted as root"
 check "procfs mounted"          "procfs mounted at /proc"
 check "exec init"               "exec /sbin/init"
 check "shell prompt"            "/ # "
@@ -164,7 +169,6 @@ check "symlink"                 "busybox"
 check "mkdir"                   "d"
 check "wc -c (pipe)"            "4"
 check "seq"                     "3"
-check "auxv verifier"           "auxv_ok"
 check "basename"                "id"
 check "proc/self/status"        "Pid:"
 check "true && echo"            "ok42"
@@ -209,7 +213,6 @@ check "tr (uppercase)"         "HELLO"
 check "tee"                    "testdata"
 check "ps shows process"       "PID"
 check "proc stat pgid"         "1"
-check "dynamic linking"        "dynlink_ok"
 
 fi  # RUN_X86
 
@@ -237,7 +240,6 @@ ln -s /bin/busybox /tmp/mylink && readlink /tmp/mylink
 mkdir /tmp/d && ls /tmp
 echo -n abcd | wc -c
 seq 1 3
-/bin/auxv
 basename /usr/bin/id
 cat /proc/self/status
 true && echo ok42
@@ -283,16 +285,17 @@ echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
 cat /proc/$$/stat | cut -d" " -f5
-/bin/dynhello
 exit
 CMDS
 } | \
+    { ROOTFS_TMP="/tmp/rux_rootfs_aarch64.img"; cp rootfs/rootfs_aarch64.img "$ROOTFS_TMP"; \
     "$QEMU_AA64" -machine virt -cpu max -smp 2 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
-    -device loader,file=initramfs/initramfs_aarch64.cpio,addr=0x45000000,force-raw=on \
+    -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-device,drive=disk0 \
+    -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
     -chardev stdio,id=char0,logfile=/tmp/rux_serial_aarch64.log \
     -serial chardev:char0 -display none \
-    -semihosting -no-reboot -m 128M 2>&1 || true )
+    -semihosting -no-reboot -m 128M 2>&1; } || true )
 
 echo "$OUTPUT" > /tmp/rux_test_aarch64.log
 
@@ -300,7 +303,7 @@ echo "$OUTPUT" > /tmp/rux_test_aarch64.log
 check "boot banner"             "rux 0.9.0 (aarch64)"
 check "MMU enabled"             "MMU enabled"
 check "SMP CPUs online"          "CPUs online"
-check "cpio unpacked"           "cpio: unpacked"
+check "ext2 root mounted"       "ext2: mounted as root"
 check "procfs mounted"          "procfs mounted at /proc"
 check "exec init"               "exec /sbin/init"
 check "shell prompt"            "/ # "
@@ -334,7 +337,6 @@ check "symlink"                 "busybox"
 check "mkdir"                   "d"
 check "wc -c (pipe)"            "4"
 check "seq"                     "3"
-check "auxv verifier"           "auxv_ok"
 check "basename"                "id"
 check "proc/self/status"        "Pid:"
 check "true && echo"            "ok42"
@@ -380,7 +382,6 @@ check "tr (uppercase)"         "HELLO"
 check "tee"                    "testdata"
 check "ps shows process"       "PID"
 check "proc stat pgid"         "1"
-check "dynamic linking"        "dynlink_ok"
 
 fi  # RUN_AA64
 

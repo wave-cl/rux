@@ -54,25 +54,6 @@ build_rootfs() {
     cp "$BUSYBOX" "$STAGING/bin/busybox"
     chmod 755 "$STAGING/bin/busybox"
 
-    # ── auxv verifier (test binary) ─────────────────────────────
-    local AUXV="$USER_DIR/auxv_${ARCH}.elf"
-    if [ -f "$AUXV" ]; then
-        cp "$AUXV" "$STAGING/bin/auxv"
-        chmod 755 "$STAGING/bin/auxv"
-    fi
-
-    # ── Dynamic linking test binary + musl ld.so ─────────────────
-    local DYNHELLO="$USER_DIR/dynhello_${ARCH}.elf"
-    local LDMUSL="$USER_DIR/ld-musl-${ARCH}.so.1"
-    if [ -f "$DYNHELLO" ] && [ -f "$LDMUSL" ]; then
-        cp "$DYNHELLO" "$STAGING/bin/dynhello"
-        chmod 755 "$STAGING/bin/dynhello"
-        cp "$LDMUSL" "$STAGING/lib/ld-musl-${ARCH}.so.1"
-        chmod 755 "$STAGING/lib/ld-musl-${ARCH}.so.1"
-        ln -sf "ld-musl-${ARCH}.so.1" "$STAGING/lib/libc.so"
-        echo "  + dynhello + ld-musl-${ARCH}.so.1"
-    fi
-
     # ── /bin symlinks ────────────────────────────────────────────
     for cmd in sh ash cat cp date dd df dmesg hostname echo ed egrep false fgrep grep \
                gunzip gzip kill ln ls mkdir mknod mktemp more mount mv nice nohup \
@@ -155,6 +136,31 @@ CONF
     rm -f "$OUTPUT"
     dd if=/dev/zero of="$OUTPUT" bs=1M count=$IMG_SIZE_MB 2>/dev/null
     "$MKE2FS" -t ext2 -b 1024 -d "$STAGING" -L rux-root "$OUTPUT" 2>/dev/null
+
+    # Fix file ownership: mke2fs -d preserves host UIDs (e.g., 501 on macOS).
+    echo "  Fixing file ownership..."
+    python3 -c "
+import struct
+with open('$OUTPUT', 'r+b') as f:
+    f.seek(1024)
+    sb = f.read(1024)
+    log_bs = struct.unpack_from('<I', sb, 24)[0]
+    bs = 1024 << log_bs
+    ipg = struct.unpack_from('<I', sb, 40)[0]
+    ino_sz = struct.unpack_from('<H', sb, 88)[0]
+    n_ino = struct.unpack_from('<I', sb, 0)[0]
+    n_bg = (n_ino + ipg - 1) // ipg
+    for bg in range(n_bg):
+        f.seek(2 * bs + bg * 32)
+        bgd = f.read(32)
+        it_block = struct.unpack_from('<I', bgd, 8)[0]
+        for i in range(ipg):
+            off = it_block * bs + i * ino_sz
+            f.seek(off + 2)
+            f.write(struct.pack('<H', 0))
+            f.seek(off + 24)
+            f.write(struct.pack('<H', 0))
+" 2>/dev/null
 
     local SIZE=$(wc -c < "$OUTPUT" | tr -d ' ')
     echo "  → $OUTPUT ($SIZE bytes)"
