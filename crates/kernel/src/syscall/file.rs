@@ -376,6 +376,64 @@ pub fn truncate(path_ptr: usize, length: usize) -> isize {
     }
 }
 
+/// copy_file_range(fd_in, off_in, fd_out, off_out, len, flags) — Linux 4.5+
+/// Copies data between two file descriptors in-kernel (no user buffer needed).
+pub fn copy_file_range(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_ptr: usize, len: usize) -> isize {
+    unsafe {
+        use rux_fs::FileSystem;
+        if fd_in >= 64 || fd_out >= 64 { return crate::errno::EBADF; }
+        let ft = &*fdt::FD_TABLE;
+        if !ft[fd_in].active || !ft[fd_out].active { return crate::errno::EBADF; }
+
+        let fs = crate::kstate::fs();
+        let ino_in = ft[fd_in].ino;
+        let ino_out = ft[fd_out].ino;
+
+        // Read source offset (from pointer or fd position)
+        let src_off = if off_in_ptr != 0 && crate::uaccess::validate_user_ptr(off_in_ptr, 8).is_ok() {
+            crate::uaccess::get_user::<u64>(off_in_ptr)
+        } else {
+            ft[fd_in].offset as u64
+        };
+        let dst_off = if off_out_ptr != 0 && crate::uaccess::validate_user_ptr(off_out_ptr, 8).is_ok() {
+            crate::uaccess::get_user::<u64>(off_out_ptr)
+        } else {
+            ft[fd_out].offset as u64
+        };
+
+        // Copy in chunks using a kernel buffer
+        let mut buf = [0u8; 4096];
+        let mut copied: usize = 0;
+        let mut s_off = src_off;
+        let mut d_off = dst_off;
+
+        while copied < len {
+            let chunk = (len - copied).min(4096);
+            let n = match fs.read(ino_in, s_off, &mut buf[..chunk]) {
+                Ok(n) if n > 0 => n,
+                _ => break,
+            };
+            match fs.write(ino_out, d_off, &buf[..n]) {
+                Ok(w) => {
+                    s_off += w as u64;
+                    d_off += w as u64;
+                    copied += w;
+                }
+                Err(_) => break,
+            }
+        }
+
+        // Update offset pointers
+        if off_in_ptr != 0 { crate::uaccess::put_user(off_in_ptr, s_off); }
+        else { (*rux_fs::fdtable::FD_TABLE)[fd_in].offset = s_off as usize; }
+        if off_out_ptr != 0 { crate::uaccess::put_user(off_out_ptr, d_off); }
+        else { (*rux_fs::fdtable::FD_TABLE)[fd_out].offset = d_off as usize; }
+
+        if copied == 0 && len > 0 { return crate::errno::EIO; }
+        copied as isize
+    }
+}
+
 /// writev(fd, iov, iovcnt) — POSIX.1
 pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
     let cnt = iovcnt.min(16);

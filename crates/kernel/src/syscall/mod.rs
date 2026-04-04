@@ -570,7 +570,26 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 2: filesystem misc ──────────────────────────────
         Syscall::Chroot | Syscall::PivotRoot => crate::errno::ENOSYS, // no namespace support
         Syscall::Fadvise => 0, // advisory — safe to ignore
-        Syscall::Inotify | Syscall::InotifyAddWatch | Syscall::InotifyRmWatch => crate::errno::ENOSYS,
+        Syscall::Inotify => {
+            // inotify_init1(flags) → fd
+            // Return a valid fd that never becomes readable. Programs fall back
+            // to polling when inotify doesn't fire events.
+            unsafe {
+                let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
+                    .find(|&f| !fd_table[f].active)
+                {
+                    Some(fd) => {
+                        fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
+                        fd_table[fd].active = true;
+                        fd as isize
+                    }
+                    None => crate::errno::ENOMEM,
+                }
+            }
+        },
+        Syscall::InotifyAddWatch => 1, // return fake watch descriptor
+        Syscall::InotifyRmWatch => 0,
 
         // ── Batch 2: misc ─────────────────────────────────────────
         Syscall::Syslog => crate::errno::ENOSYS,
@@ -585,8 +604,25 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Lchown => posix::chown(a0, a1, a2), // same as chown for now
         Syscall::Setfsuid => 0,
         Syscall::Setfsgid => 0,
-        Syscall::MemfdCreate => crate::errno::ENOSYS,
-        Syscall::CopyFileRange => crate::errno::ENOSYS,
+        Syscall::MemfdCreate => {
+            // memfd_create(name, flags) → fd
+            // Return an anonymous fd. mmap on it works via MAP_ANONYMOUS fallback.
+            // read/write return 0 (empty). ftruncate is a no-op.
+            unsafe {
+                let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
+                    .find(|&f| !fd_table[f].active)
+                {
+                    Some(fd) => {
+                        fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
+                        fd_table[fd].active = true;
+                        fd as isize
+                    }
+                    None => crate::errno::ENOMEM,
+                }
+            }
+        },
+        Syscall::CopyFileRange => file::copy_file_range(a0, a1, a2, a3, a4),
         Syscall::Statx => fs_ops::statx(a0, a1, a2, a3, a4),
 
         // ── Batch 3: POSIX IPC ─────────────────────────────────────
