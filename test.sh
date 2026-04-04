@@ -174,7 +174,7 @@ CMDS
 echo "$OUTPUT" > /tmp/rux_test_x86_64.log
 
 # Boot
-check "boot banner"             "rux 0.11.0 (x86_64)"
+check "boot banner"             "rux 0.12.0 (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -183,7 +183,7 @@ check "exec init"               "exec /sbin/init"
 check "shell prompt"            "/ # "
 
 # Core commands
-check "uname"                   "rux rux 0.11.0"
+check "uname"                   "rux rux 0.12.0"
 check "cat /etc/passwd"         "root:x:0:0:root:/root:/bin/sh"
 check "cat /etc/os-release"     "NAME=\"rux\""
 check "whoami"                  "root"
@@ -363,7 +363,7 @@ CMDS
 echo "$OUTPUT" > /tmp/rux_test_aarch64.log
 
 # Boot
-check "boot banner"             "rux 0.11.0 (aarch64)"
+check "boot banner"             "rux 0.12.0 (aarch64)"
 check "MMU enabled"             "MMU enabled"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -372,7 +372,7 @@ check "exec init"               "exec /sbin/init"
 check "shell prompt"            "/ # "
 
 # Core commands
-check "uname"                   "rux rux 0.11.0"
+check "uname"                   "rux rux 0.12.0"
 check "cat /etc/passwd"         "root:x:0:0:root:/root:/bin/sh"
 check "cat /etc/os-release"     "NAME=\"rux\""
 check "whoami"                  "root"

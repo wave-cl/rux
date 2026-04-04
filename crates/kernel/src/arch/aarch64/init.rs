@@ -86,16 +86,42 @@ pub fn aarch64_init(dtb_addr: usize) {
     unsafe { super::gic::enable_irqs(); }
     console::write_str("rux: interrupts enabled\n");
 
-    // ── Frame allocator (hardcoded for QEMU virt -m 128M) ────────────
+    // ── Frame allocator (placed dynamically after kernel _end) ────────
+    extern "C" { static _end: u8; }
+    let kernel_end = unsafe { (&_end as *const u8 as usize + 0xFFF) & !0xFFF };
+    let alloc_size = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
+    let ramfs_size = core::mem::size_of::<rux_fs::ramfs::RamFs>();
+    let ramfs_start = (kernel_end + alloc_size + 0xFFF) & !0xFFF;
+    // Keep 0x44000000 as minimum floor for compatibility, but auto-adjust
+    // upward if _end extends past it (e.g., large MAX_PROCS).
+    let frame_base = ((ramfs_start + ramfs_size + 0xFFF) & !0xFFF).max(0x44000000);
+    let id_map_end: usize = 0x40000000 + 128 * 1024 * 1024; // 0x48000000
+    let max_frames = (id_map_end.saturating_sub(frame_base)) / 4096;
+    let frame_count = max_frames.min(16384) as u32;
+
+    {
+        let mut hx = [0u8; 16];
+        console::write_str("rux: _end=0x");
+        console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hx, kernel_end));
+        console::write_str(" frames@0x");
+        console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hx, frame_base));
+        console::write_str("\n");
+    }
+
+    if frame_base >= id_map_end {
+        console::write_str("PANIC: kernel too large for 128MB identity map\n");
+        loop { core::hint::spin_loop(); }
+    }
+
     console::write_str("rux: init frame allocator...\n");
     unsafe {
-        let alloc_ptr = 0x43000000 as *mut u8;
-        let alloc_qwords = core::mem::size_of::<rux_mm::frame::BuddyAllocator>() / 8;
+        let alloc_ptr = kernel_end as *mut u8;
+        let alloc_qwords = alloc_size / 8;
         for i in 0..alloc_qwords {
             core::ptr::write_volatile((alloc_ptr as *mut u64).add(i), 0u64);
         }
         let alloc = &mut *(alloc_ptr as *mut rux_mm::frame::BuddyAllocator);
-        alloc.init(rux_klib::PhysAddr::new(0x44000000), 16384);
+        alloc.init(rux_klib::PhysAddr::new(frame_base), frame_count);
         console::write_str("rux: frame allocator ready\n");
 
         // ── Kernel page tables + enable MMU ────────────────────────────
@@ -198,30 +224,33 @@ pub fn aarch64_init(dtb_addr: usize) {
     }
 
     // ── Boot: ramfs + initramfs + procfs + exec /sbin/init ────────────
-    unsafe {
-        let alloc_ptr = 0x43000000 as *mut rux_mm::frame::BuddyAllocator;
-        let alloc_size = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
-        let ramfs_addr = (0x43000000 + alloc_size + 0xFFF) & !0xFFF;
+    // Store kernel_end in a static for the procfs closure.
+    static mut ALLOC_ADDR: usize = 0;
+    unsafe { ALLOC_ADDR = kernel_end; }
 
-        // Find initrd: try DTB, then scan RAM
+    unsafe {
+        let alloc_ptr = kernel_end as *mut rux_mm::frame::BuddyAllocator;
+
+        // Find initrd: try DTB, then scan RAM (scan after frame pool)
+        let scan_start = frame_base + frame_count as usize * 4096;
         let initrd = if dtb_addr != 0 {
             super::devicetree::get_initrd(dtb_addr)
         } else {
             None
-        }.or_else(|| find_cpio_in_ram(0x44100000, 0x47F00000));
+        }.or_else(|| find_cpio_in_ram(scan_start, id_map_end));
 
         static mut PROCFS: rux_fs::procfs::ProcFs = rux_fs::procfs::ProcFs::new(
             || super::timer::ticks(),
             || 16384,
             || unsafe {
                 use rux_mm::FrameAllocator;
-                (*(0x43000000 as *const rux_mm::frame::BuddyAllocator))
+                (*(ALLOC_ADDR as *const rux_mm::frame::BuddyAllocator))
                     .available_frames(rux_mm::PageSize::FourK)
             },
         );
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr,
-            ramfs_ptr: ramfs_addr as *mut rux_fs::ramfs::RamFs,
+            ramfs_ptr: ramfs_start as *mut rux_fs::ramfs::RamFs,
             initrd,
             procfs: &mut *(&raw mut PROCFS),
             log: console::write_str,
