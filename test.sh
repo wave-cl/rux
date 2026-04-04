@@ -123,6 +123,8 @@ ls /proc/self/fd
 cat /proc/self/maps | head -1
 echo a | cat | cat | cat
 echo p1 | sed 's/p/q/' | tr a-z A-Z
+echo old > /tmp/trunc && echo new > /tmp/trunc && cat /tmp/trunc
+echo line1 >> /tmp/app && echo line2 >> /tmp/app && wc -l /tmp/app
 exit
 CMDS
 } | \
@@ -229,6 +231,8 @@ check "proc/self/fd"          "0"
 check "proc/self/maps"        "r-xp"
 check "triple pipe"           "a"
 check "pipe chain"            "Q1"
+check "O_TRUNC (>)"          "new"
+check "O_APPEND (>>)"        "2"
 
 fi  # RUN_X86
 
@@ -309,6 +313,8 @@ ls /proc/self/fd
 cat /proc/self/maps | head -1
 echo a | cat | cat | cat
 echo p1 | sed 's/p/q/' | tr a-z A-Z
+echo old > /tmp/trunc && echo new > /tmp/trunc && cat /tmp/trunc
+echo line1 >> /tmp/app && echo line2 >> /tmp/app && wc -l /tmp/app
 exit
 CMDS
 } | \
@@ -414,6 +420,8 @@ check "proc/self/fd"          "0"
 check "proc/self/maps"        "r-xp"
 check "triple pipe"           "a"
 check "pipe chain"            "Q1"
+check "O_TRUNC (>)"          "new"
+check "O_APPEND (>>)"        "2"
 
 fi  # RUN_AA64
 

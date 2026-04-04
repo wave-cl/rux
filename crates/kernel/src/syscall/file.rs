@@ -105,6 +105,19 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         return write_len as isize;
     }
     unsafe {
+        // O_APPEND: seek to end of file before writing
+        if fd < 64 && (*fdt::FD_TABLE)[fd].active
+            && (*fdt::FD_TABLE)[fd].flags & 0x400 != 0  // O_APPEND = 0x400
+            && !(*fdt::FD_TABLE)[fd].is_pipe
+            && !(*fdt::FD_TABLE)[fd].is_console
+        {
+            use rux_fs::FileSystem;
+            let ino = (*fdt::FD_TABLE)[fd].ino;
+            let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
+            if crate::kstate::fs().stat(ino, &mut stat).is_ok() {
+                (*fdt::FD_TABLE)[fd].offset = stat.size as usize;
+            }
+        }
         let result = if fd < 64 && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
             pipe_io(fd, buf, len, true)
         } else {
@@ -158,6 +171,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                         return crate::errno::EACCES;
                     }
                 }
+                // sys_open_ino handles O_TRUNC and O_APPEND
                 fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
             }
             Err(_) if o_creat => {
@@ -202,6 +216,7 @@ pub fn openat(dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isize
                 // Resolve path relative to dir_ino
                 match rux_fs::path::resolve_path_at(fs, dir_ino, path) {
                     Ok(ino) => {
+                        // sys_open_ino handles O_TRUNC and O_APPEND
                         return fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs());
                     }
                     Err(_) if o_creat => {
