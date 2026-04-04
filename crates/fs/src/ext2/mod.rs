@@ -42,6 +42,33 @@ struct Ext2Inner {
     cache_idx: usize,
 }
 
+/// Reentrant filesystem lock — prevents concurrent ext2 metadata corruption.
+/// Uses a depth counter so nested calls (e.g., unlink → truncate) don't deadlock.
+static FS_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static mut FS_LOCK_DEPTH: u32 = 0;
+
+fn fs_lock() {
+    unsafe {
+        if FS_LOCK_DEPTH > 0 {
+            // Already held (reentrant call) — just bump depth
+            FS_LOCK_DEPTH += 1;
+            return;
+        }
+        while FS_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+        FS_LOCK_DEPTH = 1;
+    }
+}
+fn fs_unlock() {
+    unsafe {
+        FS_LOCK_DEPTH -= 1;
+        if FS_LOCK_DEPTH == 0 {
+            FS_LOCK.store(false, core::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CacheEntry {
     block_no: u64,
@@ -185,17 +212,18 @@ impl FileSystem for Ext2Fs {
     }
 
     fn read(&self, ino: InodeId, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError> {
-        unsafe {
-
-            block::read_file(self, ino as u32, offset, buf)
-        }
+        unsafe { block::read_file(self, ino as u32, offset, buf) }
     }
 
     fn write(&mut self, ino: InodeId, offset: u64, buf: &[u8]) -> Result<usize, VfsError> {
-        unsafe { block::write_file(self, ino as u32, offset, buf) }
+        fs_lock();
+        let r = unsafe { block::write_file(self, ino as u32, offset, buf) };
+        fs_unlock();
+        r
     }
 
     fn truncate(&mut self, ino: InodeId, size: u64) -> Result<(), VfsError> {
+        fs_lock();
         unsafe {
             let mut raw = self.read_inode_raw(ino as u32)?;
             let old_size = raw.size as u64 | ((raw.size_high as u64) << 32);
@@ -253,6 +281,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn create(&mut self, dir_ino: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError> {
+        fs_lock();
         unsafe {
             let ino = alloc::alloc_inode(self)?;
             // Initialize inode as regular file
@@ -268,6 +297,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn mkdir(&mut self, dir_ino: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError> {
+        fs_lock();
         unsafe {
             let ino = alloc::alloc_inode(self)?;
             let block_num = alloc::alloc_block(self)?;
@@ -318,6 +348,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn unlink(&mut self, dir_ino: InodeId, name: FileName<'_>) -> Result<(), VfsError> {
+        fs_lock();
         unsafe {
             let child_ino = dir::remove_entry(self, dir_ino as u32, name.as_bytes())?;
             let mut raw = self.read_inode_raw(child_ino)?;
@@ -340,6 +371,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn link(&mut self, dir_ino: InodeId, name: FileName<'_>, target: InodeId) -> Result<(), VfsError> {
+        fs_lock();
         unsafe {
             let mut raw = self.read_inode_raw(target as u32)?;
             raw.links_count += 1;
@@ -350,6 +382,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn symlink(&mut self, dir_ino: InodeId, name: FileName<'_>, target: &[u8]) -> Result<InodeId, VfsError> {
+        fs_lock();
         unsafe {
             let ino = alloc::alloc_inode(self)?;
             let mut raw = inode::RawInode {
@@ -383,13 +416,11 @@ impl FileSystem for Ext2Fs {
     }
 
     fn readdir(&self, dir_ino: InodeId, offset: usize, entry: &mut DirEntry) -> Result<bool, VfsError> {
-        unsafe {
-
-            dir::readdir(self, dir_ino as u32, offset, entry)
-        }
+        unsafe { dir::readdir(self, dir_ino as u32, offset, entry) }
     }
 
     fn rename(&mut self, old_dir: InodeId, old_name: FileName<'_>, new_dir: InodeId, new_name: FileName<'_>) -> Result<(), VfsError> {
+        fs_lock();
         unsafe {
             // Look up the inode first
             let ino = dir::lookup(self, old_dir as u32, old_name.as_bytes())?;
@@ -404,6 +435,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn chmod(&mut self, ino: InodeId, mode: u32) -> Result<(), VfsError> {
+        fs_lock();
         unsafe {
             let mut raw = self.read_inode_raw(ino as u32)?;
             raw.mode = (raw.mode & 0xF000) | (mode & 0xFFF) as u16;
@@ -412,6 +444,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn chown(&mut self, ino: InodeId, uid: u32, gid: u32) -> Result<(), VfsError> {
+        fs_lock();
         unsafe {
             let mut raw = self.read_inode_raw(ino as u32)?;
             raw.uid = uid as u16;
@@ -421,6 +454,7 @@ impl FileSystem for Ext2Fs {
     }
 
     fn utimes(&mut self, ino: InodeId, atime: u64, mtime: u64) -> Result<(), VfsError> {
+        fs_lock();
         unsafe {
             let mut raw = self.read_inode_raw(ino as u32)?;
             raw.atime = atime as u32;
