@@ -168,6 +168,7 @@ head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
 cat /etc/issue
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
+wget -q -O - http://example.com 2>&1 | head -1
 echo all_tests_done
 apk update 2>&1 | tail -1
 apk add --no-interactive curl 2>&1 | tail -1
@@ -295,6 +296,7 @@ check "pipe chain grep"      "1"
 check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
+check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "apk add curl"         "packages"
 check "curl version"         "curl"

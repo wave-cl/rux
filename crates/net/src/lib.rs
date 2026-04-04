@@ -53,6 +53,9 @@ static mut SOCKET_STORAGE: [SocketStorage<'static>; MAX_SOCKETS] = [SocketStorag
 static mut TCP_RX_BUFS: [[u8; TCP_RX_BUF_SIZE]; MAX_TCP_SOCKETS] = [[0; TCP_RX_BUF_SIZE]; MAX_TCP_SOCKETS];
 static mut TCP_TX_BUFS: [[u8; TCP_TX_BUF_SIZE]; MAX_TCP_SOCKETS] = [[0; TCP_TX_BUF_SIZE]; MAX_TCP_SOCKETS];
 static mut TCP_BUF_USED: [bool; MAX_TCP_SOCKETS] = [false; MAX_TCP_SOCKETS];
+/// Maps smoltcp SocketHandle raw index → TCP buffer slot index.
+/// Allows socket_free to reclaim the buffer when the socket is removed.
+static mut HANDLE_TO_BUF: [i8; MAX_SOCKETS] = [-1; MAX_SOCKETS];
 
 // UDP buffers: 4 sockets
 static mut UDP_RX_BUFS: [[u8; UDP_RX_BUF_SIZE]; MAX_UDP_SOCKETS] = [[0; UDP_RX_BUF_SIZE]; MAX_UDP_SOCKETS];
@@ -161,7 +164,13 @@ pub unsafe fn tcp_alloc() -> Option<SocketHandle> {
     // Verify buffer capacity
     debug_assert!(socket.recv_capacity() == TCP_RX_BUF_SIZE);
 
-    Some(sockets.add(socket))
+    let handle = sockets.add(socket);
+    // Record handle → buffer slot mapping for socket_free cleanup
+    let raw = handle_to_raw(handle);
+    if raw < MAX_SOCKETS {
+        HANDLE_TO_BUF[raw] = idx as i8;
+    }
+    Some(handle)
 }
 
 /// Initiate a TCP connection.
@@ -329,10 +338,16 @@ pub unsafe fn udp_can_recv(handle: SocketHandle) -> bool {
 /// Free a socket handle, returning its slot to the pool.
 pub unsafe fn socket_free(handle: SocketHandle) {
     if let Some(sockets) = SOCKETS.as_mut() {
+        // Free the TCP buffer slot so it can be reused
+        let raw = handle_to_raw(handle);
+        if raw < MAX_SOCKETS {
+            let buf_idx = HANDLE_TO_BUF[raw];
+            if buf_idx >= 0 && (buf_idx as usize) < MAX_TCP_SOCKETS {
+                TCP_BUF_USED[buf_idx as usize] = false;
+            }
+            HANDLE_TO_BUF[raw] = -1;
+        }
         sockets.remove(handle);
-        // Note: buffer slots are NOT freed here because smoltcp doesn't
-        // tell us which buffer slot was used. For a production kernel we'd
-        // track this; for now the 8/4 slot limit is adequate.
     }
 }
 
