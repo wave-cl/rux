@@ -514,6 +514,89 @@ check "fork + pipe"          "2"
 
 fi  # RUN_AA64
 
+# ── Alpine Linux tests ──────────────────────────────────────────────
+# Run if Alpine rootfs images exist (build with: bash rootfs/build_alpine.sh)
+[ -f rootfs/alpine_x86_64.img ] || { [ -f rootfs/build_alpine.sh ] && bash rootfs/build_alpine.sh; }
+
+if $RUN_X86 && [ -f rootfs/alpine_x86_64.img ]; then
+printf "\n\033[1m── Alpine x86_64 ──\033[0m\n"
+
+OUTPUT=$( { sleep 10; cat <<'CMDS'
+cat /etc/alpine-release
+uname -a
+apk --version
+id
+whoami
+hostname
+ls /
+cat /etc/issue
+echo alpine_boot_ok
+exit
+CMDS
+} | \
+    { ROOTFS_TMP="/tmp/rux_alpine_x86_64.img"; cp rootfs/alpine_x86_64.img "$ROOTFS_TMP"; \
+    "$QEMU_X86" -cpu max -smp 2 \
+    -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
+    -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0 \
+    -chardev stdio,id=char0,logfile=/tmp/rux_serial_alpine_x86.log \
+    -serial chardev:char0 -display none \
+    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+    -no-reboot -monitor none -m 128M 2>&1; } || true )
+
+echo "$OUTPUT" > /tmp/rux_test_alpine_x86.log
+
+check "alpine: boot"           "exec /sbin/init"
+check "alpine: shell"          "/ #"
+check "alpine: release"        "3.21"
+check "alpine: uname"          "rux"
+check "alpine: apk"            "apk-tools"
+check "alpine: id"             "uid=0"
+check "alpine: whoami"         "root"
+check "alpine: hostname"       "rux"
+check "alpine: ls"             "bin"
+check "alpine: issue"          "Alpine Linux"
+check "alpine: boot ok"        "alpine_boot_ok"
+
+fi
+
+if $RUN_AA64 && [ -f rootfs/alpine_aarch64.img ]; then
+printf "\n\033[1m── Alpine aarch64 ──\033[0m\n"
+
+OUTPUT=$( { sleep 28; cat <<'CMDS'
+cat /etc/alpine-release
+uname -a
+apk --version
+id
+whoami
+hostname
+ls /
+echo alpine_boot_ok
+exit
+CMDS
+} | \
+    { ROOTFS_TMP="/tmp/rux_alpine_aarch64.img"; cp rootfs/alpine_aarch64.img "$ROOTFS_TMP"; \
+    "$QEMU_AA64" -machine virt -cpu max -smp 2 \
+    -kernel target/aarch64-unknown-none/debug/rux-kernel \
+    -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-device,drive=disk0 \
+    -chardev stdio,id=char0,logfile=/tmp/rux_serial_alpine_aa64.log \
+    -serial chardev:char0 -display none \
+    -semihosting -no-reboot -m 128M 2>&1; } || true )
+
+echo "$OUTPUT" > /tmp/rux_test_alpine_aa64.log
+
+check "alpine: boot"           "exec /sbin/init"
+check "alpine: shell"          "/ #"
+check "alpine: release"        "3.21"
+check "alpine: uname"          "rux"
+check "alpine: apk"            "apk-tools"
+check "alpine: id"             "uid=0"
+check "alpine: whoami"         "root"
+check "alpine: hostname"       "rux"
+check "alpine: ls"             "bin"
+check "alpine: boot ok"        "alpine_boot_ok"
+
+fi
+
 # ── aarch64 networking tests (opt-in: TEST_NET=1) ─────────────────
 if $RUN_AA64 && [ "${TEST_NET:-0}" = "1" ]; then
 printf "\n\033[1m── aarch64 networking ──\033[0m\n"
