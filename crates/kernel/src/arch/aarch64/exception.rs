@@ -81,6 +81,11 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     crate::syscall::posix::exit(139);
                 }
                 0b100000 | 0b100001 => {
+                    // User instruction abort — try demand paging (lazy mmap,
+                    // COW text pages that need re-mapping as executable).
+                    if unsafe { crate::demand_paging::handle_user_fault(far, false) } {
+                        return;
+                    }
                     super::console::write_str("rux: SIGSEGV (instr) at ");
                     write_hex(far as usize);
                     super::console::write_str("\n");

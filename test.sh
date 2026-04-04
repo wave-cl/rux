@@ -289,7 +289,7 @@ fi  # RUN_X86
 if $RUN_AA64; then
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 22; cat <<'CMDS'
+OUTPUT=$( { sleep 24; cat <<'CMDS'
 uname -a
 cat /etc/passwd
 cat /etc/os-release
@@ -369,9 +369,9 @@ rm /tmp/big && ls /tmp/big 2>&1
 ln -s /etc/passwd /tmp/sl && cat /tmp/sl | head -1
 echo dup_test > /tmp/dup && cat /tmp/dup
 md5sum /etc/passwd | cut -d' ' -f1
-xargs echo < /etc/hostname
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
+xargs echo < /etc/hostname
 exit
 CMDS
 } | \
@@ -485,7 +485,8 @@ check "symlink read"         "root"
 check "dup (redirect)"       "dup_test"
 check "md5sum"               ""
 check "xargs"                "rux"
-# Note: sh -c tests omitted on aarch64 (SIGSEGV after subshell exit — known issue)
+check "subshell"             "subshell_ok"
+check "fork + pipe"          "2"
 
 fi  # RUN_AA64
 
@@ -495,7 +496,7 @@ printf "\n\033[1m── aarch64 networking ──\033[0m\n"
 # Rebuild with net feature
 cargo build --target aarch64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
 
-OUTPUT=$( { sleep 22; cat <<'CMDS'
+OUTPUT=$( { sleep 24; cat <<'CMDS'
 true
 ping -c 1 -W 5 10.0.2.2
 echo ping_done
