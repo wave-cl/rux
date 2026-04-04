@@ -1,7 +1,6 @@
 /// aarch64 boot initialization: hardware setup and shell launch.
 
 use super::console;
-use super::exit;
 use crate::{scheduler, pgtrack};
 
 /// AP (Application Processor) Rust entry point. Called from ap_entry.S

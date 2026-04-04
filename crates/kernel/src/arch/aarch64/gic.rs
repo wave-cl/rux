@@ -94,6 +94,7 @@ pub unsafe fn enable_irqs() {
 }
 
 /// Disable IRQs (mask).
+#[allow(dead_code)]
 pub unsafe fn disable_irqs() {
     core::arch::asm!("msr daifset, #2", options(nostack)); // set IRQ mask
 }

@@ -19,7 +19,7 @@ pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
 /// Get the top address of the default SYSCALL_STACK.
 pub fn syscall_stack_top() -> u64 {
-    unsafe { (&raw const SYSCALL_STACK).cast::<u8>() as u64 + 65536 }
+    (&raw const SYSCALL_STACK).cast::<u8>() as u64 + 65536
 }
 
 /// Saved user RSP during syscall (single-process, no swapgs needed).

@@ -278,7 +278,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
 
             if sock.sock_type == SOCK_STREAM {
                 let max_iters = if nonblock { 10u32 } else { 30_000u32 };
-                for iter in 0..max_iters {
+                for _iter in 0..max_iters {
                     // Poll with interrupts disabled (we own smoltcp exclusively)
                     rux_net::poll(crate::arch::Arch::ticks());
                     if rux_net::tcp_can_recv(handle) {

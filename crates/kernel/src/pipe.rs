@@ -1,5 +1,6 @@
 /// Kernel pipe interface — delegates to rux_ipc + rux_fs::fdtable.
 
+#[allow(unused_imports)]
 pub use rux_ipc::pipe::{read, write, close, dup_ref, reset};
 
 /// Pipe function pointers — maps directly to rux_ipc::pipe functions.

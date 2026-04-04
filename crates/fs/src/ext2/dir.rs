@@ -222,7 +222,6 @@ pub(crate) unsafe fn remove_entry(
 
         let mut off = 0usize;
         let mut prev_off = 0usize;
-        let mut found = false;
 
         while off < bs {
             let d_ino = le32(&buf, off);

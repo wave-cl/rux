@@ -2,7 +2,6 @@
 
 use crate::{InodeType, VfsError};
 use super::Ext2Fs;
-use super::superblock::{self};
 
 /// Raw on-disk inode fields we need.
 pub(crate) struct RawInode {

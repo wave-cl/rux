@@ -39,8 +39,11 @@ pub struct PerCpu {
 }
 
 /// Assembly-accessible offsets into PerCpu (must match #[repr(C)] layout).
+#[allow(dead_code)]
 pub const PERCPU_OFFSET_SAVED_USER_RSP: usize = 0;
+#[allow(dead_code)]
 pub const PERCPU_OFFSET_SAVED_A5: usize = 8;
+#[allow(dead_code)]
 pub const PERCPU_OFFSET_KSTACK_TOP: usize = 16;
 
 impl PerCpu {
@@ -68,6 +71,7 @@ static mut BSP_CPU_ID: usize = 0;
 
 /// Enable per-CPU data access. Call after setting TPIDR_EL1 (aarch64)
 /// or GS-base (x86_64) to point to the current CPU's PerCpu struct.
+#[allow(dead_code)]
 pub unsafe fn enable_hw_cpu_id() { /* activate per-CPU access */ }
 
 /// Set the per-CPU hardware register to point to this CPU's PerCpu struct.
@@ -78,6 +82,7 @@ pub unsafe fn init_this_cpu(id: usize) {
 }
 
 /// Read the current CPU's ID. Uses per-CPU register (fast, no table lookup).
+#[allow(dead_code)]
 #[inline(always)]
 pub unsafe fn cpu_id() -> usize {
     this_cpu().cpu_id as usize

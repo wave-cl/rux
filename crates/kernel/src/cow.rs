@@ -33,6 +33,7 @@ pub unsafe fn init(alloc_base: PhysAddr) {
 }
 
 /// Get a mutable reference to the global frame reference table.
+#[allow(dead_code)]
 pub unsafe fn refs() -> &'static mut FrameRefTable {
     &mut *(&raw mut FRAME_REFS)
 }

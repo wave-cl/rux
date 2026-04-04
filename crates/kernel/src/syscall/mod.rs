@@ -167,6 +167,7 @@ pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeI
 
 /// Architecture-independent syscall identifiers.
 /// Each arch maps its own syscall numbers to this enum via `translate()`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Syscall {
     // File I/O
@@ -722,6 +723,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
 /// Trait for arch-specific syscall number translation.
 /// Each architecture maps its Linux syscall numbers to the common Syscall enum.
+#[allow(dead_code)]
 pub trait SyscallTranslate {
     fn translate(nr: usize) -> Syscall;
 }

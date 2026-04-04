@@ -16,6 +16,7 @@ fn set_le16(buf: &mut [u8], off: usize, val: u16) {
     buf[off] = b[0]; buf[off + 1] = b[1];
 }
 
+#[allow(dead_code)]
 fn set_le32(buf: &mut [u8], off: usize, val: u32) {
     let b = val.to_le_bytes();
     buf[off] = b[0]; buf[off + 1] = b[1]; buf[off + 2] = b[2]; buf[off + 3] = b[3];
@@ -56,7 +57,7 @@ pub(crate) unsafe fn alloc_block(fs: &Ext2Fs) -> Result<u32, VfsError> {
                 set_le16(&mut bgd_buf, bgd_off + 12, free_blocks - 1);
                 fs.write_block(bgd_block, &bgd_buf)?;
 
-                let block_num = group * fs.blocks_per_group + bit + 1; // ext2 blocks are 1-based per group start
+                let _block_num = group * fs.blocks_per_group + bit + 1; // ext2 blocks are 1-based per group start
                 // Actually: first block of group = group * blocks_per_group + first_data_block
                 // For simplicity with 1024-byte blocks: first_data_block = 1
                 let first_data_block = if fs.block_size == 1024 { 1u32 } else { 0u32 };
@@ -69,7 +70,7 @@ pub(crate) unsafe fn alloc_block(fs: &Ext2Fs) -> Result<u32, VfsError> {
 
 /// Allocate a free inode. Returns the inode number (1-based).
 pub(crate) unsafe fn alloc_inode(fs: &Ext2Fs) -> Result<u32, VfsError> {
-    let bs = fs.block_size as usize;
+    let _bs = fs.block_size as usize;
     let mut bgd_buf = [0u8; 4096];
     let mut bitmap_buf = [0u8; 4096];
 
@@ -104,6 +105,7 @@ pub(crate) unsafe fn alloc_inode(fs: &Ext2Fs) -> Result<u32, VfsError> {
 }
 
 /// Free a block back to the bitmap.
+#[allow(dead_code)]
 pub(crate) unsafe fn free_block(fs: &Ext2Fs, block_num: u32) -> Result<(), VfsError> {
     let first_data_block = if fs.block_size == 1024 { 1u32 } else { 0u32 };
     let adj = block_num - first_data_block;

@@ -78,13 +78,13 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     super::console::write_str("rux: SIGSEGV at ");
                     write_hex(far as usize);
                     super::console::write_str("\n");
-                    unsafe { crate::syscall::posix::exit(139); }
+                    crate::syscall::posix::exit(139);
                 }
                 0b100000 | 0b100001 => {
                     super::console::write_str("rux: SIGSEGV (instr) at ");
                     write_hex(far as usize);
                     super::console::write_str("\n");
-                    unsafe { crate::syscall::posix::exit(139); }
+                    crate::syscall::posix::exit(139);
                 }
                 _ => {
                     super::console::write_str("rux: user sync EC=");
@@ -93,7 +93,7 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     write_hex(esr as usize);
                     super::console::write_str("\n");
                     // Kill the process for unhandled user exceptions
-                    unsafe { crate::syscall::posix::exit(139); }
+                    crate::syscall::posix::exit(139);
                 }
             }
         }
@@ -149,6 +149,7 @@ fn dump_user_fault(label: &str, far: u64, esr: u64, frame: *const u8) {
     super::exit::exit_qemu(super::exit::EXIT_FAILURE);
 }
 
+#[allow(dead_code)]
 fn panic_console(msg: &str, addr: u64) {
     super::console::write_str("PANIC: ");
     super::console::write_str(msg);

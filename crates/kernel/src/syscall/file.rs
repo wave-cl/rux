@@ -5,6 +5,7 @@ use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 
 const O_CREAT: usize = 0x40;
+#[allow(dead_code)]
 const O_NONBLOCK: usize = 0x800;
 /// read(fd, buf, count) — POSIX.1
 /// readv(fd, iov, iovcnt) — scatter read

@@ -16,6 +16,7 @@ const FDT_END: u32 = 9;
 
 /// FDT header (big-endian).
 #[repr(C)]
+#[allow(dead_code)]
 struct FdtHeader {
     magic: u32,
     totalsize: u32,
@@ -30,12 +31,14 @@ struct FdtHeader {
 }
 
 /// A parsed memory region.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct MemRegion {
     pub base: PhysAddr,
     pub size: usize,
 }
 
+#[allow(dead_code)]
 pub struct MemoryMap {
     pub regions: [MemRegion; 8],
     pub count: usize,
@@ -61,6 +64,7 @@ fn be64(ptr: *const u8) -> u64 {
 ///
 /// # Safety
 /// `dtb_addr` must point to a valid FDT blob.
+#[allow(dead_code)]
 pub unsafe fn parse_dtb(dtb_addr: usize) -> MemoryMap {
     let mut map = MemoryMap {
         regions: [MemRegion { base: PhysAddr::new(0), size: 0 }; 8],

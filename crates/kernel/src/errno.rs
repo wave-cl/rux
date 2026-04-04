@@ -36,15 +36,21 @@ pub const EOPNOTSUPP: isize = -95;     // Operation not supported on socket
 
 pub const SIGKILL: u8 = 9;
 pub const SIGCHLD: u8 = 17;
+#[allow(dead_code)]
 pub const SIGCONT: u8 = 18;
+#[allow(dead_code)]
 pub const SIGSTOP: u8 = 19;
+#[allow(dead_code)]
 pub const SIGTSTP: u8 = 20;
 
 // ── Clone flags (Linux) ─────────────────────────────────────────────
 
 pub const CLONE_VM: usize = 0x100;
+#[allow(dead_code)]
 pub const CLONE_FS: usize = 0x200;
+#[allow(dead_code)]
 pub const CLONE_FILES: usize = 0x400;
+#[allow(dead_code)]
 pub const CLONE_SIGHAND: usize = 0x800;
 pub const CLONE_THREAD: usize = 0x10000;
 pub const CLONE_CHILD_CLEARTID: usize = 0x200000;

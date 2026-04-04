@@ -25,6 +25,7 @@ impl CmdlineParams {
         }
     }
 
+    #[allow(dead_code)]
     pub fn has_root(&self) -> bool { self.root_len > 0 }
 }
 

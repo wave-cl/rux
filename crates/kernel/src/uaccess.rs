@@ -38,6 +38,7 @@ pub unsafe fn clac() {
 
 /// Enable the user access protection mechanism.
 /// Called once during boot after the relevant CPU feature is enabled.
+#[allow(dead_code)]
 pub unsafe fn enable_smap_guards() {
     crate::arch::Arch::enable_user_access_protection();
 }
@@ -64,6 +65,7 @@ pub unsafe fn put_user<T: Copy>(addr: usize, val: T) {
 // ── Buffer access helpers ───────────────────────────────────────────
 
 /// Copy bytes from user memory to kernel buffer.
+#[allow(dead_code)]
 pub unsafe fn copy_from_user(dst: *mut u8, src: usize, len: usize) {
     stac();
     core::ptr::copy_nonoverlapping(src as *const u8, dst, len);
@@ -71,6 +73,7 @@ pub unsafe fn copy_from_user(dst: *mut u8, src: usize, len: usize) {
 }
 
 /// Copy bytes from kernel buffer to user memory.
+#[allow(dead_code)]
 pub unsafe fn copy_to_user(dst: usize, src: *const u8, len: usize) {
     stac();
     core::ptr::copy_nonoverlapping(src, dst as *mut u8, len);

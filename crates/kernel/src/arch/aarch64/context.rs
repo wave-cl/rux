@@ -1,7 +1,7 @@
-/// aarch64 context switch: save/restore callee-saved registers + stack swap.
-///
-/// Callee-saved: x19-x28, x29 (FP), x30 (LR), SP.
-/// context_switch saves these on the old stack, swaps SP, restores from new stack.
+// aarch64 context switch: save/restore callee-saved registers + stack swap.
+//
+// Callee-saved: x19-x28, x29 (FP), x30 (LR), SP.
+// context_switch saves these on the old stack, swaps SP, restores from new stack.
 
 core::arch::global_asm!(r#"
 .global context_switch
@@ -41,9 +41,9 @@ extern "C" {
     pub fn context_switch(old_sp: *mut usize, new_sp: usize);
 }
 
-/// Fork child return trampoline.
-/// context_switch's `ret` jumps here (via LR). The child's kernel stack
-/// has a full exception frame (272 bytes). We do restore_context + eret.
+// Fork child return trampoline.
+// context_switch's `ret` jumps here (via LR). The child's kernel stack
+// has a full exception frame (272 bytes). We do restore_context + eret.
 core::arch::global_asm!(r#"
 .global fork_child_eret
 fork_child_eret:

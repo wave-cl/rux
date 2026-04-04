@@ -700,13 +700,11 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
         unsafe { *(writefds_ptr as *const u64) }
     } else { 0 };
 
-    let has_sockets = unsafe {
-        (0..nfds).any(|fd| {
-            ((read_set | write_set) & (1u64 << fd)) != 0
-                && fd < 64
-                && super::socket::is_socket(fd)
-        })
-    };
+    let has_sockets = (0..nfds).any(|fd| {
+        ((read_set | write_set) & (1u64 << fd)) != 0
+            && fd < 64
+            && super::socket::is_socket(fd)
+    });
 
     let max_iters = if has_sockets && timeout_ms > 0 { timeout_ms.min(30_000) } else { 1 };
 

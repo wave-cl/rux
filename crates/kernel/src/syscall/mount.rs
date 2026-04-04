@@ -16,7 +16,6 @@ pub fn sys_mount(
         let fstype = uaccess::read_user_cstr(fstype_ptr);
 
         let vfs = crate::kstate::fs();
-        use rux_fs::FileSystem;
 
         // Resolve target directory
         let dir_ino = match rux_fs::path::resolve_path(vfs, target) {

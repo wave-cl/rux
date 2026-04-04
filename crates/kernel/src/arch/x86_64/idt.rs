@@ -310,17 +310,12 @@ pub unsafe fn load() {
 
 /// Rust dispatch function called from the assembly common handler.
 #[no_mangle]
-
-#[no_mangle]
 pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {
     match vector {
         0 => panic!("Division by zero"),
         6 | 13 => {
             // frame points to saved GPRs; RIP is at offset 136 (15 GPRs + vec + errcode)
             let rip = unsafe { *((frame as *const u64).add(17)) };
-            let cr2: u64 = if vector == 14 {
-                unsafe { let v: u64; core::arch::asm!("mov {}, cr2", out(reg) v, options(nostack)); v }
-            } else { 0 };
             use rux_arch::ConsoleOps;
             let name = if vector == 6 { "Invalid opcode (#UD)" } else { "General protection fault (#GP)" };
             crate::arch::Arch::write_str("rux: EXCEPTION: ");

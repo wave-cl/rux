@@ -53,6 +53,7 @@ pub unsafe fn start_timer() {
     core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) 1u64, options(nostack));
 }
 
+#[allow(dead_code)]
 pub fn now_ns() -> u64 {
     let count: u64;
     unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) count, options(nostack)); }

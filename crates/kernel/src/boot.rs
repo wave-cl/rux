@@ -71,7 +71,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
     rux_fs::vfs::Vfs::init_at(vfs_ptr, ramfs_ptr);
 
     // Probe for ext2 root disk if cmdline says root= or a virtio device exists
-    let has_disk_root = try_mount_ext2_root(
+    let _has_disk_root = try_mount_ext2_root(
         vfs_ptr, alloc_ptr, &cmdparams, params.virtio_mmio_base, log,
     );
 

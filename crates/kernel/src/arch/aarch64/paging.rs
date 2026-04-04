@@ -4,7 +4,7 @@
 /// TLB flush (tlbi + barriers), and page table activation (TTBR0/TCR/MAIR/SCTLR).
 /// The generic 4-level walker lives in `rux_mm::pt4`.
 
-use rux_klib::{PhysAddr, VirtAddr};
+use rux_klib::VirtAddr;
 use rux_arch::aarch64::pte::{self as pte, Aarch64Pte};
 use rux_mm::{ArchPaging, MappingFlags};
 

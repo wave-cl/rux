@@ -2,7 +2,6 @@
 /// User code does `svc #0` which traps to EL1.
 /// Uses aarch64 Linux syscall numbers.
 
-use super::console;
 
 /// Exception frame layout from exception.S save_context:
 ///   regs[0..30] = x0..x29  (each 8 bytes)
@@ -51,7 +50,7 @@ pub fn handle_syscall(frame: *mut u8) {
                     crate::fork::sys_fork() as i64
                 }
             }
-            221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize); 0 }
+            221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize) }
             139 => {
                 // rt_sigreturn — restore pre-signal state (reads signal frame from user stack)
                 crate::uaccess::stac();

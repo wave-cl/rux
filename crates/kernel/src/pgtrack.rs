@@ -4,6 +4,7 @@
 /// a convenience wrapper for `begin_child` that supplies the arch-specific
 /// page table root write function.
 
+#[allow(unused_imports)]
 pub use rux_mm::pgtrack::{set_kernel_pt, track, TrackingAllocator, kernel_pt_root};
 
 /// Wrapper that supplies the arch-specific `write_pt_root` callback.

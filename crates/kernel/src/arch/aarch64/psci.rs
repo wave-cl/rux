@@ -30,6 +30,7 @@ pub unsafe fn cpu_on(target_cpu: u64, entry_point: u64, context_id: u64) -> i64 
 }
 
 /// Get the MPIDR (CPU ID) of the current CPU.
+#[allow(dead_code)]
 pub unsafe fn current_cpu_id() -> u64 {
     let mpidr: u64;
     core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nostack));
@@ -37,6 +38,7 @@ pub unsafe fn current_cpu_id() -> u64 {
 }
 
 /// Number of CPUs available (from DTB, simplified for now).
+#[allow(dead_code)]
 pub fn cpu_count() -> usize {
     1 // TODO: parse DTB /cpus node for cpu@ entries
 }
