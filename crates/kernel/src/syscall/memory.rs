@@ -537,6 +537,73 @@ pub fn munmap(addr: usize, len: usize) -> isize {
     0
 }
 
+/// mremap(old_addr, old_size, new_size, flags) — Linux.
+/// Grows or shrinks a memory mapping. MREMAP_MAYMOVE allows relocation.
+pub fn mremap(old_addr: usize, old_size: usize, new_size: usize, flags: usize) -> isize {
+    const MREMAP_MAYMOVE: usize = 1;
+    if old_addr & 0xFFF != 0 { return crate::errno::EINVAL; }
+    if new_size == 0 { return crate::errno::EINVAL; }
+
+    let old_aligned = (old_size + 0xFFF) & !0xFFF;
+    let new_aligned = (new_size + 0xFFF) & !0xFFF;
+
+    if new_aligned <= old_aligned {
+        // Shrinking: unmap excess pages
+        if new_aligned < old_aligned {
+            munmap(old_addr + new_aligned, old_aligned - new_aligned);
+        }
+        return old_addr as isize;
+    }
+
+    // Growing: try to extend in place first
+    let grow_start = old_addr + old_aligned;
+    let grow_end = old_addr + new_aligned;
+
+    // Check if the extension area is free (no existing mappings)
+    let can_grow_in_place = unsafe {
+        let upt = super::current_user_page_table();
+        (grow_start..grow_end).step_by(4096).all(|va| {
+            upt.translate(rux_klib::VirtAddr::new(va)).is_err()
+        })
+    };
+
+    if can_grow_in_place {
+        // Extend in place — map new pages (demand-paged, no immediate alloc)
+        // The demand pager will allocate on first access.
+        return old_addr as isize;
+    }
+
+    // Can't grow in place — relocate if MREMAP_MAYMOVE
+    if flags & MREMAP_MAYMOVE == 0 {
+        return crate::errno::ENOMEM;
+    }
+
+    // Allocate new region from mmap base
+    unsafe {
+        let new_addr = super::PROCESS.mmap_base;
+        super::PROCESS.mmap_base += new_aligned;
+
+        // Map new pages
+        let pg_flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::USER);
+        super::map_user_pages(new_addr, new_addr + new_aligned, pg_flags);
+
+        // Copy old data
+        let copy_len = old_aligned.min(new_aligned);
+        core::ptr::copy_nonoverlapping(
+            old_addr as *const u8,
+            new_addr as *mut u8,
+            copy_len,
+        );
+
+        // Unmap old region
+        munmap(old_addr, old_aligned);
+
+        new_addr as isize
+    }
+}
+
 // ── Futex ──────────────────────────────────────────────────────────────
 
 /// futex(uaddr, op, val, ...) — Linux: fast userspace mutex.

@@ -90,6 +90,80 @@ pub fn fstatat(dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize
         0
     }
 }
+
+/// statx(dirfd, pathname, flags, mask, statxbuf) — Linux 4.11+
+/// Converts InodeStat to struct statx (256 bytes).
+pub fn statx(dirfd: usize, pathname: usize, flags: usize, _mask: usize, buf: usize) -> isize {
+    const AT_EMPTY_PATH: usize = 0x1000;
+    const AT_SYMLINK_NOFOLLOW: usize = 0x100;
+    if buf == 0 { return crate::errno::EFAULT; }
+    if crate::uaccess::validate_user_ptr(buf, 256).is_err() { return crate::errno::EFAULT; }
+    unsafe {
+        use rux_fs::FileSystem;
+        let path = crate::uaccess::read_user_cstr(pathname);
+        let fs = crate::kstate::fs();
+
+        let ino = if flags & AT_EMPTY_PATH != 0 && path.is_empty() && dirfd < 64 {
+            match rux_fs::fdtable::get_fd_inode(dirfd) {
+                Some(ino) => ino,
+                None => return crate::errno::EBADF,
+            }
+        } else if flags & AT_SYMLINK_NOFOLLOW != 0 {
+            match rux_fs::path::resolve_nofollow(fs, super::PROCESS.fs_ctx.cwd, path) {
+                Ok(ino) => ino,
+                Err(e) => return e,
+            }
+        } else {
+            match super::resolve_at(dirfd, path) {
+                Ok(ino) => ino,
+                Err(e) => return e,
+            }
+        };
+
+        let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
+        if fs.stat(ino, &mut vfs_stat).is_err() { return crate::errno::ENOENT; }
+
+        // Zero the entire statx buffer first
+        core::ptr::write_bytes(buf as *mut u8, 0, 256);
+
+        // struct statx layout (all little-endian):
+        //   0: u32 stx_mask       (STATX_BASIC_STATS = 0x07ff)
+        //   4: u32 stx_blksize    (4096)
+        //   8: u64 stx_attributes (0)
+        //  16: u32 stx_nlink
+        //  20: u32 stx_uid
+        //  24: u32 stx_gid
+        //  28: u16 stx_mode
+        //  32: u64 stx_ino
+        //  40: u64 stx_size
+        //  48: u64 stx_blocks
+        //  56: u64 stx_attributes_mask (0)
+        //  64: struct statx_timestamp stx_atime {sec:i64, nsec:u32, pad:i32} = 16 bytes
+        //  80: stx_btime (16 bytes)
+        //  96: stx_ctime (16 bytes)
+        // 112: stx_mtime (16 bytes)
+        // 128: u32 stx_rdev_major, 132: u32 stx_rdev_minor
+        // 136: u32 stx_dev_major,  140: u32 stx_dev_minor
+        let p = buf as *mut u8;
+        *(p.add(0) as *mut u32) = 0x07ff;  // STATX_BASIC_STATS
+        *(p.add(4) as *mut u32) = 4096;     // blksize
+        *(p.add(16) as *mut u32) = vfs_stat.nlink as u32;
+        *(p.add(20) as *mut u32) = vfs_stat.uid;
+        *(p.add(24) as *mut u32) = vfs_stat.gid;
+        *(p.add(28) as *mut u16) = vfs_stat.mode as u16;
+        *(p.add(32) as *mut u64) = vfs_stat.ino;
+        *(p.add(40) as *mut u64) = vfs_stat.size;
+        *(p.add(48) as *mut u64) = vfs_stat.blocks;
+        // Timestamps (atime=64, btime=80, ctime=96, mtime=112)
+        *(p.add(64) as *mut i64) = vfs_stat.atime as i64;
+        *(p.add(96) as *mut i64) = vfs_stat.ctime as i64;
+        *(p.add(112) as *mut i64) = vfs_stat.mtime as i64;
+        // dev major/minor — ext2 on virtio-blk = 254:0
+        *(p.add(136) as *mut u32) = 254;
+        0
+    }
+}
+
 // ── Directory operations (POSIX.1) ──────────────────────────────────
 
 /// chdir(path) — POSIX.1

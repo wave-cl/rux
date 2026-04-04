@@ -512,7 +512,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 2: memory management ─────────────────────────────
         Syscall::Madvise => 0, // hints are advisory — safe to ignore
         Syscall::Mincore => crate::errno::ENOSYS,
-        Syscall::Mremap => crate::errno::ENOSYS, // TODO: implement
+        Syscall::Mremap => memory::mremap(a0, a1, a2, a3),
         Syscall::Msync => 0, // write-through ext2, sync is no-op
         Syscall::Mlock | Syscall::Munlock |
         Syscall::Mlockall | Syscall::Munlockall => 0, // all pages are locked (no swap)
@@ -526,7 +526,23 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             }
             0
         }
-        Syscall::SigTimedwait => crate::errno::ENOSYS, // TODO: implement
+        Syscall::SigTimedwait => {
+            // rt_sigtimedwait(set, info, timeout, sigsetsize)
+            // Wait for a signal from `set`. For now: sleep for the timeout duration
+            // then return EAGAIN (no signal pending). This prevents busy-wait loops.
+            if a2 != 0 && crate::uaccess::validate_user_ptr(a2, 16).is_ok() {
+                unsafe {
+                    let sec: u64 = crate::uaccess::get_user(a2);
+                    let nsec: u64 = crate::uaccess::get_user(a2 + 8);
+                    let ms = (sec * 1000 + nsec / 1_000_000).min(5000);
+                    for _ in 0..ms {
+                        use rux_arch::HaltOps;
+                        crate::arch::Arch::halt_until_interrupt();
+                    }
+                }
+            }
+            crate::errno::EAGAIN
+        },
         Syscall::SigQueueinfo | Syscall::TgSigQueueinfo => crate::errno::ENOSYS,
 
         // ── Batch 2: splice / zero-copy I/O ───────────────────────
@@ -571,7 +587,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Setfsgid => 0,
         Syscall::MemfdCreate => crate::errno::ENOSYS,
         Syscall::CopyFileRange => crate::errno::ENOSYS,
-        Syscall::Statx => crate::errno::ENOSYS, // TODO: implement
+        Syscall::Statx => fs_ops::statx(a0, a1, a2, a3, a4),
 
         // ── Batch 3: POSIX IPC ─────────────────────────────────────
         Syscall::Semget | Syscall::Semop | Syscall::Semctl => crate::errno::ENOSYS,
@@ -623,7 +639,25 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Ppoll2 => posix::ppoll(a0, a1, a2, a3), // alias
         Syscall::RecvFrom2 => socket::sys_recvfrom(a0, a1, a2, a3, a4, 0),
         Syscall::SendTo2 => socket::sys_sendto(a0, a1, a2, a3, a4, 0),
-        Syscall::Socketpair => crate::errno::ENOSYS,
+        Syscall::Socketpair => {
+            // socketpair(domain, type, protocol, sv[2])
+            // Implement as two unidirectional pipes.
+            // sv[0] reads from pipe1, writes to pipe2
+            // sv[1] reads from pipe2, writes to pipe1
+            // For simplicity: just create a single pipe (covers most real use cases
+            // where only one direction is used, e.g. signaling, subprocess comms).
+            if a3 == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(a3, 8).is_err() { return crate::errno::EFAULT; }
+            match crate::pipe::create() {
+                Ok((_pid, read_fd, write_fd)) => unsafe {
+                    // sv[0] = read end, sv[1] = write end (like pipe)
+                    crate::uaccess::put_user(a3, read_fd as i32);
+                    crate::uaccess::put_user(a3 + 4, write_fd as i32);
+                    0
+                },
+                Err(e) => e,
+            }
+        },
         Syscall::Gethostname => {
             // gethostname(buf, len) — write hostname to user buffer
             if crate::uaccess::validate_user_ptr(a0, a1.min(256)).is_err() { return crate::errno::EFAULT; }
