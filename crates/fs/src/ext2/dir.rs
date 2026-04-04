@@ -110,12 +110,22 @@ pub(crate) unsafe fn readdir(
     let mut buf = [0u8; 4096];
     let mut pos = start_pos;
     let mut idx = start_idx;
+    let mut loaded_block: i64 = -1; // track which block is in buf
+    let max_iters = size / 8 + 1024; // safety limit: prevent infinite loops
+    let mut iters = 0usize;
 
     while pos < size {
+        iters += 1;
+        if iters > max_iters { return Ok(false); } // safety bail
         let file_block = (pos / bs) as u32;
-        let phys_block = super::block::translate(fs, &raw, file_block)?;
-        if phys_block == 0 { return Ok(false); }
-        fs.read_block(phys_block as u64, &mut buf)?;
+
+        // Only re-read when crossing a block boundary
+        if file_block as i64 != loaded_block {
+            let phys_block = super::block::translate(fs, &raw, file_block)?;
+            if phys_block == 0 { return Ok(false); }
+            fs.read_block(phys_block as u64, &mut buf)?;
+            loaded_block = file_block as i64;
+        }
 
         let off = pos % bs;
         if off + 8 > bs { pos = (pos / bs + 1) * bs; continue; }
