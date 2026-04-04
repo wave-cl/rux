@@ -515,6 +515,7 @@ pub fn readlink_at(dirfd: usize, path_ptr: usize, buf: usize, bufsiz: usize) -> 
             Ok(ino) => ino,
             Err(_) => return crate::errno::ENOENT,
         };
+        if crate::uaccess::validate_user_ptr(buf, bufsiz).is_err() { return crate::errno::EFAULT; }
         let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, bufsiz);
         match fs.readlink(ino, user_buf) {
             Ok(n) => n as isize,
@@ -603,6 +604,7 @@ pub fn readlink(path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
             Ok(ino) => ino,
             Err(_) => return crate::errno::ENOENT,
         };
+        if crate::uaccess::validate_user_ptr(buf, bufsiz).is_err() { return crate::errno::EFAULT; }
         let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, bufsiz);
         match fs.readlink(ino, user_buf) {
             Ok(n) => n as isize,

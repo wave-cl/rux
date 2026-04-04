@@ -271,6 +271,7 @@ pub fn pread64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
         use rux_fs::FileSystem;
         if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return crate::errno::EBADF; }
         if (*fdt::FD_TABLE)[fd].is_pipe { return crate::errno::ESPIPE; }
+        if crate::uaccess::validate_user_ptr(buf, len).is_err() { return crate::errno::EFAULT; }
         let ino = (*fdt::FD_TABLE)[fd].ino;
         let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, len);
         match crate::kstate::fs().read(ino, offset as u64, user_buf) {
