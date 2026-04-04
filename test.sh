@@ -165,6 +165,12 @@ rm /tmp/big && ls /tmp/big 2>&1
 ln -s /etc/passwd /tmp/sl && cat /tmp/sl | head -1
 echo dup_test > /tmp/dup && cat /tmp/dup
 md5sum /etc/passwd | cut -d' ' -f1
+for i in 1 2 3; do echo iter$i; done
+sh -c 'sh -c "echo nested_ok"'
+cat /etc/passwd | grep root | wc -l
+echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
+test -d /proc && echo proc_is_dir
+wc -c /bin/busybox | awk '{print ($1 > 100) ? "big" : "small"}'
 xargs echo < /etc/hostname
 exit
 CMDS
@@ -281,6 +287,12 @@ check "rm removes file"     "No such file"
 check "symlink read"         "root"
 check "dup (redirect)"       "dup_test"
 check "md5sum"               ""
+check "for loop"             "iter3"
+check "nested subshell"      "nested_ok"
+check "pipe chain grep"      "1"
+check "cat multiple files"   "def"
+check "test -d"              "proc_is_dir"
+check "awk"                  "big"
 check "xargs"                "rux"
 
 fi  # RUN_X86
@@ -369,9 +381,13 @@ rm /tmp/big && ls /tmp/big 2>&1
 ln -s /etc/passwd /tmp/sl && cat /tmp/sl | head -1
 echo dup_test > /tmp/dup && cat /tmp/dup
 md5sum /etc/passwd | cut -d' ' -f1
+for i in 1 2 3; do echo iter$i; done
+cat /etc/passwd | grep root | wc -l
+echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
+test -d /proc && echo proc_is_dir
+wc -c /bin/busybox | awk '{print ($1 > 100) ? "big" : "small"}'
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
-xargs echo < /etc/hostname
 exit
 CMDS
 } | \
@@ -484,7 +500,11 @@ check "rm removes file"     "No such file"
 check "symlink read"         "root"
 check "dup (redirect)"       "dup_test"
 check "md5sum"               ""
-check "xargs"                "rux"
+check "for loop"             "iter3"
+check "pipe chain grep"      "1"
+check "cat multiple files"   "def"
+check "test -d"              "proc_is_dir"
+check "awk"                  "big"
 check "subshell"             "subshell_ok"
 check "fork + pipe"          "2"
 
