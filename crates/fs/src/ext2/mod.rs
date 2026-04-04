@@ -200,6 +200,10 @@ impl FileSystem for Ext2Fs {
             let mut raw = self.read_inode_raw(ino as u32)?;
             raw.size = size as u32;
             raw.size_high = (size >> 32) as u32;
+            // Note: blocks are not freed here — a full implementation would walk
+            // the block pointers and call free_block for blocks beyond new size.
+            // For now this is safe: blocks remain allocated but the size field
+            // prevents reading past the new end.
             self.write_inode_raw(ino as u32, &raw)
         }
     }

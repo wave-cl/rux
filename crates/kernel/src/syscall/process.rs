@@ -13,6 +13,8 @@ pub fn exit(status: i32) -> ! {
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
             // Close all pipe FDs so reader/writer counts drop correctly.
             // Without this, blocked pipe waiters never see EOF/EPIPE.
+            // Note: regular file FDs share the global FD_TABLE and must NOT
+            // be closed here — the parent process still references them.
             for i in 0..rux_fs::fdtable::MAX_FDS {
                 if (*rux_fs::fdtable::FD_TABLE)[i].active && (*rux_fs::fdtable::FD_TABLE)[i].is_pipe {
                     let pid = (*rux_fs::fdtable::FD_TABLE)[i].pipe_id;
