@@ -34,6 +34,12 @@ SECTIONS {
         __bss_end = .;
     }
 
+    /* End of kernel image — page-aligned, above all code/data/BSS.
+     * Boot code uses this to place the frame allocator and ramfs
+     * dynamically, preventing overlap when BSS grows (e.g., MAX_PROCS). */
+    . = ALIGN(4096);
+    _end = .;
+
     /DISCARD/ : {
         *(.eh_frame)
         *(.comment)

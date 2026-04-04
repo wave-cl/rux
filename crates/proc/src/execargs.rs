@@ -120,10 +120,10 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
         b"TERM=linux\0",
     ];
 
-    // Calculate string area size
+    // Calculate string area size (saturating to prevent overflow from stale data)
     let mut str_size = 0usize;
-    for i in 0..argc {
-        str_size += ARGV_LENS[i] + 1;
+    for i in 0..argc.min(MAX_ARGS) {
+        str_size = str_size.saturating_add(ARGV_LENS[i].min(256).saturating_add(1));
     }
     for env in &env_strs {
         str_size += env.len();

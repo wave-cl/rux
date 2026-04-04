@@ -262,24 +262,28 @@ pub fn x86_64_init(multiboot_info: usize) {
     }
 
     // ── Compute addresses for BuddyAllocator + RamFs ──────────────────
-    // These must be above the initrd to avoid overwriting cpio data.
-    // Place them at a fixed base (0x600000) that's above both kernel BSS
-    // and the maximum expected initrd end, but below the frame allocator
-    // range (0x780000). If the initrd extends past 0x600000, bump up.
+    // Place after the kernel image (_end from linker script). Use _end as a
+    // floor so growing BSS (e.g., raising MAX_PROCS) never overlaps.
+    // Keep a 0x600000 minimum for historical compatibility.
+    extern "C" { static _end: u8; }
+    let kernel_end = unsafe { &_end as *const u8 as usize };
+
     let initrd_info = unsafe { super::multiboot::get_initrd(multiboot_info) };
     let initrd_end = match initrd_info {
         Some((start, size)) => ((start + size) + 0xFFF) & !0xFFF,
         None => 0,
     };
     let alloc_size_bytes = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
-    let alloc_addr = initrd_end.max(0x600000);
+    let alloc_addr = initrd_end.max(kernel_end).max(0x600000);
     let ramfs_addr = (alloc_addr + alloc_size_bytes + 0xFFF) & !0xFFF;
     let ramfs_end = (ramfs_addr + core::mem::size_of::<rux_fs::ramfs::RamFs>() + 0xFFF) & !0xFFF;
 
     // Log computed layout
     {
-        console::write_str("rux: layout: alloc@0x");
         let mut hx = [0u8; 16];
+        console::write_str("rux: _end=0x");
+        console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hx, kernel_end));
+        console::write_str(" alloc@0x");
         console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hx, alloc_addr));
         console::write_str(" ramfs@0x");
         console::write_bytes(rux_klib::fmt::usize_to_hex(&mut hx, ramfs_addr));
@@ -301,7 +305,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             Some((start, size)) => ((start + size) + 0xFFF) & !0xFFF,
             None => 0,
         };
-        let min_alloc_base = 0x780000usize.max(ramfs_end).max(initrd_end);
+        let min_alloc_base = kernel_end.max(0x780000).max(ramfs_end).max(initrd_end);
         let alloc_base = if region.base.as_usize() < min_alloc_base {
             min_alloc_base
         } else {
