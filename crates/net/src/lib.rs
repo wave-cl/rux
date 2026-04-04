@@ -242,6 +242,16 @@ pub unsafe fn tcp_state(handle: SocketHandle) -> tcp::State {
         .unwrap_or(tcp::State::Closed)
 }
 
+/// Check if TCP socket is in Established or CloseWait state (connected).
+pub unsafe fn tcp_is_established(handle: SocketHandle) -> bool {
+    SOCKETS.as_mut()
+        .map(|s| {
+            let state = s.get_mut::<tcp::Socket>(handle).state();
+            matches!(state, tcp::State::Established | tcp::State::CloseWait)
+        })
+        .unwrap_or(false)
+}
+
 // ── UDP API ────────────────────────────────────────────────────────
 
 /// Allocate a UDP socket.

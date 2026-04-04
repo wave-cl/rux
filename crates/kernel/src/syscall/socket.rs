@@ -353,28 +353,85 @@ pub fn sys_listen(fd: usize, _backlog: usize) -> isize {
 }
 
 /// accept(fd, addr, addrlen) — accept incoming connection
+///
+/// smoltcp model: a listening socket becomes the connected socket when a client
+/// connects. To keep accepting, we allocate a new smoltcp socket for the listen
+/// fd and re-listen on the same port. The original smoltcp socket (now connected)
+/// moves to a new fd.
 pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
     if addr_ptr != 0 && crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
+    if addrlen_ptr != 0 && crate::uaccess::validate_user_ptr(addrlen_ptr, 4).is_err() { return crate::errno::EFAULT; }
     let idx = match unsafe { resolve_socket(fd) } {
         Some(i) => i,
         None => return crate::errno::EBADF,
     };
     unsafe {
         if SOCKETS[idx].sock_type != SOCK_STREAM { return crate::errno::EOPNOTSUPP; }
+        let listen_port = SOCKETS[idx].bound_port;
+        if listen_port == 0 { return crate::errno::EINVAL; }
 
         #[cfg(feature = "net")]
         {
             use rux_arch::TimerOps;
+            let nonblock = fd < 64 && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
             let listen_handle = to_handle(SOCKETS[idx].smol_handle_raw);
-            // Wait for incoming connection
-            for _ in 0..30_000u32 {
+            let max_iters = if nonblock { 10u32 } else { 60_000u32 };
+
+            // Wait for the listen socket to become established (client connected)
+            for _ in 0..max_iters {
                 rux_net::poll(crate::arch::Arch::ticks());
-                if rux_net::tcp_can_recv(listen_handle) {
-                    // Connection accepted — allocate new socket for it
-                    // For now, return the listen socket's data (simplified)
-                    // A full implementation would create a new smoltcp socket
-                    return crate::errno::ENOSYS; // TODO: full accept
+                if rux_net::tcp_is_established(listen_handle) {
+                    // Connection arrived. The listen socket is now connected.
+                    // 1. Allocate a new socket slot + fd for the connected socket
+                    let new_sock_idx = match (0..MAX_SOCKETS).find(|&i| !SOCKETS[i].active) {
+                        Some(i) => i,
+                        None => return crate::errno::ENOMEM,
+                    };
+                    let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                    let new_fd = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
+                        .find(|&f| !fd_table[f].active)
+                    {
+                        Some(f) => f,
+                        None => return crate::errno::ENOMEM,
+                    };
+
+                    // 2. Move the connected smoltcp handle to the new slot
+                    SOCKETS[new_sock_idx] = SocketSlot::empty();
+                    SOCKETS[new_sock_idx].active = true;
+                    SOCKETS[new_sock_idx].sock_type = SOCK_STREAM;
+                    SOCKETS[new_sock_idx].smol_handle_raw = SOCKETS[idx].smol_handle_raw;
+                    SOCKETS[new_sock_idx].connected = true;
+
+                    fd_table[new_fd] = rux_fs::fdtable::EMPTY_FD;
+                    fd_table[new_fd].active = true;
+                    fd_table[new_fd].is_socket = true;
+                    fd_table[new_fd].socket_idx = new_sock_idx as u8;
+
+                    // 3. Allocate a fresh smoltcp socket for the listen fd and re-listen
+                    match rux_net::tcp_alloc() {
+                        Some(new_listen) => {
+                            SOCKETS[idx].smol_handle_raw = rux_net::handle_to_raw(new_listen) as i16;
+                            let _ = rux_net::tcp_listen(new_listen, listen_port);
+                        }
+                        None => {
+                            // Out of smoltcp sockets — can't re-listen, but accept still works
+                            SOCKETS[idx].smol_handle_raw = -1;
+                        }
+                    }
+
+                    // 4. Write peer address if requested
+                    if addr_ptr != 0 {
+                        let sa = addr_ptr as *mut u8;
+                        *sa.add(0) = AF_INET as u8; *sa.add(1) = 0;
+                        // We don't have the peer address from smoltcp easily,
+                        // so write zeros (caller can use getpeername)
+                        for i in 2..16 { *sa.add(i) = 0; }
+                        if addrlen_ptr != 0 { *(addrlen_ptr as *mut u32) = 16; }
+                    }
+
+                    return new_fd as isize;
                 }
+                if nonblock { return crate::errno::EAGAIN; }
                 use rux_arch::HaltOps;
                 crate::arch::Arch::halt_until_interrupt();
             }
