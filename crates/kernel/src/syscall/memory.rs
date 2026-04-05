@@ -460,13 +460,54 @@ pub fn timerfd_has_data(fd: usize) -> bool {
     }).unwrap_or(false)
 }
 
+// ── MAP_SHARED file write-back tracking ────────────────────────────
+
+const MAX_SHARED_MAPS: usize = 32;
+
+struct SharedMapping {
+    active: bool,
+    va: usize,      // virtual address of mapping
+    len: usize,     // length in bytes
+    ino: u64,       // file inode
+    offset: u64,    // file offset
+}
+
+static mut SHARED_MAPS: [SharedMapping; MAX_SHARED_MAPS] = {
+    const EMPTY: SharedMapping = SharedMapping { active: false, va: 0, len: 0, ino: 0, offset: 0 };
+    [EMPTY; MAX_SHARED_MAPS]
+};
+
+/// Write back all MAP_SHARED pages that overlap [addr, addr+len).
+unsafe fn writeback_shared(addr: usize, len: usize) {
+    use rux_fs::FileSystem;
+    let fs = crate::kstate::fs();
+    for m in SHARED_MAPS.iter_mut() {
+        if !m.active { continue; }
+        // Check overlap
+        let m_end = m.va + m.len;
+        let r_end = addr + len;
+        if m.va < r_end && addr < m_end {
+            // Write back the entire mapping to the file
+            let src = core::slice::from_raw_parts(m.va as *const u8, m.len);
+            let _ = fs.write(m.ino, m.offset, src);
+            m.active = false;
+        }
+    }
+}
+
+/// msync(addr, len, flags) — write back MAP_SHARED pages.
+pub unsafe fn msync(addr: usize, len: usize) {
+    writeback_shared(addr, (len + 0xFFF) & !0xFFF);
+}
+
 /// mmap(addr, len, prot, flags, fd, offset) — POSIX.1
 ///
-/// Supports MAP_ANONYMOUS (zeroed pages) and MAP_PRIVATE file-backed
-/// (reads file data into private pages). MAP_SHARED is not yet supported.
+/// Supports MAP_ANONYMOUS, MAP_PRIVATE file-backed, and MAP_SHARED file-backed
+/// (with write-back on munmap).
 pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, offset: usize) -> isize {
     const MAP_FIXED: usize = 0x10;
     const MAP_ANONYMOUS: usize = 0x20;
+    const MAP_SHARED: usize = 0x01;
     const PROT_READ: usize = 1;
     const PROT_WRITE: usize = 2;
     const PROT_EXEC: usize = 4;
@@ -508,6 +549,15 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
                 let file_offset = offset as u64;
                 let dst = core::slice::from_raw_parts_mut(result as *mut u8, len);
                 let _ = fs.read(ino, file_offset, dst);
+
+                // Track MAP_SHARED mappings for write-back on munmap
+                if mmap_flags & MAP_SHARED != 0 {
+                    if let Some(slot) = SHARED_MAPS.iter_mut().find(|s| !s.active) {
+                        *slot = SharedMapping {
+                            active: true, va: result, len, ino, offset: file_offset,
+                        };
+                    }
+                }
             }
         } else if mmap_flags & MAP_FIXED != 0 {
             // MAP_FIXED anonymous (BSS replacement by ld.so): allocate eagerly
@@ -522,8 +572,11 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
 }
 
 /// munmap(addr, length) — POSIX.1: unmap pages from address space.
+/// Writes back MAP_SHARED pages before freeing.
 /// COW-aware: only frees frames whose refcount reaches zero.
 pub fn munmap(addr: usize, len: usize) -> isize {
+    // Write back any MAP_SHARED file mappings in this range
+    unsafe { writeback_shared(addr, (len + 0xFFF) & !0xFFF); }
     if addr & 0xFFF != 0 { return crate::errno::EINVAL; } // must be page-aligned
     unsafe {
         let alloc = crate::kstate::alloc();

@@ -542,7 +542,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Madvise => 0, // hints are advisory — safe to ignore
         Syscall::Mincore => crate::errno::ENOSYS,
         Syscall::Mremap => memory::mremap(a0, a1, a2, a3),
-        Syscall::Msync => 0, // write-through ext2, sync is no-op
+        Syscall::Msync => { unsafe { memory::msync(a0, a1); } 0 }
         Syscall::Mlock | Syscall::Munlock |
         Syscall::Mlockall | Syscall::Munlockall => 0, // all pages are locked (no swap)
 
