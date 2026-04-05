@@ -172,10 +172,8 @@ wget -q -O - http://example.com 2>&1 | head -1
 echo all_tests_done
 apk update 2>&1 | tail -1
 apk add --no-interactive perl python3 2>/dev/null
-ls -a /usr/lib/python3.12/ 2>&1 | head -20
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
-ls /usr/lib/python3.12/os.py 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
 exit
 CMDS
