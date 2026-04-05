@@ -174,6 +174,8 @@ apk update 2>&1 | tail -1
 apk add --no-scripts --no-interactive python3 jq 2>/dev/null
 python3 --version 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
+python3 -c "import json,os; print(json.dumps({'kernel':'rux','pid':os.getpid()}))" 2>&1
+python3 -c "import urllib.request; r=urllib.request.urlopen('http://example.com'); print(r.status, len(r.read()))" 2>&1
 echo '{"k":"v"}' | jq -r .k 2>&1
 exit
 CMDS
@@ -302,6 +304,8 @@ check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "python3 version"      "Python 3"
 check "python3 calc"         "4950"
+check "python3 json"         "\"kernel\": \"rux\""
+check "python3 http"         "200 528"
 check "jq"                   "v"
 check "all tests done"       "all_tests_done"
 
