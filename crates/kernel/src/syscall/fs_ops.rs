@@ -319,68 +319,29 @@ pub fn rename_at(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: us
 
 /// rename(oldpath, newpath) — POSIX.1
 pub fn rename(old_ptr: usize, new_ptr: usize) -> isize {
-    unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (old_dir, old_name_ref) = match super::resolve_parent_and_name(old_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        // Copy old name to local buffer before resolving new path
-        // (both use the same static read_user_cstr buffer)
-        let mut old_name_buf = [0u8; 256];
-        let old_name_len = old_name_ref.len().min(255);
-        old_name_buf[..old_name_len].copy_from_slice(&old_name_ref[..old_name_len]);
-
-        let (new_dir, new_name) = match super::resolve_parent_and_name(new_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        let old_fname = match FileName::new(&old_name_buf[..old_name_len]) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.rename(old_dir, old_fname, new_dir, new_fname) {
-            Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
-        }
-    }
+    let at_fdcwd = (-100isize) as usize;
+    rename_at(at_fdcwd, old_ptr, at_fdcwd, new_ptr)
 }
 
 /// symlink(target, linkpath) — POSIX.1
 pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
-    unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let target = crate::uaccess::read_user_cstr(target_ptr);
-        let (dir_ino, name) = match super::resolve_parent_and_name(link_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.symlink(dir_ino, fname, target) {
-            Ok(_) => 0,
-            Err(_) => crate::errno::EEXIST,
-        }
-    }
+    symlink_at(target_ptr, (-100isize) as usize, link_ptr) // AT_FDCWD
 }
 
 /// symlinkat(target, dirfd, linkpath) — with dirfd support
 pub fn symlink_at(target_ptr: usize, dirfd: usize, link_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, FileName};
-        // Read target first (uses static buffer)
+        use rux_fs::FileSystem;
+        // Read target first, copy to local buffer before resolve overwrites static buf
         let target = crate::uaccess::read_user_cstr(target_ptr);
         let mut target_buf = [0u8; 256];
         let tlen = target.len().min(255);
         target_buf[..tlen].copy_from_slice(&target[..tlen]);
 
-        // Resolve linkpath with dirfd
-        let (dir_ino, name) = match super::resolve_parent_at(dirfd, link_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
+        let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, link_ptr) {
+            Ok(v) => v, Err(e) => return e,
         };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.symlink(dir_ino, fname, &target_buf[..tlen]) {
+        match crate::kstate::fs().symlink(dir_ino, fname, &target_buf[..tlen]) {
             Ok(_) => 0,
             Err(_) => crate::errno::EEXIST,
         }
