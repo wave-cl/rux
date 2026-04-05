@@ -355,9 +355,8 @@ pub fn truncate(path_ptr: usize, length: usize) -> isize {
 pub fn copy_file_range(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_ptr: usize, len: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd_in >= 64 || fd_out >= 64 { return crate::errno::EBADF; }
+        if fdt::get_fd(fd_in).is_none() || fdt::get_fd(fd_out).is_none() { return crate::errno::EBADF; }
         let ft = &*fdt::FD_TABLE;
-        if !ft[fd_in].active || !ft[fd_out].active { return crate::errno::EBADF; }
 
         let fs = crate::kstate::fs();
         let ino_in = ft[fd_in].ino;

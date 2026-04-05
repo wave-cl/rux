@@ -2,6 +2,40 @@
 
 use rux_fs::fdtable as fdt;
 
+// ── Shared helpers for virtual fd types (eventfd, timerfd, epoll) ──
+
+/// Allocate an fd from the fd table, applying O_NONBLOCK if set in flags.
+/// Returns the fd number on success, or negative errno.
+unsafe fn alloc_virtual_fd(flags: usize) -> isize {
+    let fd_table = &mut *fdt::FD_TABLE;
+    let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
+        Some(f) => f,
+        None => return crate::errno::ENOMEM,
+    };
+    fd_table[fd] = fdt::EMPTY_FD;
+    fd_table[fd].active = true;
+    if flags & 0x800 != 0 { fd_table[fd].flags |= 0x800; } // O_NONBLOCK / EFD_NONBLOCK / TFD_NONBLOCK
+    fd as isize
+}
+
+/// Blocking read that returns a u64 value. Polls `check` up to `max_iters`
+/// times, writing the result to `buf` when ready. Respects O_NONBLOCK on fd.
+unsafe fn blocking_read_u64<F>(fd: usize, buf: usize, max_iters: u32, mut check: F) -> isize
+where F: FnMut() -> Option<u64>
+{
+    let nonblock = fd < fdt::MAX_FDS && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
+    for _ in 0..max_iters {
+        if let Some(val) = check() {
+            *(buf as *mut u64) = val;
+            return 8;
+        }
+        if nonblock { return crate::errno::EAGAIN; }
+        use rux_arch::HaltOps;
+        crate::arch::Arch::halt_until_interrupt();
+    }
+    crate::errno::EAGAIN
+}
+
 // ── epoll ──────────────────────────────────────────────────────────
 
 const MAX_EPOLL: usize = 4;
@@ -202,27 +236,19 @@ static mut EVENTFDS: [EventFdSlot; MAX_EVENTFD] = {
 /// eventfd2(initval, flags) → fd
 pub fn eventfd2(initval: usize, flags: usize) -> isize {
     const EFD_SEMAPHORE: usize = 1;
-    const EFD_NONBLOCK: usize = 0x800;
     unsafe {
         let idx = match (0..MAX_EVENTFD).find(|&i| !EVENTFDS[i].active) {
             Some(i) => i,
             None => return crate::errno::ENOMEM,
         };
-        let fd_table = &mut *fdt::FD_TABLE;
-        let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
-            Some(f) => f,
-            None => return crate::errno::ENOMEM,
-        };
-        fd_table[fd] = fdt::EMPTY_FD;
-        fd_table[fd].active = true;
-        if flags & EFD_NONBLOCK != 0 { fd_table[fd].flags |= 0x800; }
+        let fd = alloc_virtual_fd(flags);
+        if fd < 0 { return fd; }
         EVENTFDS[idx] = EventFdSlot {
-            active: true,
-            fd,
+            active: true, fd: fd as usize,
             counter: initval as u64,
             semaphore: flags & EFD_SEMAPHORE != 0,
         };
-        fd as isize
+        fd
     }
 }
 
@@ -241,26 +267,16 @@ pub fn eventfd_read(fd: usize, buf: usize) -> isize {
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
-        // Block until counter > 0
-        for _ in 0..30_000u32 {
+        blocking_read_u64(fd, buf, 30_000, || {
             if EVENTFDS[idx].counter > 0 {
-                let val = if EVENTFDS[idx].semaphore {
-                    EVENTFDS[idx].counter -= 1;
-                    1u64
+                Some(if EVENTFDS[idx].semaphore {
+                    EVENTFDS[idx].counter -= 1; 1u64
                 } else {
                     let v = EVENTFDS[idx].counter;
-                    EVENTFDS[idx].counter = 0;
-                    v
-                };
-                *(buf as *mut u64) = val;
-                return 8;
-            }
-            if nonblock { return crate::errno::EAGAIN; }
-            use rux_arch::HaltOps;
-            crate::arch::Arch::halt_until_interrupt();
-        }
-        crate::errno::EAGAIN
+                    EVENTFDS[idx].counter = 0; v
+                })
+            } else { None }
+        })
     }
 }
 
@@ -316,24 +332,17 @@ static mut TIMERFDS: [TimerFdSlot; MAX_TIMERFD] = {
 
 /// timerfd_create(clockid, flags) → fd
 pub fn timerfd_create(_clockid: usize, flags: usize) -> isize {
-    const TFD_NONBLOCK: usize = 0x800;
     unsafe {
         let idx = match (0..MAX_TIMERFD).find(|&i| !TIMERFDS[i].active) {
             Some(i) => i,
             None => return crate::errno::ENOMEM,
         };
-        let fd_table = &mut *fdt::FD_TABLE;
-        let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
-            Some(f) => f,
-            None => return crate::errno::ENOMEM,
-        };
-        fd_table[fd] = fdt::EMPTY_FD;
-        fd_table[fd].active = true;
-        if flags & TFD_NONBLOCK != 0 { fd_table[fd].flags |= 0x800; }
+        let fd = alloc_virtual_fd(flags);
+        if fd < 0 { return fd; }
         TIMERFDS[idx] = TimerFdSlot {
-            active: true, fd, interval_ns: 0, next_expiry_ms: 0, expirations: 0,
+            active: true, fd: fd as usize, interval_ns: 0, next_expiry_ms: 0, expirations: 0,
         };
-        fd as isize
+        fd
     }
 }
 
@@ -416,32 +425,23 @@ pub fn timerfd_read(fd: usize, buf: usize) -> isize {
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
-        for _ in 0..60_000u32 {
-            // Check for expirations
+        blocking_read_u64(fd, buf, 60_000, || {
             use rux_arch::TimerOps;
             let now_ms = crate::arch::Arch::ticks();
             if TIMERFDS[idx].next_expiry_ms > 0 && now_ms >= TIMERFDS[idx].next_expiry_ms {
                 TIMERFDS[idx].expirations += 1;
                 if TIMERFDS[idx].interval_ns > 0 {
-                    // Recurring: set next expiry
                     TIMERFDS[idx].next_expiry_ms = now_ms + (TIMERFDS[idx].interval_ns / 1_000_000).max(1);
                 } else {
-                    // One-shot: disarm
                     TIMERFDS[idx].next_expiry_ms = 0;
                 }
             }
             if TIMERFDS[idx].expirations > 0 {
                 let val = TIMERFDS[idx].expirations;
                 TIMERFDS[idx].expirations = 0;
-                *(buf as *mut u64) = val;
-                return 8;
-            }
-            if nonblock { return crate::errno::EAGAIN; }
-            use rux_arch::HaltOps;
-            crate::arch::Arch::halt_until_interrupt();
-        }
-        crate::errno::EAGAIN
+                Some(val)
+            } else { None }
+        })
     }
 }
 
