@@ -15,53 +15,59 @@ fn file_type_to_inode_type(ft: u8) -> InodeType {
 }
 
 /// Look up a name in a directory. Returns the inode number.
-pub(crate) unsafe fn lookup(fs: &Ext2Fs, dir_ino: u32, name: &[u8]) -> Result<u32, VfsError> {
+/// Iterate over directory blocks, calling `visit` for each physical block.
+/// `visit(buf, phys_block)` returns Ok(Some(result)) to stop early with a value,
+/// Ok(None) to continue, or Err to abort.
+/// `extra_scan`: if true, scan up to 12 blocks beyond inode size (for stale-size workaround).
+unsafe fn for_each_dir_block<T, F>(
+    fs: &Ext2Fs, dir_ino: u32, extra_scan: bool, mut visit: F,
+) -> Result<Option<T>, VfsError>
+where F: FnMut(&mut [u8; 4096], u32) -> Result<Option<T>, VfsError>
+{
     let raw = inode::read_raw(fs, dir_ino)?;
-    if inode::mode_to_type(raw.mode) != InodeType::Directory {
-        return Err(VfsError::NotADirectory);
-    }
+    let bs = fs.block_size as u64;
+    let dir_size = raw.size as u64;
+    let max_bytes = if extra_scan { dir_size.max(12 * bs) } else { dir_size };
+    let num_blocks = ((max_bytes + bs - 1) / bs) as u32;
 
-    // Use inode size but also allow scanning up to direct+indirect blocks,
-    // since the inode size may be stale if a recent add_entry grew the directory
-    // and the cache evicted the updated inode block before we read it.
-    let size = raw.size as u64;
-    // Scan at least `size` bytes, but check extra blocks in case size is stale
-    let max_scan = size.max(12 * fs.block_size as u64);
-    let bs = fs.block_size as usize;
     let mut buf = [0u8; 4096];
-    let mut pos: u64 = 0;
-
-    while pos < max_scan {
-        let file_block = (pos / bs as u64) as u32;
-        let phys_block = match super::block::translate(fs, &raw, file_block) {
-            Ok(b) => b,
-            Err(_) => break,
+    for blk_idx in 0..num_blocks {
+        let phys = match super::block::translate(fs, &raw, blk_idx) {
+            Ok(p) if p != 0 => p,
+            _ => break,
         };
-        if phys_block == 0 { break; }
-        fs.read_block(phys_block as u64, &mut buf)?;
+        fs.read_block(phys as u64, &mut buf)?;
+        if let Some(result) = visit(&mut buf, phys)? {
+            return Ok(Some(result));
+        }
+    }
+    Ok(None)
+}
 
+pub(crate) unsafe fn lookup(fs: &Ext2Fs, dir_ino: u32, name: &[u8]) -> Result<u32, VfsError> {
+    {
+        let raw = inode::read_raw(fs, dir_ino)?;
+        if inode::mode_to_type(raw.mode) != InodeType::Directory {
+            return Err(VfsError::NotADirectory);
+        }
+    }
+    let bs = fs.block_size as usize;
+    for_each_dir_block(fs, dir_ino, true, |buf, _phys| {
         let mut off = 0usize;
-        while off < bs {
-            if off + 8 > bs { break; }
-            let d_ino = le32(&buf, off);
-            let rec_len = le16(&buf, off + 4) as usize;
+        while off + 8 <= bs {
+            let d_ino = le32(buf, off);
+            let rec_len = le16(buf, off + 4) as usize;
+            if rec_len == 0 { break; }
             let name_len = buf[off + 6] as usize;
-
-            if rec_len == 0 { break; } // corrupted
-
-            if d_ino != 0 && name_len == name.len() {
-                let entry_name = &buf[off + 8..off + 8 + name_len];
-                if entry_name == name {
-                    return Ok(d_ino);
-                }
+            if d_ino != 0 && name_len == name.len()
+                && &buf[off + 8..off + 8 + name_len] == name
+            {
+                return Ok(Some(d_ino));
             }
-
             off += rec_len;
         }
-        pos = (pos / bs as u64 + 1) * bs as u64;
-    }
-
-    Err(VfsError::NotFound)
+        Ok(None)
+    })?.ok_or(VfsError::NotFound)
 }
 
 /// Read directory entries starting at `offset` (byte offset into dir data).
@@ -236,44 +242,30 @@ pub(crate) unsafe fn add_entry(
 pub(crate) unsafe fn remove_entry(
     fs: &Ext2Fs, dir_ino: u32, name: &[u8],
 ) -> Result<u32, VfsError> {
-    let raw = inode::read_raw(fs, dir_ino)?;
     let bs = fs.block_size as usize;
-    let dir_size = raw.size as usize;
-    let mut buf = [0u8; 4096];
-
-    let num_blocks = (dir_size + bs - 1) / bs;
-    for blk_idx in 0..num_blocks {
-        let phys = super::block::translate(fs, &raw, blk_idx as u32)?;
-        if phys == 0 { continue; }
-        fs.read_block(phys as u64, &mut buf)?;
-
+    for_each_dir_block(fs, dir_ino, false, |buf, phys| {
         let mut off = 0usize;
         let mut prev_off = 0usize;
-
         while off < bs {
-            let d_ino = le32(&buf, off);
-            let rec_len = le16(&buf, off + 4) as usize;
+            let d_ino = le32(buf, off);
+            let rec_len = le16(buf, off + 4) as usize;
             if rec_len == 0 { break; }
             let d_name_len = buf[off + 6] as usize;
 
-            if d_ino != 0 && d_name_len == name.len() {
-                let entry_name = &buf[off + 8..off + 8 + d_name_len];
-                if entry_name == name {
-                    // Found: merge with previous entry if possible
-                    if off != prev_off {
-                        let prev_rec = le16(&buf, prev_off + 4) as usize;
-                        set_le16(&mut buf, prev_off + 4, (prev_rec + rec_len) as u16);
-                    }
-                    // Clear inode
-                    set_le32(&mut buf, off, 0);
-                    fs.write_block(phys as u64, &buf)?;
-                    return Ok(d_ino);
+            if d_ino != 0 && d_name_len == name.len()
+                && &buf[off + 8..off + 8 + d_name_len] == name
+            {
+                if off != prev_off {
+                    let prev_rec = le16(buf, prev_off + 4) as usize;
+                    set_le16(buf, prev_off + 4, (prev_rec + rec_len) as u16);
                 }
+                set_le32(buf, off, 0);
+                fs.write_block(phys as u64, buf)?;
+                return Ok(Some(d_ino));
             }
-
             prev_off = off;
             off += rec_len;
         }
-    }
-    Err(VfsError::NotFound)
+        Ok(None)
+    })?.ok_or(VfsError::NotFound)
 }

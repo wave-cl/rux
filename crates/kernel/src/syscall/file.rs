@@ -5,6 +5,7 @@ use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 
 const O_CREAT: usize = 0x40;
+const O_APPEND: usize = 0x400;
 #[allow(dead_code)]
 const O_NONBLOCK: usize = 0x800;
 /// read(fd, buf, count) — POSIX.1
@@ -45,7 +46,7 @@ unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
         let eof_val = if is_write { crate::errno::EPIPE } else { 0 };
         if !can_pipe_block() { return eof_val; }
         pipe_block(pipe_id);
-        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
+        if fd >= rux_fs::fdtable::MAX_FDS || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
             return eof_val;
         }
     }
@@ -107,7 +108,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     unsafe {
         // O_APPEND: seek to end of file before writing
         if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active
-            && (*fdt::FD_TABLE)[fd].flags & 0x400 != 0  // O_APPEND = 0x400
+            && (*fdt::FD_TABLE)[fd].flags & O_APPEND as u32 != 0
             && !(*fdt::FD_TABLE)[fd].is_pipe
             && !(*fdt::FD_TABLE)[fd].is_console
         {

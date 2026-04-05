@@ -940,7 +940,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             let events = *((entry as usize + 4) as *const i16);
             let revents_ptr = (entry as usize + 6) as *mut i16;
 
-            if fd >= 64 { *revents_ptr = 0; continue; }
+            if fd >= fdt::MAX_FDS { *revents_ptr = 0; continue; }
 
             let f = &(*fdt::FD_TABLE)[fd];
             let mut revents: i16 = 0;
