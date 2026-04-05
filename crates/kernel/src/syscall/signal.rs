@@ -103,6 +103,22 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
     0
 }
 
+/// Linux check_kill_permission: root can signal anyone, non-root must
+/// match target's real UID. Currently all tasks run as euid 0 (root),
+/// so this always passes — but the structure is correct for when
+/// per-process credentials are added.
+///
+/// Note: TaskSlot doesn't store uid yet. When it does, check against
+/// the target's real uid and saved-set-user-ID.
+#[inline]
+unsafe fn check_kill_permission(_target_idx: usize) -> bool {
+    let my_euid = super::PROCESS.euid;
+    if my_euid == 0 { return true; }
+    // TODO: when TaskSlot gains uid field, check:
+    // my_euid == TASK_TABLE[target_idx].uid || my_euid == TASK_TABLE[target_idx].saved_uid
+    false // non-root cannot signal others until per-task UIDs exist
+}
+
 /// kill(pid, sig) — POSIX.1: send a signal.
 pub fn kill(pid: isize, signum: usize) -> isize {
     use rux_proc::signal::*;
@@ -122,10 +138,10 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         if to_self || pid == -1 { return 0; }
         use crate::task_table::*;
         unsafe {
-            let found = (0..MAX_PROCS).any(|i| {
-                TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32
-            });
-            return if found { 0 } else { crate::errno::ESRCH };
+            return match (0..MAX_PROCS).find(|&i| TASK_TABLE[i].active && TASK_TABLE[i].pid == pid as u32) {
+                Some(i) => if check_kill_permission(i) { 0 } else { crate::errno::EPERM },
+                None => crate::errno::ESRCH,
+            };
         }
     }
 
@@ -133,9 +149,6 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         Some(s) => s,
         None => return crate::errno::EINVAL,
     };
-
-    // Permission check: only root (euid 0) or same-user can send signals
-    let my_euid = unsafe { super::PROCESS.euid };
 
     // Send to process group: pid==0 (own group) or pid<-1 (group -pid)
     if to_pgrp {
@@ -150,6 +163,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             for i in 0..MAX_PROCS {
                 if TASK_TABLE[i].active && TASK_TABLE[i].pgid == target_pgid
                     && TASK_TABLE[i].state != TaskState::Zombie
+                    && check_kill_permission(i)
                 {
                     found = true;
                     TASK_TABLE[i].signal_hot.pending =
@@ -167,13 +181,14 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         }
     }
 
-    // pid == -1: send to all processes except init
+    // pid == -1: send to all processes except init (with permission check)
     if pid == -1 {
         use crate::task_table::*;
         unsafe {
             for i in 0..MAX_PROCS {
                 if TASK_TABLE[i].active && TASK_TABLE[i].pid != 1
                     && TASK_TABLE[i].state != TaskState::Zombie
+                    && check_kill_permission(i)
                 {
                     TASK_TABLE[i].signal_hot.pending =
                         TASK_TABLE[i].signal_hot.pending.add(signum as u8);
@@ -256,11 +271,9 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                 None => return crate::errno::ESRCH,
             };
 
-            // Permission check: root can signal anyone; otherwise must match UID
-            // (simplified — real Linux also checks saved-set-user-ID)
-            if my_euid != 0 {
-                // Non-root: for now, allow signals within same session
-                // (all processes run as uid 0 in rux, so this is a no-op guard)
+            // Permission check (Linux check_kill_permission)
+            if !check_kill_permission(target_idx) {
+                return crate::errno::EPERM;
             }
 
             // SIGKILL: mark target as zombie (no handler check needed)
