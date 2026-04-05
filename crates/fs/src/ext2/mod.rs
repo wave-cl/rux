@@ -315,6 +315,10 @@ impl FileSystem for Ext2Fs {
     fn create(&mut self, dir_ino: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError> {
         let _g = FsLockGuard::new();
         unsafe {
+            // Check for duplicate name
+            if dir::lookup(self, dir_ino as u32, name.as_bytes()).is_ok() {
+                return Err(VfsError::AlreadyExists);
+            }
             let ino = alloc::alloc_inode(self)?;
             // Initialize inode as regular file
             let raw = inode::RawInode {
@@ -331,6 +335,10 @@ impl FileSystem for Ext2Fs {
     fn mkdir(&mut self, dir_ino: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError> {
         let _g = FsLockGuard::new();
         unsafe {
+            // Check for duplicate name
+            if dir::lookup(self, dir_ino as u32, name.as_bytes()).is_ok() {
+                return Err(VfsError::AlreadyExists);
+            }
             let ino = alloc::alloc_inode(self)?;
             let block_num = alloc::alloc_block(self)?;
 
@@ -398,8 +406,52 @@ impl FileSystem for Ext2Fs {
     }
 
     fn rmdir(&mut self, dir_ino: InodeId, name: FileName<'_>) -> Result<(), VfsError> {
-        // Same as unlink for now (doesn't check if dir is empty)
-        self.unlink(dir_ino, name)
+        let _g = FsLockGuard::new();
+        unsafe {
+            // Look up the child directory
+            let child_ino = dir::lookup(self, dir_ino as u32, name.as_bytes())?;
+            let raw = self.read_inode_raw(child_ino)?;
+            if inode::mode_to_type(raw.mode) != InodeType::Directory {
+                return Err(VfsError::NotADirectory);
+            }
+            // Check emptiness: scan for any entry beyond . and ..
+            let bs = self.block_size as usize;
+            let has_entries = dir::for_each_dir_block(self, child_ino, false, |buf, _phys| {
+                let mut off = 0usize;
+                while off + 8 <= bs {
+                    let d_ino = le32(buf, off);
+                    let rec_len = le16(buf, off + 4) as usize;
+                    if rec_len == 0 { break; }
+                    if d_ino != 0 {
+                        let nlen = buf[off + 6] as usize;
+                        let n = &buf[off + 8..off + 8 + nlen];
+                        if n != b"." && n != b".." {
+                            return Ok(Some(true)); // non-trivial entry found
+                        }
+                    }
+                    off += rec_len;
+                }
+                Ok(None)
+            })?.unwrap_or(false);
+            if has_entries {
+                return Err(VfsError::DirectoryNotEmpty);
+            }
+            // Empty — remove entry and free inode
+            dir::remove_entry(self, dir_ino as u32, name.as_bytes())?;
+            let mut child_raw = self.read_inode_raw(child_ino)?;
+            child_raw.links_count = child_raw.links_count.saturating_sub(1);
+            if child_raw.links_count == 0 {
+                let _ = self.truncate(child_ino as u64, 0);
+                let _ = alloc::free_inode(self, child_ino);
+            } else {
+                self.write_inode_raw(child_ino, &child_raw)?;
+            }
+            // Decrement parent link count
+            let mut parent_raw = self.read_inode_raw(dir_ino as u32)?;
+            parent_raw.links_count = parent_raw.links_count.saturating_sub(1);
+            self.write_inode_raw(dir_ino as u32, &parent_raw)?;
+            Ok(())
+        }
     }
 
     fn link(&mut self, dir_ino: InodeId, name: FileName<'_>, target: InodeId) -> Result<(), VfsError> {
@@ -458,6 +510,10 @@ impl FileSystem for Ext2Fs {
                 .map_err(|_| VfsError::NotFound)?;
             let raw = self.read_inode_raw(ino)?;
             let ft = if inode::mode_to_type(raw.mode) == InodeType::Directory { 2u8 } else { 1u8 };
+            // If target name already exists, remove it first (POSIX atomic replace)
+            if dir::lookup(self, new_dir as u32, new_name.as_bytes()).is_ok() {
+                let _ = dir::remove_entry(self, new_dir as u32, new_name.as_bytes());
+            }
             dir::add_entry(self, new_dir as u32, ino, new_name.as_bytes(), ft)?;
             dir::remove_entry(self, old_dir as u32, old_name.as_bytes())?;
             Ok(())

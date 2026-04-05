@@ -19,7 +19,7 @@ fn file_type_to_inode_type(ft: u8) -> InodeType {
 /// `visit(buf, phys_block)` returns Ok(Some(result)) to stop early with a value,
 /// Ok(None) to continue, or Err to abort.
 /// `extra_scan`: if true, scan up to 12 blocks beyond inode size (for stale-size workaround).
-unsafe fn for_each_dir_block<T, F>(
+pub(crate) unsafe fn for_each_dir_block<T, F>(
     fs: &Ext2Fs, dir_ino: u32, extra_scan: bool, mut visit: F,
 ) -> Result<Option<T>, VfsError>
 where F: FnMut(&mut [u8; 4096], u32) -> Result<Option<T>, VfsError>

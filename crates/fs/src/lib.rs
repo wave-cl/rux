@@ -246,94 +246,105 @@ pub struct DirEntry {
 
 const _: () = assert!(core::mem::size_of::<DirEntry>() == 272);
 
-// ── Inode traits ────────────────────────────────────────────────────────
-
-/// Core inode identity and metadata.
-pub trait Inode {
-    fn id(&self) -> InodeId;
-    fn kind(&self) -> InodeType;
-    /// Write inode status into `buf`. Avoids 80-byte return-by-value copy.
-    fn stat(&self, buf: &mut InodeStat) -> Result<(), VfsError>;
-}
-
-/// File data operations (regular files, char/block devices).
-pub trait FileOps {
-    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError>;
-    fn write(&mut self, offset: u64, buf: &[u8]) -> Result<usize, VfsError>;
-    fn truncate(&mut self, size: u64) -> Result<(), VfsError>;
-}
-
-/// Directory operations. Names are pre-validated `FileName` — no length
-/// checks inside the filesystem, validated once at the syscall boundary.
-pub trait DirOps {
-    fn lookup(&self, name: FileName<'_>) -> Result<InodeId, VfsError>;
-    fn create(&mut self, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
-    fn mkdir(&mut self, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
-    fn unlink(&mut self, name: FileName<'_>) -> Result<(), VfsError>;
-    fn rmdir(&mut self, name: FileName<'_>) -> Result<(), VfsError>;
-    fn rename(
-        &mut self,
-        old_name: FileName<'_>,
-        new_dir: InodeId,
-        new_name: FileName<'_>,
-    ) -> Result<(), VfsError>;
-    fn link(&mut self, name: FileName<'_>, target: InodeId) -> Result<(), VfsError>;
-    fn symlink(&mut self, name: FileName<'_>, target: &[u8]) -> Result<InodeId, VfsError>;
-    /// Write next directory entry into `buf`. Returns false when no more entries.
-    fn readdir(&self, offset: usize, buf: &mut DirEntry) -> Result<bool, VfsError>;
-}
-
-/// Inode attribute operations.
-pub trait InodeAttrOps {
-    fn chmod(&mut self, mode: u32) -> Result<(), VfsError>;
-    fn chown(&mut self, uid: u32, gid: u32) -> Result<(), VfsError>;
-    fn utimes(&mut self, atime: u64, mtime: u64) -> Result<(), VfsError>;
-}
-
-/// Symlink operations.
-pub trait SymlinkOps {
-    fn readlink(&self, buf: &mut [u8]) -> Result<usize, VfsError>;
-}
-
 // ── FileSystem trait ────────────────────────────────────────────────────
 
-/// Inode-based filesystem interface. Concrete filesystems (ramfs, ext4, etc.)
-/// implement this trait. Path resolution lives above this layer.
+/// Inode-based filesystem interface. Concrete filesystems (ramfs, ext2, etc.)
+/// implement this trait. Path resolution lives above this layer in `path.rs`.
 ///
-/// All name parameters use `FileName` — validated once, no re-checking.
-/// `stat` and `readdir` write into caller-provided buffers — no copies.
+/// ## Contract
+///
+/// All name parameters use `FileName` — validated once at the syscall boundary,
+/// no length/slash/null checks needed inside implementations.
+///
+/// `stat` and `readdir` write into caller-provided buffers to avoid copies.
+///
+/// Read-only filesystems (procfs, devfs) return `ReadOnly` for all mutating
+/// operations. Permission checks are done in the syscall layer, not here.
+///
+/// ## Error semantics
+///
+/// Methods return `Result<T, VfsError>`. The documented errors below are
+/// **required** — implementations must check these conditions. Additional
+/// errors (e.g., `IoError` for disk failures) are always permitted.
 pub trait FileSystem {
+    /// Return the root directory inode ID for this filesystem.
     fn root_inode(&self) -> InodeId;
 
-    /// Write inode status into `buf`.
+    /// Write inode metadata into `buf`.
+    /// Errors: `NotFound` if inode doesn't exist.
     fn stat(&self, ino: InodeId, buf: &mut InodeStat) -> Result<(), VfsError>;
 
     // ── File I/O ────────────────────────────────────────────────────
+
+    /// Read up to `buf.len()` bytes from file at `offset`. Returns bytes read.
+    /// Returns 0 at EOF. Errors: `IsADirectory` if inode is a directory.
     fn read(&self, ino: InodeId, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError>;
+
+    /// Write `buf` to file at `offset`. Returns bytes written.
+    /// Extends the file if writing past EOF.
+    /// Errors: `IsADirectory`, `ReadOnly`, `NoSpace`.
     fn write(&mut self, ino: InodeId, offset: u64, buf: &[u8]) -> Result<usize, VfsError>;
+
+    /// Set file size. If shrinking, free excess data. If growing, extend with zeros.
+    /// Errors: `IsADirectory`, `ReadOnly`.
     fn truncate(&mut self, ino: InodeId, size: u64) -> Result<(), VfsError>;
 
     // ── Directory operations ────────────────────────────────────────
+
+    /// Look up `name` in directory `dir`. Returns the child inode ID.
+    /// Errors: `NotFound` if absent, `NotADirectory` if `dir` is not a directory.
     fn lookup(&self, dir: InodeId, name: FileName<'_>) -> Result<InodeId, VfsError>;
+
+    /// Create a regular file named `name` in directory `dir`. Returns new inode ID.
+    /// Errors: `AlreadyExists` if name taken, `NoSpace`, `ReadOnly`.
     fn create(&mut self, dir: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
+
+    /// Create a subdirectory named `name` in directory `dir`. Returns new inode ID.
+    /// Initializes `.` and `..` entries. Increments parent link count.
+    /// Errors: `AlreadyExists` if name taken, `NoSpace`, `ReadOnly`.
     fn mkdir(&mut self, dir: InodeId, name: FileName<'_>, mode: u32) -> Result<InodeId, VfsError>;
+
+    /// Remove directory entry `name` from `dir`. Decrements target link count;
+    /// frees inode + data when link count reaches zero.
+    /// Errors: `NotFound`, `IsADirectory` (use `rmdir` for directories), `ReadOnly`.
     fn unlink(&mut self, dir: InodeId, name: FileName<'_>) -> Result<(), VfsError>;
+
+    /// Remove empty subdirectory `name` from `dir`. Decrements parent link count.
+    /// Errors: `NotFound`, `DirectoryNotEmpty`, `ReadOnly`.
     fn rmdir(&mut self, dir: InodeId, name: FileName<'_>) -> Result<(), VfsError>;
+
+    /// Create hard link: add `name` in `dir` pointing to existing `target` inode.
+    /// Errors: `AlreadyExists`, `IsADirectory` (cannot hardlink dirs), `ReadOnly`.
     fn link(&mut self, dir: InodeId, name: FileName<'_>, target: InodeId) -> Result<(), VfsError>;
+
+    /// Create symbolic link `name` in `dir` pointing to `target` path bytes.
+    /// Returns the new symlink inode ID.
+    /// Errors: `AlreadyExists`, `NoSpace`, `ReadOnly`.
     fn symlink(
         &mut self,
         dir: InodeId,
         name: FileName<'_>,
         target: &[u8],
     ) -> Result<InodeId, VfsError>;
+
+    /// Read symlink target into `buf`. Returns bytes written to buf.
+    /// Errors: `InvalidPath` if inode is not a symlink.
     fn readlink(&self, ino: InodeId, buf: &mut [u8]) -> Result<usize, VfsError>;
-    /// Write next directory entry into `buf`. Returns false when no more entries.
+
+    /// Write next directory entry at `offset` into `buf`. Returns `Ok(true)` if
+    /// an entry was written, `Ok(false)` when no more entries.
+    /// `offset` is an opaque position cookie (0 for first entry).
+    /// Errors: `NotADirectory`.
     fn readdir(
         &self,
         dir: InodeId,
         offset: usize,
         buf: &mut DirEntry,
     ) -> Result<bool, VfsError>;
+
+    /// Move/rename: remove `old_name` from `old_dir`, add `new_name` in `new_dir`
+    /// pointing to the same inode. If `new_name` already exists, atomically replace it.
+    /// Errors: `NotFound` (old doesn't exist), `ReadOnly`.
     fn rename(
         &mut self,
         old_dir: InodeId,
@@ -343,8 +354,15 @@ pub trait FileSystem {
     ) -> Result<(), VfsError>;
 
     // ── Attribute operations ────────────────────────────────────────
+
+    /// Change permission bits (preserves file type bits in mode).
+    /// Errors: `NotFound`, `ReadOnly`.
     fn chmod(&mut self, ino: InodeId, mode: u32) -> Result<(), VfsError>;
+
+    /// Change owner/group. Errors: `NotFound`, `ReadOnly`.
     fn chown(&mut self, ino: InodeId, uid: u32, gid: u32) -> Result<(), VfsError>;
+
+    /// Set access and modification times. Errors: `NotFound`, `ReadOnly`.
     fn utimes(&mut self, ino: InodeId, atime: u64, mtime: u64) -> Result<(), VfsError>;
 }
 
