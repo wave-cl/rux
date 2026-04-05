@@ -117,14 +117,15 @@ pub fn current_time_secs() -> u64 {
     crate::arch::Arch::ticks() / 1000
 }
 
-/// Resolve a path using CWD for relative paths.
+/// Resolve a path using CWD, with execute checks on every intermediate directory.
 pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     let fs = crate::kstate::fs();
-    rux_fs::path::resolve_with_cwd(fs, PROCESS.fs_ctx.cwd, path)
+    let cred = current_cred();
+    rux_fs::path::resolve_path_at_checked(fs, PROCESS.fs_ctx.cwd, path, &cred)
+        .map_err(|e| -(e.as_errno() as isize))
 }
 
-/// Resolve a path relative to a directory FD (for *at syscalls).
-/// If dirfd is AT_FDCWD (-100) or path is absolute, falls back to CWD.
+/// Resolve a path relative to a directory FD, with execute checks.
 pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     let at_fdcwd = (-100isize) as usize;
     if path.first() == Some(&b'/') || dirfd == at_fdcwd {
@@ -133,25 +134,28 @@ pub unsafe fn resolve_at(dirfd: usize, path: &[u8]) -> Result<rux_fs::InodeId, i
     if dirfd < rux_fs::fdtable::MAX_FDS {
         if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
             let fs = crate::kstate::fs();
-            return rux_fs::path::resolve_path_at(fs, dir_ino, path).map_err(|_| -2isize);
+            let cred = current_cred();
+            return rux_fs::path::resolve_path_at_checked(fs, dir_ino, path, &cred)
+                .map_err(|e| -(e.as_errno() as isize));
         }
     }
     resolve_with_cwd(path)
 }
 
-/// Resolve (dirfd, path_ptr) to a parent inode + basename, handling *at semantics.
+/// Resolve (dirfd, path_ptr) to a parent inode + basename, with execute checks.
 pub unsafe fn resolve_parent_at(dirfd: usize, path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
     let path = crate::uaccess::read_user_cstr(path_ptr);
     let at_fdcwd = (-100isize) as usize;
     if path.first() == Some(&b'/') || dirfd == at_fdcwd {
         return resolve_parent_and_name(path_ptr);
     }
-    // Relative path with dirfd
     if dirfd < rux_fs::fdtable::MAX_FDS {
         if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
             let fs = crate::kstate::fs();
+            let cred = current_cred();
             if let Some(slash) = path.iter().rposition(|&b| b == b'/') {
-                let parent = rux_fs::path::resolve_path_at(fs, dir_ino, &path[..slash]).map_err(|_| -2isize)?;
+                let parent = rux_fs::path::resolve_path_at_checked(fs, dir_ino, &path[..slash], &cred)
+                    .map_err(|e| -(e.as_errno() as isize))?;
                 Ok((parent, &path[slash + 1..]))
             } else {
                 Ok((dir_ino, path))
@@ -164,11 +168,12 @@ pub unsafe fn resolve_parent_at(dirfd: usize, path_ptr: usize) -> Result<(rux_fs
     }
 }
 
-/// Resolve a user path pointer to (parent_inode, basename).
+/// Resolve a user path pointer to (parent_inode, basename), with execute checks.
 pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeId, &'static [u8]), isize> {
     let path = crate::uaccess::read_user_cstr(path_ptr);
     let fs = crate::kstate::fs();
-    rux_fs::path::resolve_parent_and_name(fs, PROCESS.fs_ctx.cwd, path)
+    let cred = current_cred();
+    rux_fs::path::resolve_parent_checked(fs, PROCESS.fs_ctx.cwd, path, &cred)
 }
 
 /// Resolve a user path to (parent_inode, validated FileName) — combines

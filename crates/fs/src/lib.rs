@@ -26,6 +26,7 @@ pub const S_IFCHR: u32  = 0o020000;
 pub const S_IFBLK: u32  = 0o060000;
 pub const S_IFIFO: u32  = 0o010000;
 pub const S_IFSOCK: u32 = 0o140000;
+pub const S_ISVTX: u32  = 0o001000; // sticky bit
 
 // ── Inode type enum ─────────────────────────────────────────────────────
 
@@ -129,6 +130,21 @@ pub struct Credentials {
 pub const R_OK: u32 = 4;
 pub const W_OK: u32 = 2;
 pub const X_OK: u32 = 1;
+
+/// POSIX DAC permission check: does `cred` have `requested` access to an inode?
+/// Root (euid 0) bypasses all checks. Checks owner/group/other mode bits.
+#[inline]
+pub fn check_perm(stat: &InodeStat, cred: &Credentials, requested: u32) -> Result<(), VfsError> {
+    if cred.euid == 0 { return Ok(()); }
+    let bits = if cred.euid == stat.uid {
+        (stat.mode >> 6) & 7
+    } else if cred.egid == stat.gid {
+        (stat.mode >> 3) & 7
+    } else {
+        stat.mode & 7
+    };
+    if requested & !bits == 0 { Ok(()) } else { Err(VfsError::PermissionDenied) }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

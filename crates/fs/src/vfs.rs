@@ -151,20 +151,7 @@ impl Vfs {
 
 // ── Permission checks (Linux VFS-conformant) ─────────────────────────
 
-/// Check if `cred` can access an inode with `requested` permission bits.
-/// Root (euid 0) bypasses all checks.
-#[inline]
-fn check_perm(stat: &InodeStat, cred: &crate::Credentials, requested: u32) -> Result<(), VfsError> {
-    if cred.euid == 0 { return Ok(()); } // root can do anything
-    let bits = if cred.euid == stat.uid {
-        (stat.mode >> 6) & 7 // owner bits
-    } else if cred.egid == stat.gid {
-        (stat.mode >> 3) & 7 // group bits
-    } else {
-        stat.mode & 7         // other bits
-    };
-    if requested & !bits == 0 { Ok(()) } else { Err(VfsError::PermissionDenied) }
-}
+use crate::check_perm;
 
 impl Vfs {
     /// Stat a tagged inode (internal helper for permission checks).
@@ -176,53 +163,69 @@ impl Vfs {
 
     /// Check W+X on parent directory — required before create/mkdir/unlink/
     /// rmdir/link/symlink/rename. Matches Linux `may_create()`/`may_delete()`.
-    fn may_modify_dir(&self, dir: InodeId, cred: &crate::Credentials) -> Result<(), VfsError> {
-        let st = self.inode_stat(dir)?;
-        check_perm(&st, cred, crate::W_OK | crate::X_OK)
+    /// If `target` is Some (delete/rename), also checks sticky bit (S_ISVTX):
+    /// in a sticky directory, only the file owner, dir owner, or root can delete.
+    fn may_modify_dir(&self, dir: InodeId, target: Option<InodeId>, cred: &crate::Credentials) -> Result<(), VfsError> {
+        let dir_st = self.inode_stat(dir)?;
+        check_perm(&dir_st, cred, crate::W_OK | crate::X_OK)?;
+        // Sticky bit check (Linux may_delete)
+        if let Some(target_ino) = target {
+            if dir_st.mode & crate::S_ISVTX != 0 && cred.euid != 0 {
+                let target_st = self.inode_stat(target_ino)?;
+                if cred.euid != dir_st.uid && cred.euid != target_st.uid {
+                    return Err(VfsError::PermissionDenied);
+                }
+            }
+        }
+        Ok(())
     }
 
     // ── Checked operations (permission-enforcing wrappers) ──────────
 
     /// Create a regular file, checking W+X on parent directory.
     pub fn checked_create(&mut self, dir: InodeId, name: FileName<'_>, mode: u32, cred: &crate::Credentials) -> Result<InodeId, VfsError> {
-        self.may_modify_dir(dir, cred)?;
+        self.may_modify_dir(dir, None, cred)?;
         self.create(dir, name, mode)
     }
 
     /// Create a directory, checking W+X on parent directory.
     pub fn checked_mkdir(&mut self, dir: InodeId, name: FileName<'_>, mode: u32, cred: &crate::Credentials) -> Result<InodeId, VfsError> {
-        self.may_modify_dir(dir, cred)?;
+        self.may_modify_dir(dir, None, cred)?;
         self.mkdir(dir, name, mode)
     }
 
-    /// Remove a file, checking W+X on parent directory.
+    /// Remove a file, checking W+X on parent + sticky bit.
     pub fn checked_unlink(&mut self, dir: InodeId, name: FileName<'_>, cred: &crate::Credentials) -> Result<(), VfsError> {
-        self.may_modify_dir(dir, cred)?;
+        // Look up target for sticky bit check
+        let target = self.lookup(dir, name).ok();
+        self.may_modify_dir(dir, target, cred)?;
         self.unlink(dir, name)
     }
 
-    /// Remove a directory, checking W+X on parent directory.
+    /// Remove a directory, checking W+X on parent + sticky bit.
     pub fn checked_rmdir(&mut self, dir: InodeId, name: FileName<'_>, cred: &crate::Credentials) -> Result<(), VfsError> {
-        self.may_modify_dir(dir, cred)?;
+        let target = self.lookup(dir, name).ok();
+        self.may_modify_dir(dir, target, cred)?;
         self.rmdir(dir, name)
     }
 
     /// Create a hard link, checking W+X on parent directory.
     pub fn checked_link(&mut self, dir: InodeId, name: FileName<'_>, target: InodeId, cred: &crate::Credentials) -> Result<(), VfsError> {
-        self.may_modify_dir(dir, cred)?;
+        self.may_modify_dir(dir, None, cred)?;
         self.link(dir, name, target)
     }
 
     /// Create a symlink, checking W+X on parent directory.
     pub fn checked_symlink(&mut self, dir: InodeId, name: FileName<'_>, target: &[u8], cred: &crate::Credentials) -> Result<InodeId, VfsError> {
-        self.may_modify_dir(dir, cred)?;
+        self.may_modify_dir(dir, None, cred)?;
         self.symlink(dir, name, target)
     }
 
-    /// Rename, checking W+X on both old and new parent directories.
+    /// Rename, checking W+X on both parent directories + sticky bit on source.
     pub fn checked_rename(&mut self, old_dir: InodeId, old_name: FileName<'_>, new_dir: InodeId, new_name: FileName<'_>, cred: &crate::Credentials) -> Result<(), VfsError> {
-        self.may_modify_dir(old_dir, cred)?;
-        if old_dir != new_dir { self.may_modify_dir(new_dir, cred)?; }
+        let old_target = self.lookup(old_dir, old_name).ok();
+        self.may_modify_dir(old_dir, old_target, cred)?;
+        if old_dir != new_dir { self.may_modify_dir(new_dir, None, cred)?; }
         self.rename(old_dir, old_name, new_dir, new_name)
     }
 

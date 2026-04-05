@@ -1,4 +1,4 @@
-use crate::{FileSystem, FileName, InodeId, InodeStat, VfsError, S_IFMT, S_IFLNK};
+use crate::{FileSystem, FileName, InodeId, InodeStat, VfsError, Credentials, S_IFMT, S_IFLNK};
 
 /// Maximum depth for parent tracking during path resolution.
 const MAX_DEPTH: usize = 64;
@@ -36,6 +36,111 @@ pub fn resolve_path_at<F: FileSystem>(
         return resolve_path_inner(fs, fs.root_inode(), path, SYMLOOP_MAX);
     }
     resolve_path_inner(fs, start, path, SYMLOOP_MAX)
+}
+
+/// Resolve a path with execute permission checks on each directory component.
+/// Matches Linux `link_path_walk()` which calls `inode_permission(dir, MAY_EXEC)`
+/// on every intermediate directory during traversal.
+#[inline]
+pub fn resolve_path_at_checked<F: FileSystem>(
+    fs: &F,
+    start: InodeId,
+    path: &[u8],
+    cred: &Credentials,
+) -> Result<InodeId, VfsError> {
+    if path.is_empty() { return Ok(start); }
+    let root = fs.root_inode();
+    if path[0] == b'/' {
+        resolve_path_inner_checked(fs, root, path, SYMLOOP_MAX, cred)
+    } else {
+        resolve_path_inner_checked(fs, start, path, SYMLOOP_MAX, cred)
+    }
+}
+
+/// Resolve (parent_inode, basename) with execute checks on intermediate dirs.
+pub fn resolve_parent_checked<'a, F: FileSystem>(
+    fs: &F,
+    cwd: InodeId,
+    path: &'a [u8],
+    cred: &Credentials,
+) -> Result<(InodeId, &'a [u8]), isize> {
+    let mut last_slash = None;
+    for j in 0..path.len() {
+        if path[j] == b'/' { last_slash = Some(j); }
+    }
+    match last_slash {
+        Some(0) => Ok((fs.root_inode(), &path[1..])),
+        Some(s) => {
+            let parent_path = &path[..s];
+            let name = &path[s + 1..];
+            match resolve_path_at_checked(fs, cwd, parent_path, cred) {
+                Ok(parent_ino) => Ok((parent_ino, name)),
+                Err(_) => Err(-2),
+            }
+        }
+        None => Ok((cwd, path)),
+    }
+}
+
+fn resolve_path_inner_checked<F: FileSystem>(
+    fs: &F,
+    start: InodeId,
+    path: &[u8],
+    symlinks_left: usize,
+    cred: &Credentials,
+) -> Result<InodeId, VfsError> {
+    if path.is_empty() { return Ok(start); }
+    let root = fs.root_inode();
+    let mut current = if path[0] == b'/' { root } else { start };
+    let mut parent_stack = [root; MAX_DEPTH];
+    let mut depth: usize = 0;
+    let mut i = if path[0] == b'/' { 1 } else { 0 };
+    let len = path.len();
+
+    while i < len {
+        if path[i] == b'/' { i += 1; continue; }
+        let comp_start = i;
+        while i < len && path[i] != b'/' { i += 1; }
+        let component = &path[comp_start..i];
+
+        if component == b"." { continue; }
+        if component == b".." {
+            if depth > 0 { current = parent_stack[depth - 1]; depth -= 1; }
+            else { current = root; }
+            continue;
+        }
+
+        // Execute check on current directory before lookup
+        let mut dir_stat = unsafe { core::mem::zeroed::<InodeStat>() };
+        fs.stat(current, &mut dir_stat)?;
+        crate::check_perm(&dir_stat, cred, crate::X_OK)?;
+
+        let name = FileName::new(component)?;
+        if depth < MAX_DEPTH { parent_stack[depth] = current; depth += 1; }
+        else { return Err(VfsError::InvalidPath); }
+
+        current = fs.lookup(current, name)?;
+
+        if is_symlink(fs, current) {
+            if symlinks_left == 0 { return Err(VfsError::TooManySymlinks); }
+            let mut link_buf = [0u8; 256];
+            let link_len = fs.readlink(current, &mut link_buf)?;
+            let target = &link_buf[..link_len];
+            if !target.is_empty() && target[0] == b'/' {
+                let remaining = &path[i..];
+                let mut full = [0u8; 512];
+                let mut fp = 0;
+                for &b in target { if fp < 512 { full[fp] = b; fp += 1; } }
+                for &b in remaining { if fp < 512 { full[fp] = b; fp += 1; } }
+                return resolve_path_inner_checked(fs, root, &full[..fp], symlinks_left - 1, cred);
+            } else {
+                let parent = if depth > 0 { parent_stack[depth - 1] } else { root };
+                let target_name = FileName::new(target)?;
+                current = fs.lookup(parent, target_name)?;
+            }
+        }
+    }
+    Ok(current)
 }
 
 fn resolve_path_inner<F: FileSystem>(
