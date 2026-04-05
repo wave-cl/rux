@@ -242,14 +242,14 @@ pub fn mkdir_at(dirfd: usize, path_ptr: usize) -> isize {
         let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
             Ok(v) => v, Err(e) => return e,
         };
+        let cred = super::current_cred();
         let fs = crate::kstate::fs();
-        match fs.mkdir(dir_ino, fname, 0o755) {
+        match fs.checked_mkdir(dir_ino, fname, 0o755, &cred) {
             Ok(ino) => {
-                let now = super::current_time_secs();
-                let _ = fs.utimes(ino, now, now);
+                let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs());
                 0
             }
-            Err(_) => crate::errno::EEXIST,
+            Err(e) => -(e.as_errno() as isize),
         }
     }
 }
@@ -257,13 +257,13 @@ pub fn mkdir_at(dirfd: usize, path_ptr: usize) -> isize {
 /// unlink_at(dirfd, path) — unlinkat with dirfd support
 pub fn unlink_at(dirfd: usize, path_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
             Ok(v) => v, Err(e) => return e,
         };
-        match crate::kstate::fs().unlink(dir_ino, fname) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_unlink(dir_ino, fname, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
+            Err(e) => -(e.as_errno() as isize),
         }
     }
 }
@@ -275,14 +275,14 @@ pub fn creat_at(dirfd: usize, path_ptr: usize) -> isize {
         let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
             Ok(v) => v, Err(e) => return e,
         };
+        let cred = super::current_cred();
         let fs = crate::kstate::fs();
-        match fs.create(dir_ino, fname, 0o644) {
+        match fs.checked_create(dir_ino, fname, 0o644, &cred) {
             Ok(ino) => {
-                let now = super::current_time_secs();
-                let _ = fs.utimes(ino, now, now);
+                let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs());
                 fdt::sys_open_ino(ino, 0o02, crate::kstate::fs()) // O_RDWR
             }
-            Err(_) => crate::errno::EEXIST,
+            Err(e) => -(e.as_errno() as isize),
         }
     }
 }
@@ -292,27 +292,23 @@ pub fn creat_at(dirfd: usize, path_ptr: usize) -> isize {
 /// rename_at(olddirfd, old, newdirfd, new) — renameat with dirfd support
 pub fn rename_at(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, FileName};
-        // Resolve old path first, copy name to local buffer (avoid static buffer reuse)
+        use rux_fs::FileName;
         let (old_dir, old_name_ref) = match super::resolve_parent_at(old_dirfd, old_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
+            Ok(v) => v, Err(e) => return e,
         };
         let mut old_name_buf = [0u8; 256];
         let old_name_len = old_name_ref.len().min(255);
         old_name_buf[..old_name_len].copy_from_slice(&old_name_ref[..old_name_len]);
 
-        // Now resolve new path (this overwrites the static buffer)
         let (new_dir, new_name) = match super::resolve_parent_at(new_dirfd, new_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
+            Ok(v) => v, Err(e) => return e,
         };
-        let fs = crate::kstate::fs();
         let old_fname = match FileName::new(&old_name_buf[..old_name_len]) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.rename(old_dir, old_fname, new_dir, new_fname) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_rename(old_dir, old_fname, new_dir, new_fname, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
+            Err(e) => -(e.as_errno() as isize),
         }
     }
 }
@@ -331,8 +327,6 @@ pub fn symlink(target_ptr: usize, link_ptr: usize) -> isize {
 /// symlinkat(target, dirfd, linkpath) — with dirfd support
 pub fn symlink_at(target_ptr: usize, dirfd: usize, link_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
-        // Read target first, copy to local buffer before resolve overwrites static buf
         let target = crate::uaccess::read_user_cstr(target_ptr);
         let mut target_buf = [0u8; 256];
         let tlen = target.len().min(255);
@@ -341,9 +335,10 @@ pub fn symlink_at(target_ptr: usize, dirfd: usize, link_ptr: usize) -> isize {
         let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, link_ptr) {
             Ok(v) => v, Err(e) => return e,
         };
-        match crate::kstate::fs().symlink(dir_ino, fname, &target_buf[..tlen]) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_symlink(dir_ino, fname, &target_buf[..tlen], &cred) {
             Ok(_) => 0,
-            Err(_) => crate::errno::EEXIST,
+            Err(e) => -(e.as_errno() as isize),
         }
     }
 }
@@ -351,15 +346,16 @@ pub fn symlink_at(target_ptr: usize, dirfd: usize, link_ptr: usize) -> isize {
 /// fchownat(dirfd, path, uid, gid, flags) — with dirfd support
 pub fn fchownat(dirfd: usize, path_ptr: usize, uid: usize, gid: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_at(dirfd, path) {
             Ok(ino) => ino,
             Err(_) => return 0, // Silently succeed for non-existent (matches chown behavior)
         };
-        let fs = crate::kstate::fs();
-        let _ = fs.chown(ino, uid as u32, gid as u32);
-        0
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_chown(ino, uid as u32, gid as u32, &cred) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::EPERM,
+        }
     }
 }
 
@@ -376,11 +372,11 @@ pub fn chmod(path_ptr: usize, mode: usize) -> isize {
 /// fchmod(fd, mode) — POSIX.1: change file permissions by fd.
 pub fn fchmod(fd: usize, mode: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
-        match crate::kstate::fs().chmod(f.ino, mode as u32) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_chmod(f.ino, mode as u32, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
+            Err(_) => crate::errno::EPERM,
         }
     }
 }
@@ -393,11 +389,11 @@ pub fn chown(path_ptr: usize, uid: usize, gid: usize) -> isize {
 /// fchown(fd, uid, gid) — POSIX.1: change file ownership by fd.
 pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
-        match crate::kstate::fs().chown(f.ino, uid as u32, gid as u32) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_chown(f.ino, uid as u32, gid as u32, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
+            Err(_) => crate::errno::EPERM,
         }
     }
 }
@@ -428,10 +424,10 @@ pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize)
             Ok(ino) => ino,
             Err(_) => return 0, // silently succeed if path not found
         };
-        let fs = crate::kstate::fs();
-        match fs.utimes(ino, atime, mtime) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_utimes(ino, atime, mtime, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
+            Err(_) => crate::errno::EPERM,
         }
     }
 }
@@ -460,16 +456,15 @@ pub fn readlink_at(dirfd: usize, path_ptr: usize, buf: usize, bufsiz: usize) -> 
 /// fchmodat(dirfd, path, mode) — with dirfd support
 pub fn chmod_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_at(dirfd, path) {
             Ok(ino) => ino,
             Err(e) => return e,
         };
-        let fs = crate::kstate::fs();
-        match fs.chmod(ino, mode as u32) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_chmod(ino, mode as u32, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
+            Err(_) => crate::errno::EPERM,
         }
     }
 }
@@ -477,7 +472,6 @@ pub fn chmod_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
 /// linkat(olddirfd, old, newdirfd, new, flags) — with dirfd support
 pub fn link_at(olddirfd: usize, old_ptr: usize, newdirfd: usize, new_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let old_path = crate::uaccess::read_user_cstr(old_ptr);
         let old_ino = match super::resolve_at(olddirfd, old_path) {
             Ok(ino) => ino,
@@ -487,9 +481,10 @@ pub fn link_at(olddirfd: usize, old_ptr: usize, newdirfd: usize, new_ptr: usize)
             Ok(v) => v,
             Err(e) => return e,
         };
-        match crate::kstate::fs().link(dir_ino, fname, old_ino) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_link(dir_ino, fname, old_ino, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::EEXIST,
+            Err(e) => -(e.as_errno() as isize),
         }
     }
 }

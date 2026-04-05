@@ -321,13 +321,11 @@ pub fn pwrite64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
 /// ftruncate(fd, length) — POSIX.1: truncate file to specified length.
 pub fn ftruncate(fd: usize, length: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
-        let ino = f.ino;
-        let fs = crate::kstate::fs();
-        match fs.truncate(ino, length as u64) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_truncate(f.ino, length as u64, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::EIO,
+            Err(_) => crate::errno::EACCES,
         }
     }
 }
@@ -335,16 +333,15 @@ pub fn ftruncate(fd: usize, length: usize) -> isize {
 /// truncate(path, length) — POSIX.1: truncate file by path.
 pub fn truncate(path_ptr: usize, length: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_with_cwd(path) {
             Ok(ino) => ino,
             Err(e) => return e,
         };
-        let fs = crate::kstate::fs();
-        match fs.truncate(ino, length as u64) {
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_truncate(ino, length as u64, &cred) {
             Ok(()) => 0,
-            Err(_) => crate::errno::EIO,
+            Err(_) => crate::errno::EACCES,
         }
     }
 }
