@@ -163,6 +163,21 @@ pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeI
     rux_fs::path::resolve_parent_and_name(fs, PROCESS.fs_ctx.cwd, path)
 }
 
+/// Resolve a user path to (parent_inode, validated FileName) — combines
+/// resolve_parent_and_name + FileName::new into one call.
+pub unsafe fn resolve_parent_fname(path_ptr: usize) -> Result<(rux_fs::InodeId, rux_fs::FileName<'static>), isize> {
+    let (dir_ino, name) = resolve_parent_and_name(path_ptr)?;
+    let fname = rux_fs::FileName::new(name).map_err(|_| crate::errno::EINVAL)?;
+    Ok((dir_ino, fname))
+}
+
+/// Like resolve_parent_fname but with *at() dirfd semantics.
+pub unsafe fn resolve_parent_fname_at(dirfd: usize, path_ptr: usize) -> Result<(rux_fs::InodeId, rux_fs::FileName<'static>), isize> {
+    let (dir_ino, name) = resolve_parent_at(dirfd, path_ptr)?;
+    let fname = rux_fs::FileName::new(name).map_err(|_| crate::errno::EINVAL)?;
+    Ok((dir_ino, fname))
+}
+
 // ── Generic syscall dispatch ───────────────────────────────────────────
 
 /// Architecture-independent syscall identifiers.

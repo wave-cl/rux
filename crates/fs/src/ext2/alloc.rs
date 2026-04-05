@@ -1,26 +1,7 @@
 //! ext2 block and inode allocation via bitmaps.
 
 use crate::VfsError;
-use super::Ext2Fs;
-
-fn le16(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([buf[off], buf[off + 1]])
-}
-
-fn le32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
-}
-
-fn set_le16(buf: &mut [u8], off: usize, val: u16) {
-    let b = val.to_le_bytes();
-    buf[off] = b[0]; buf[off + 1] = b[1];
-}
-
-#[allow(dead_code)]
-fn set_le32(buf: &mut [u8], off: usize, val: u32) {
-    let b = val.to_le_bytes();
-    buf[off] = b[0]; buf[off + 1] = b[1]; buf[off + 2] = b[2]; buf[off + 3] = b[3];
-}
+use super::{Ext2Fs, le16, le32, set_le16};
 
 /// Allocate a free block. Returns the block number (1-based).
 pub(crate) unsafe fn alloc_block(fs: &Ext2Fs) -> Result<u32, VfsError> {

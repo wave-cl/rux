@@ -78,6 +78,18 @@ pub fn get_fd_inode(fd: usize) -> Option<u64> {
     }
 }
 
+/// Get a reference to an open file descriptor, or None if invalid/inactive.
+#[inline(always)]
+pub unsafe fn get_fd(fd: usize) -> Option<&'static OpenFile> {
+    if fd < MAX_FDS && (*FD_TABLE)[fd].active { Some(&(*FD_TABLE)[fd]) } else { None }
+}
+
+/// Get a mutable reference to an open file descriptor, or None if invalid/inactive.
+#[inline(always)]
+pub unsafe fn get_fd_mut(fd: usize) -> Option<&'static mut OpenFile> {
+    if fd < MAX_FDS && (*FD_TABLE)[fd].active { Some(&mut (*FD_TABLE)[fd]) } else { None }
+}
+
 /// Open a file by path (absolute only — legacy). Returns fd.
 pub fn sys_open<F: FileSystem>(path: &[u8], fs: &mut F) -> isize {
     let ino = match crate::path::resolve_path(fs, path) {
@@ -186,16 +198,15 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
 
 /// Close a file descriptor. Returns 0 on success.
 pub fn sys_close(fd: usize, pipes: Option<&PipeFns>) -> isize {
-    if fd < FIRST_FILE_FD || fd >= MAX_FDS {
-        return -9; // -EBADF
-    }
+    if fd < FIRST_FILE_FD { return -9; }
     unsafe {
-        if !(*FD_TABLE)[fd].active {
-            return -9;
-        }
-        if (*FD_TABLE)[fd].is_pipe {
+        let f = match get_fd(fd) {
+            Some(f) => f,
+            None => return -9,
+        };
+        if f.is_pipe {
             if let Some(p) = pipes {
-                (p.close)((*FD_TABLE)[fd].pipe_id, (*FD_TABLE)[fd].pipe_write);
+                (p.close)(f.pipe_id, f.pipe_write);
             }
         }
         (*FD_TABLE)[fd].active = false;
@@ -222,17 +233,14 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
 
 /// Read from a file descriptor. Returns bytes read, 0 on EOF, negative on error.
 pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut F, pipes: &PipeFns) -> isize {
-    if fd >= MAX_FDS {
-        return -9;
-    }
     unsafe {
-        if !(*FD_TABLE)[fd].active {
-            return -9;
+        let f = match get_fd_mut(fd) {
+            Some(f) => f,
+            None => return -9,
+        };
+        if f.is_pipe {
+            return (pipes.read)(f.pipe_id, buf, len);
         }
-        if (*FD_TABLE)[fd].is_pipe {
-            return (pipes.read)((*FD_TABLE)[fd].pipe_id, buf, len);
-        }
-        let f = &mut (*FD_TABLE)[fd];
         if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
             return if len == 0 { 0 } else { -14 }; // -EFAULT
         }
@@ -262,17 +270,14 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
 
 /// Write to a file descriptor. Returns bytes written, negative on error.
 pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &mut F, pipes: &PipeFns) -> isize {
-    if fd >= MAX_FDS {
-        return -9;
-    }
     unsafe {
-        if !(*FD_TABLE)[fd].active {
-            return -9;
+        let f = match get_fd_mut(fd) {
+            Some(f) => f,
+            None => return -9,
+        };
+        if f.is_pipe {
+            return (pipes.write)(f.pipe_id, buf, len);
         }
-        if (*FD_TABLE)[fd].is_pipe {
-            return (pipes.write)((*FD_TABLE)[fd].pipe_id, buf, len);
-        }
-        let f = &mut (*FD_TABLE)[fd];
         // Validate user buffer pointer
         if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
             return if len == 0 { 0 } else { -14 }; // -EFAULT
@@ -291,14 +296,12 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
 
 /// Seek on a file descriptor. Returns new offset, negative on error.
 pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> isize {
-    if fd < FIRST_FILE_FD || fd >= MAX_FDS {
-        return -9; // -EBADF
-    }
+    if fd < FIRST_FILE_FD { return -9; }
     unsafe {
-        if !(*FD_TABLE)[fd].active {
-            return -9;
-        }
-        let f = &mut (*FD_TABLE)[fd];
+        let f = match get_fd_mut(fd) {
+            Some(f) => f,
+            None => return -9,
+        };
         let new_off: i64 = match whence {
             0 => offset, // SEEK_SET
             1 => f.offset as i64 + offset, // SEEK_CUR

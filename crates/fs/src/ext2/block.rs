@@ -6,12 +6,8 @@
 //! i_block[14]     = triple-indirect block (not supported — files up to ~4GB)
 
 use crate::VfsError;
-use super::Ext2Fs;
+use super::{Ext2Fs, le32};
 use super::inode::RawInode;
-
-fn le32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
-}
 
 /// Translate a logical file block number to a physical disk block number.
 pub(crate) unsafe fn translate(fs: &Ext2Fs, inode: &RawInode, file_block: u32) -> Result<u32, VfsError> {

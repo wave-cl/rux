@@ -1,23 +1,8 @@
 //! ext2 directory entry parsing.
 
 use crate::{InodeId, DirEntry, InodeType, VfsError};
-use super::Ext2Fs;
+use super::{Ext2Fs, le16, le32, set_le16, set_le32};
 use super::inode;
-
-pub(crate) fn set_le16(buf: &mut [u8], off: usize, val: u16) {
-    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1];
-}
-pub(crate) fn set_le32(buf: &mut [u8], off: usize, val: u32) {
-    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1]; buf[off+2] = b[2]; buf[off+3] = b[3];
-}
-
-fn le16(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([buf[off], buf[off + 1]])
-}
-
-fn le32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
-}
 
 /// ext2 directory entry file types (from d_file_type field).
 fn file_type_to_inode_type(ft: u8) -> InodeType {

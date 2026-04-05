@@ -222,17 +222,27 @@ pub fn chdir(path_ptr: usize) -> isize {
 
 /// mkdir(pathname, mode) — POSIX.1
 pub fn mkdir(path_ptr: usize) -> isize {
+    mkdir_at((-100isize) as usize, path_ptr) // AT_FDCWD
+}
+
+/// unlink(pathname) — POSIX.1
+pub fn unlink(path_ptr: usize) -> isize {
+    unlink_at((-100isize) as usize, path_ptr) // AT_FDCWD
+}
+
+/// creat(pathname, mode) — POSIX.1 (equivalent to open with O_CREAT|O_WRONLY|O_TRUNC)
+pub fn creat(path_ptr: usize) -> isize {
+    creat_at((-100isize) as usize, path_ptr) // AT_FDCWD
+}
+
+/// mkdir_at(dirfd, path) — mkdirat with dirfd support
+pub fn mkdir_at(dirfd: usize, path_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
+        use rux_fs::FileSystem;
+        let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
+            Ok(v) => v, Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) {
-            Ok(f) => f,
-            Err(_) => return crate::errno::EINVAL,
-        };
         match fs.mkdir(dir_ino, fname, 0o755) {
             Ok(ino) => {
                 let now = super::current_time_secs();
@@ -244,79 +254,14 @@ pub fn mkdir(path_ptr: usize) -> isize {
     }
 }
 
-/// unlink(pathname) — POSIX.1
-pub fn unlink(path_ptr: usize) -> isize {
-    unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) {
-            Ok(f) => f,
-            Err(_) => return crate::errno::EINVAL,
-        };
-        match fs.unlink(dir_ino, fname) {
-            Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
-        }
-    }
-}
-
-/// creat(pathname, mode) — POSIX.1 (equivalent to open with O_CREAT|O_WRONLY|O_TRUNC)
-pub fn creat(path_ptr: usize) -> isize {
-    unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) {
-            Ok(f) => f,
-            Err(_) => return crate::errno::EINVAL,
-        };
-        match fs.create(dir_ino, fname, 0o644) {
-            Ok(ino) => {
-                let now = super::current_time_secs();
-                let _ = fs.utimes(ino, now, now);
-                // Open by inode directly — avoid re-reading path from user memory (TOCTOU)
-                fdt::sys_open_ino(ino, 0o02, crate::kstate::fs()) // O_RDWR
-            }
-            Err(_) => crate::errno::EEXIST,
-        }
-    }
-}
-
-/// mkdir_at(dirfd, path) — mkdirat with dirfd support
-pub fn mkdir_at(dirfd: usize, path_ptr: usize) -> isize {
-    unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.mkdir(dir_ino, fname, 0o755) {
-            Ok(ino) => { let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs()); 0 }
-            Err(_) => crate::errno::EEXIST,
-        }
-    }
-}
-
 /// unlink_at(dirfd, path) — unlinkat with dirfd support
 pub fn unlink_at(dirfd: usize, path_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
+        use rux_fs::FileSystem;
+        let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
+            Ok(v) => v, Err(e) => return e,
         };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.unlink(dir_ino, fname) {
+        match crate::kstate::fs().unlink(dir_ino, fname) {
             Ok(()) => 0,
             Err(_) => crate::errno::ENOENT,
         }
@@ -326,15 +271,17 @@ pub fn unlink_at(dirfd: usize, path_ptr: usize) -> isize {
 /// creat_at(dirfd, path) — mknodat/openat O_CREAT with dirfd support
 pub fn creat_at(dirfd: usize, path_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
+        use rux_fs::FileSystem;
+        let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
+            Ok(v) => v, Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         match fs.create(dir_ino, fname, 0o644) {
-            Ok(ino) => { let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs()); 0 }
+            Ok(ino) => {
+                let now = super::current_time_secs();
+                let _ = fs.utimes(ino, now, now);
+                fdt::sys_open_ino(ino, 0o02, crate::kstate::fs()) // O_RDWR
+            }
             Err(_) => crate::errno::EEXIST,
         }
     }
@@ -578,13 +525,11 @@ pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize)
 /// readlinkat(dirfd, pathname, buf, bufsiz) — with dirfd support
 pub fn readlink_at(dirfd: usize, path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let (dir_ino, name) = match super::resolve_parent_at(dirfd, path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
+        use rux_fs::FileSystem;
+        let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
+            Ok(v) => v, Err(e) => return e,
         };
         let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         let ino = match fs.lookup(dir_ino, fname) {
             Ok(ino) => ino,
             Err(_) => return crate::errno::ENOENT,
@@ -618,19 +563,17 @@ pub fn chmod_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
 /// linkat(olddirfd, old, newdirfd, new, flags) — with dirfd support
 pub fn link_at(olddirfd: usize, old_ptr: usize, newdirfd: usize, new_ptr: usize) -> isize {
     unsafe {
-        use rux_fs::{FileSystem, FileName};
+        use rux_fs::FileSystem;
         let old_path = crate::uaccess::read_user_cstr(old_ptr);
         let old_ino = match super::resolve_at(olddirfd, old_path) {
             Ok(ino) => ino,
             Err(e) => return e,
         };
-        let (dir_ino, name) = match super::resolve_parent_at(newdirfd, new_ptr) {
+        let (dir_ino, fname) = match super::resolve_parent_fname_at(newdirfd, new_ptr) {
             Ok(v) => v,
             Err(e) => return e,
         };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.link(dir_ino, fname, old_ino) {
+        match crate::kstate::fs().link(dir_ino, fname, old_ino) {
             Ok(()) => 0,
             Err(_) => crate::errno::EEXIST,
         }
@@ -664,25 +607,5 @@ pub fn faccessat(dirfd: usize, path_ptr: usize, amode: usize) -> isize {
 /// readlink(pathname, buf, bufsiz) — POSIX.1
 /// Must NOT follow the symlink — resolve parent, lookup name, readlink on the symlink inode.
 pub fn readlink(path_ptr: usize, buf: usize, bufsiz: usize) -> isize {
-    unsafe {
-        use rux_fs::{FileSystem, FileName};
-        // Resolve parent directory and get the basename (the symlink itself)
-        let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        // Lookup the name in the parent — this gives us the symlink inode
-        let ino = match fs.lookup(dir_ino, fname) {
-            Ok(ino) => ino,
-            Err(_) => return crate::errno::ENOENT,
-        };
-        if crate::uaccess::validate_user_ptr(buf, bufsiz).is_err() { return crate::errno::EFAULT; }
-        let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, bufsiz);
-        match fs.readlink(ino, user_buf) {
-            Ok(n) => n as isize,
-            Err(_) => crate::errno::EINVAL,
-        }
-    }
+    readlink_at((-100isize) as usize, path_ptr, buf, bufsiz) // AT_FDCWD
 }

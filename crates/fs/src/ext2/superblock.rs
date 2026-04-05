@@ -1,6 +1,7 @@
 //! ext2 superblock parsing.
 
 use crate::VfsError;
+use super::{le16, le32};
 
 const EXT2_MAGIC: u16 = 0xEF53;
 
@@ -11,16 +12,6 @@ pub(crate) struct SuperblockInfo {
     pub blocks_per_group: u32,
     pub inode_size: u16,
     pub inode_count: u32,
-}
-
-/// Read a little-endian u16 from a byte slice.
-fn le16(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([buf[off], buf[off + 1]])
-}
-
-/// Read a little-endian u32 from a byte slice.
-fn le32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
 }
 
 /// Parse the 1024-byte superblock buffer.

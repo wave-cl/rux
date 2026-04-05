@@ -1,7 +1,7 @@
 //! ext2 inode reading.
 
 use crate::{InodeType, VfsError};
-use super::Ext2Fs;
+use super::{Ext2Fs, le16, le32};
 
 /// Raw on-disk inode fields we need.
 pub(crate) struct RawInode {
@@ -16,14 +16,6 @@ pub(crate) struct RawInode {
     pub blocks: u32,       // 512-byte block count
     pub block: [u32; 15],  // direct[0-11], indirect[12], dindirect[13], tindirect[14]
     pub size_high: u32,    // upper 32 bits of size (for large files)
-}
-
-fn le16(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([buf[off], buf[off + 1]])
-}
-
-fn le32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
 }
 
 /// Read a raw inode by inode number (1-based, as per ext2 convention).
@@ -76,12 +68,7 @@ pub(crate) unsafe fn read_raw(fs: &Ext2Fs, ino: u32) -> Result<RawInode, VfsErro
     })
 }
 
-fn set_le16(buf: &mut [u8], off: usize, val: u16) {
-    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1];
-}
-fn set_le32(buf: &mut [u8], off: usize, val: u32) {
-    let b = val.to_le_bytes(); buf[off] = b[0]; buf[off+1] = b[1]; buf[off+2] = b[2]; buf[off+3] = b[3];
-}
+use super::{set_le16, set_le32};
 
 /// Write inode data back to disk.
 pub(crate) unsafe fn write_raw(fs: &Ext2Fs, ino: u32, raw: &RawInode) -> Result<(), VfsError> {
