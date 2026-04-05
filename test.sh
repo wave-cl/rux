@@ -315,7 +315,7 @@ fi  # RUN_X86
 if $RUN_AA64; then
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 24; cat <<'CMDS'
+OUTPUT=$( { sleep 28; cat <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -401,6 +401,9 @@ echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
 apk update 2>&1 | tail -1
+apk add --no-scripts --no-interactive python3 2>/dev/null
+python3 --version 2>&1
+python3 -c "print(sum(range(100)))" 2>&1
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
@@ -520,6 +523,7 @@ check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
 check "wget http"            "Example Domain"
 check "apk update"           "OK:"
+check "python3 version"      "Python 3"
 check "subshell"             "subshell_ok"
 check "fork + pipe"          "2"
 check "all tests done"       "all_tests_done"
