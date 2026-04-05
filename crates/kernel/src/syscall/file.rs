@@ -99,8 +99,8 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         let write_len = len.min(65536);
         if crate::uaccess::validate_user_ptr(buf, write_len).is_err() { return crate::errno::EFAULT; }
         unsafe {
-            let ptr = buf as *const u8;
-            for i in 0..write_len { Arch::write_byte(*ptr.add(i)); }
+            let slice = core::slice::from_raw_parts(buf as *const u8, write_len);
+            Arch::write_bytes(slice);
         }
         return write_len as isize;
     }
@@ -146,6 +146,20 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     }
 }
 
+/// Create a new file and open it. Shared by open() and openat() O_CREAT paths.
+unsafe fn create_and_open(dir_ino: rux_fs::InodeId, fname: rux_fs::FileName<'_>, flags: usize, mode: usize) -> isize {
+    use rux_fs::FileSystem;
+    let fs = crate::kstate::fs();
+    match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
+        Ok(ino) => {
+            let now = super::current_time_secs();
+            let _ = fs.utimes(ino, now, now);
+            fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
+        }
+        Err(_) => crate::errno::EACCES,
+    }
+}
+
 /// open(pathname, flags, mode) — POSIX.1
 pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
     unsafe {
@@ -171,23 +185,13 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                         return crate::errno::EACCES;
                     }
                 }
-                // sys_open_ino handles O_TRUNC and O_APPEND
                 fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
             }
             Err(_) if o_creat => {
-                use rux_fs::FileSystem;
                 let (dir_ino, fname) = match super::resolve_parent_fname(path_ptr) {
                     Ok(v) => v, Err(e) => return e,
                 };
-                let fs = crate::kstate::fs();
-                match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
-                    Ok(ino) => {
-                        let now = super::current_time_secs();
-                        let _ = fs.utimes(ino, now, now);
-                        fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
-                    }
-                    Err(_) => crate::errno::EACCES,
-                }
+                create_and_open(dir_ino, fname, flags, mode)
             }
             Err(e) => e,
         }
@@ -198,57 +202,26 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
 pub fn openat(dirfd: usize, pathname: usize, flags: usize, mode: usize) -> isize {
     unsafe {
         let path = crate::uaccess::read_user_cstr(pathname);
-        // If path is absolute or dirfd is AT_FDCWD (-100), resolve normally
         let at_fdcwd = (-100isize) as usize;
         if path.first() == Some(&b'/') || dirfd == at_fdcwd {
             return open(pathname, flags, mode);
         }
-        // Relative path + real dirfd: resolve relative to dirfd's directory inode
         if dirfd < rux_fs::fdtable::MAX_FDS {
-            if let Some(dir_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
+            if let Some(base_ino) = rux_fs::fdtable::get_fd_inode(dirfd) {
                 let fs = crate::kstate::fs();
                 let o_creat = flags & O_CREAT != 0;
-                // Resolve path relative to dir_ino
-                match rux_fs::path::resolve_path_at(fs, dir_ino, path) {
-                    Ok(ino) => {
-                        // sys_open_ino handles O_TRUNC and O_APPEND
-                        return fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs());
-                    }
+                match rux_fs::path::resolve_path_at(fs, base_ino, path) {
+                    Ok(ino) => return fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs()),
                     Err(_) if o_creat => {
-                        // Find parent directory and create
-                        use rux_fs::{FileSystem, FileName};
-                        let parent_ino = if let Some(slash) = path.iter().rposition(|&b| b == b'/') {
-                            let dir_part = &path[..slash];
-                            match rux_fs::path::resolve_path_at(fs, dir_ino, dir_part) {
-                                Ok(p) => p,
-                                Err(_) => return crate::errno::ENOENT,
-                            }
-                        } else {
-                            dir_ino
+                        let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, pathname) {
+                            Ok(v) => v, Err(e) => return e,
                         };
-                        let name = if let Some(slash) = path.iter().rposition(|&b| b == b'/') {
-                            &path[slash + 1..]
-                        } else {
-                            path
-                        };
-                        let fname = match FileName::new(name) {
-                            Ok(f) => f,
-                            Err(_) => return crate::errno::EINVAL,
-                        };
-                        match fs.create(parent_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
-                            Ok(ino) => {
-                                let now = super::current_time_secs();
-                                let _ = fs.utimes(ino, now, now);
-                                return fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs());
-                            }
-                            Err(_) => return crate::errno::EACCES,
-                        }
+                        return create_and_open(dir_ino, fname, flags, mode);
                     }
                     Err(_) => return crate::errno::ENOENT,
                 }
             }
         }
-        // Fallback: treat as normal open
         open(pathname, flags, mode)
     }
 }

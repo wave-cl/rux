@@ -455,11 +455,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Stubs: accepted but no-op ─────────────────────────────
         Syscall::Mprotect => posix::mprotect(a0, a1, a2),
         Syscall::Access => posix::faccessat((-100isize) as usize, a0, a1), // AT_FDCWD
+        Syscall::Futex => posix::futex(a0, a1, a2),
         Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
         Syscall::Getgroups | Syscall::Getrlimit |
-        Syscall::Futex => posix::futex(a0, a1, a2),
-        Syscall::SetRobustList |
-        Syscall::SchedGetaffinity | Syscall::Prctl => 0,
+        Syscall::SetRobustList | Syscall::SchedGetaffinity | Syscall::Prctl => 0,
 
         // tgkill(tgid, tid, sig) / tkill(tid, sig) — route to kill()
         Syscall::Tgkill => posix::kill(a1 as isize, a2),
@@ -510,22 +509,21 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             }
             0
         }
-        Syscall::GetPriority => 0,
-        Syscall::SetPriority => 0,
         Syscall::Umask => {
             let old = unsafe { PROCESS.fs_ctx.umask } as isize;
             unsafe { PROCESS.fs_ctx.umask = (a0 & 0o777) as u16; }
             old
         }
-        Syscall::SetGroups => 0,
-        Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync | Syscall::Syncfs => 0,
-        Syscall::Fallocate => 0,
+        // No-op stubs: safe to accept silently (single-process, no swap, etc.)
+        Syscall::GetPriority | Syscall::SetPriority | Syscall::SetGroups |
+        Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync | Syscall::Syncfs |
+        Syscall::Fallocate | Syscall::RestartSyscall | Syscall::Membarrier => 0,
+        // Unsupported: return ENOSYS
         Syscall::Getxattr | Syscall::Setxattr | Syscall::Fgetxattr | Syscall::Fsetxattr |
         Syscall::Lgetxattr | Syscall::Lsetxattr | Syscall::Listxattr | Syscall::Flistxattr |
         Syscall::Llistxattr | Syscall::Removexattr | Syscall::Fremovexattr |
-        Syscall::Lremovexattr => crate::errno::ENOSYS, // no xattr support
+        Syscall::Lremovexattr |
         Syscall::Capget | Syscall::Capset | Syscall::Personality | Syscall::Seccomp => crate::errno::ENOSYS,
-        Syscall::RestartSyscall | Syscall::Membarrier => 0,
 
         // ── Phase 2 wrappers ─────────────────────────────────────
         Syscall::Pwrite64 => posix::pwrite64(a0, a1, a2, a3),

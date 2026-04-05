@@ -76,44 +76,38 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> 
     super::posix::waitpid(pid, wstatus_ptr, options)
 }
 
+/// Fill a statfs buffer at buf_ptr with filesystem stats.
+/// `magic` selects the filesystem type (EXT2, PROC, etc.).
+unsafe fn fill_statfs(buf_ptr: usize, magic: usize) {
+    use rux_mm::FrameAllocator;
+    let w = core::mem::size_of::<usize>();
+    let p = buf_ptr;
+    for i in 0..120 { *(p as *mut u8).add(i) = 0; }
+    *(p as *mut usize) = magic;
+    *((p + w) as *mut usize) = 4096;     // f_bsize
+    *((p + 9*w) as *mut usize) = 255;    // f_namelen
+    *((p + 10*w) as *mut usize) = 4096;  // f_frsize
+    if magic == 0xEF53 { // EXT2: report real block counts
+        let alloc = crate::kstate::alloc();
+        let total = alloc.total_frames();
+        let free = alloc.available_frames(rux_mm::PageSize::FourK);
+        *((p + 2*w) as *mut usize) = total;   // f_blocks
+        *((p + 3*w) as *mut usize) = free;    // f_bfree
+        *((p + 4*w) as *mut usize) = free;    // f_bavail
+        *((p + 5*w) as *mut usize) = 65536;   // f_files
+        *((p + 6*w) as *mut usize) = 65536;   // f_ffree
+    }
+}
+
 /// statfs(path, buf) — Linux filesystem stats.
-/// Used by `df` to show disk space.
 pub fn statfs(path_ptr: usize, buf_ptr: usize) -> isize {
     if crate::uaccess::validate_user_ptr(buf_ptr, 120).is_err() { return crate::errno::EFAULT; }
     unsafe {
-        use rux_mm::FrameAllocator;
-        let w = core::mem::size_of::<usize>();
-        let p = buf_ptr;
-        for i in 0..120 { *(p as *mut u8).add(i) = 0; }
-
-        // Determine filesystem type from path
         let path = crate::uaccess::read_user_cstr(path_ptr);
-        let is_proc = path.starts_with(b"/proc");
-        let is_dev = path.starts_with(b"/dev");
-        let is_sys = path.starts_with(b"/sys");
-
-        if is_proc || is_dev || is_sys {
-            // Virtual filesystem: no real blocks
-            let magic: usize = if is_proc { 0x9FA0 } else { 0x1373 }; // PROC_SUPER_MAGIC / DEVFS
-            *(p as *mut usize) = magic;
-            *((p + w) as *mut usize) = 4096;  // f_bsize
-            *((p + 9*w) as *mut usize) = 255;  // f_namelen
-            *((p + 10*w) as *mut usize) = 4096; // f_frsize
-        } else {
-            // Real filesystem: report frame allocator stats
-            let alloc = crate::kstate::alloc();
-            let total = alloc.total_frames();
-            let free = alloc.available_frames(rux_mm::PageSize::FourK);
-            *(p as *mut usize) = 0xEF53;        // f_type: EXT2_SUPER_MAGIC
-            *((p + w) as *mut usize) = 4096;     // f_bsize
-            *((p + 2*w) as *mut usize) = total;  // f_blocks
-            *((p + 3*w) as *mut usize) = free;   // f_bfree
-            *((p + 4*w) as *mut usize) = free;   // f_bavail
-            *((p + 5*w) as *mut usize) = 65536;  // f_files
-            *((p + 6*w) as *mut usize) = 65536;  // f_ffree
-            *((p + 9*w) as *mut usize) = 255;    // f_namelen
-            *((p + 10*w) as *mut usize) = 4096;  // f_frsize
-        }
+        let magic = if path.starts_with(b"/proc") { 0x9FA0 }
+            else if path.starts_with(b"/dev") || path.starts_with(b"/sys") { 0x1373 }
+            else { 0xEF53 };
+        fill_statfs(buf_ptr, magic);
     }
     0
 }
@@ -121,25 +115,7 @@ pub fn statfs(path_ptr: usize, buf_ptr: usize) -> isize {
 /// fstatfs(fd, buf) — Linux filesystem stats by file descriptor.
 pub fn fstatfs(_fd: usize, buf_ptr: usize) -> isize {
     if crate::uaccess::validate_user_ptr(buf_ptr, 120).is_err() { return crate::errno::EFAULT; }
-    unsafe {
-        use rux_mm::FrameAllocator;
-        let w = core::mem::size_of::<usize>();
-        let p = buf_ptr;
-        for i in 0..120 { *(p as *mut u8).add(i) = 0; }
-        // Return generic ext2 stats (fd could point to any filesystem)
-        let alloc = crate::kstate::alloc();
-        let total = alloc.total_frames();
-        let free = alloc.available_frames(rux_mm::PageSize::FourK);
-        *(p as *mut usize) = 0xEF53;        // EXT2_SUPER_MAGIC
-        *((p + w) as *mut usize) = 4096;
-        *((p + 2*w) as *mut usize) = total;
-        *((p + 3*w) as *mut usize) = free;
-        *((p + 4*w) as *mut usize) = free;
-        *((p + 5*w) as *mut usize) = 65536;
-        *((p + 6*w) as *mut usize) = 65536;
-        *((p + 9*w) as *mut usize) = 255;
-        *((p + 10*w) as *mut usize) = 4096;
-    }
+    unsafe { fill_statfs(buf_ptr, 0xEF53); }
     0
 }
 
