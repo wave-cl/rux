@@ -43,6 +43,36 @@ fn to_handle(raw: i16) -> rux_net::RawSocketHandle {
     rux_net::handle_from_raw(raw as usize)
 }
 
+// ── sockaddr_in helpers ────────────────────────────────────────────
+
+/// Read port and IPv4 address from a user-space sockaddr_in.
+/// Caller must validate addr_ptr for at least 8 bytes before calling.
+#[inline]
+unsafe fn read_sockaddr(addr_ptr: usize) -> (u16, [u8; 4]) {
+    let port = u16::from_be_bytes([
+        crate::uaccess::get_user::<u8>(addr_ptr + 2),
+        crate::uaccess::get_user::<u8>(addr_ptr + 3),
+    ]);
+    let ip: [u8; 4] = [
+        crate::uaccess::get_user::<u8>(addr_ptr + 4),
+        crate::uaccess::get_user::<u8>(addr_ptr + 5),
+        crate::uaccess::get_user::<u8>(addr_ptr + 6),
+        crate::uaccess::get_user::<u8>(addr_ptr + 7),
+    ];
+    (port, ip)
+}
+
+/// Write a sockaddr_in (AF_INET, port, ip) to user-space.
+/// Caller must validate addr_ptr for at least 16 bytes before calling.
+#[inline]
+unsafe fn write_sockaddr(addr_ptr: usize, port: u16, ip: [u8; 4]) {
+    let sa = addr_ptr as *mut u8;
+    *sa.add(0) = 2; *sa.add(1) = 0; // AF_INET
+    let pb = port.to_be_bytes();
+    *sa.add(2) = pb[0]; *sa.add(3) = pb[1];
+    *sa.add(4) = ip[0]; *sa.add(5) = ip[1]; *sa.add(6) = ip[2]; *sa.add(7) = ip[3];
+}
+
 /// socket(domain, type, protocol) → fd
 pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
     if domain as u32 != AF_INET { return crate::errno::EAFNOSUPPORT; }
@@ -116,10 +146,7 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     };
     if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
     unsafe {
-        let port = u16::from_be_bytes([
-            crate::uaccess::get_user::<u8>(addr_ptr + 2),
-            crate::uaccess::get_user::<u8>(addr_ptr + 3),
-        ]);
+        let (port, _ip) = read_sockaddr(addr_ptr);
         SOCKETS[idx].bound_port = port;
 
         // Bind UDP socket in smoltcp
@@ -139,17 +166,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let dst_port = u16::from_be_bytes([
-            crate::uaccess::get_user::<u8>(addr_ptr + 2),
-            crate::uaccess::get_user::<u8>(addr_ptr + 3),
-        ]);
-        let dst_ip: [u8; 4] = [
-            crate::uaccess::get_user::<u8>(addr_ptr + 4),
-            crate::uaccess::get_user::<u8>(addr_ptr + 5),
-            crate::uaccess::get_user::<u8>(addr_ptr + 6),
-            crate::uaccess::get_user::<u8>(addr_ptr + 7),
-        ];
-
+        let (dst_port, dst_ip) = read_sockaddr(addr_ptr);
         let sock = &mut SOCKETS[idx];
         sock.connected_ip = dst_ip;
         sock.connected_port = dst_port;
@@ -202,16 +219,7 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
         if buf_ptr != 0 && crate::uaccess::validate_user_ptr(buf_ptr, len.min(1400)).is_err() { return crate::errno::EFAULT; }
         let (dst_ip, dst_port) = if addr_ptr != 0 {
             if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
-            let p = u16::from_be_bytes([
-                crate::uaccess::get_user::<u8>(addr_ptr + 2),
-                crate::uaccess::get_user::<u8>(addr_ptr + 3),
-            ]);
-            let ip: [u8; 4] = [
-                crate::uaccess::get_user::<u8>(addr_ptr + 4),
-                crate::uaccess::get_user::<u8>(addr_ptr + 5),
-                crate::uaccess::get_user::<u8>(addr_ptr + 6),
-                crate::uaccess::get_user::<u8>(addr_ptr + 7),
-            ];
+            let (p, ip) = read_sockaddr(addr_ptr);
             (ip, p)
         } else if SOCKETS[idx].connected {
             (SOCKETS[idx].connected_ip, SOCKETS[idx].connected_port)
@@ -573,18 +581,12 @@ pub fn sys_getsockname(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
     if addr_ptr == 0 { return 0; }
     if crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
-        let sa = addr_ptr as *mut u8;
-        *sa.add(0) = 2; *sa.add(1) = 0;
         let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
-        let port = SOCKETS[idx].bound_port.to_be_bytes();
-        *sa.add(2) = port[0]; *sa.add(3) = port[1];
-        #[cfg(feature = "net")]
-        {
-            let ip = rux_net::our_ip();
-            *sa.add(4) = ip[0]; *sa.add(5) = ip[1]; *sa.add(6) = ip[2]; *sa.add(7) = ip[3];
-        }
-        #[cfg(not(feature = "net"))]
-        { *sa.add(4) = 0; *sa.add(5) = 0; *sa.add(6) = 0; *sa.add(7) = 0; }
+        let ip = {
+            #[cfg(feature = "net")] { rux_net::our_ip() }
+            #[cfg(not(feature = "net"))] { [0u8; 4] }
+        };
+        write_sockaddr(addr_ptr, SOCKETS[idx].bound_port, ip);
         if addrlen_ptr != 0 { *(addrlen_ptr as *mut u32) = 16; }
     }
     0
@@ -595,12 +597,7 @@ pub fn sys_getpeername(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
     if crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
-        let sa = addr_ptr as *mut u8;
-        *sa.add(0) = 2; *sa.add(1) = 0;
-        let port = SOCKETS[idx].connected_port.to_be_bytes();
-        *sa.add(2) = port[0]; *sa.add(3) = port[1];
-        *sa.add(4) = SOCKETS[idx].connected_ip[0]; *sa.add(5) = SOCKETS[idx].connected_ip[1];
-        *sa.add(6) = SOCKETS[idx].connected_ip[2]; *sa.add(7) = SOCKETS[idx].connected_ip[3];
+        write_sockaddr(addr_ptr, SOCKETS[idx].connected_port, SOCKETS[idx].connected_ip);
         if addrlen_ptr != 0 { *(addrlen_ptr as *mut u32) = 16; }
     }
     0

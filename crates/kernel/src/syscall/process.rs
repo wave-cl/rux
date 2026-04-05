@@ -2,6 +2,23 @@
 
 use rux_arch::TimerOps;
 type Arch = crate::arch::Arch;
+
+/// Close all pipe FDs in the current process, waking blocked waiters.
+/// Called from exit() so blocked pipe readers/writers see EOF/EPIPE.
+unsafe fn close_all_pipes() {
+    for i in 0..rux_fs::fdtable::MAX_FDS {
+        if let Some(f) = rux_fs::fdtable::get_fd(i) {
+            if f.is_pipe {
+                let pid = f.pipe_id;
+                let pw = f.pipe_write;
+                (*rux_fs::fdtable::FD_TABLE)[i].active = false;
+                (crate::pipe::PIPE.close)(pid, pw);
+                crate::pipe::wake_pipe_waiters(pid);
+            }
+        }
+    }
+}
+
 /// _exit(status) — POSIX.1
 pub fn exit(status: i32) -> ! {
     unsafe { super::PROCESS.last_child_exit = status; }
@@ -12,18 +29,7 @@ pub fn exit(status: i32) -> ! {
         let idx = current_task_idx();
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
             // Close all pipe FDs so reader/writer counts drop correctly.
-            // Without this, blocked pipe waiters never see EOF/EPIPE.
-            // Note: regular file FDs share the global FD_TABLE and must NOT
-            // be closed here — the parent process still references them.
-            for i in 0..rux_fs::fdtable::MAX_FDS {
-                if (*rux_fs::fdtable::FD_TABLE)[i].active && (*rux_fs::fdtable::FD_TABLE)[i].is_pipe {
-                    let pid = (*rux_fs::fdtable::FD_TABLE)[i].pipe_id;
-                    let pw = (*rux_fs::fdtable::FD_TABLE)[i].pipe_write;
-                    (*rux_fs::fdtable::FD_TABLE)[i].active = false;
-                    (crate::pipe::PIPE.close)(pid, pw);
-                    crate::pipe::wake_pipe_waiters(pid);
-                }
-            }
+            close_all_pipes();
 
             // Restore fd 0-2 as console if they were corrupted by the child.
             // The global FD_TABLE is shared, so a child that dup2'd a file onto
@@ -335,13 +341,20 @@ pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: us
 
 // ── User/group ID management ──────────────────────────────────────────
 
+/// Check if a credential change is allowed: root can set anything,
+/// non-root can only set to current real or effective value.
+/// `u32::MAX` means "don't change" (returns true).
+#[inline]
+unsafe fn can_set_id(new: u32, real: u32, effective: u32) -> bool {
+    new == u32::MAX || super::PROCESS.euid == 0 || new == real || new == effective
+}
+
 /// setuid(uid) — POSIX.1
-/// If euid == 0 (root), sets all IDs. Otherwise only sets euid if uid == uid or euid.
 pub unsafe fn setuid(uid: u32) -> isize {
     if super::PROCESS.euid == 0 {
         super::PROCESS.uid = uid;
         super::PROCESS.euid = uid;
-    } else if uid == super::PROCESS.uid || uid == super::PROCESS.euid {
+    } else if can_set_id(uid, super::PROCESS.uid, super::PROCESS.euid) {
         super::PROCESS.euid = uid;
     } else {
         return crate::errno::EPERM;
@@ -354,7 +367,7 @@ pub unsafe fn setgid(gid: u32) -> isize {
     if super::PROCESS.euid == 0 {
         super::PROCESS.gid = gid;
         super::PROCESS.egid = gid;
-    } else if gid == super::PROCESS.gid || gid == super::PROCESS.egid {
+    } else if can_set_id(gid, super::PROCESS.gid, super::PROCESS.egid) {
         super::PROCESS.egid = gid;
     } else {
         return crate::errno::EPERM;
@@ -364,33 +377,19 @@ pub unsafe fn setgid(gid: u32) -> isize {
 
 /// setreuid(ruid, euid) — POSIX.1
 pub unsafe fn setreuid(ruid: u32, euid: u32) -> isize {
-    let is_root = super::PROCESS.euid == 0;
-    if ruid != u32::MAX { // -1 means "don't change"
-        if is_root || ruid == super::PROCESS.uid || ruid == super::PROCESS.euid {
-            super::PROCESS.uid = ruid;
-        } else { return crate::errno::EPERM; }
-    }
-    if euid != u32::MAX {
-        if is_root || euid == super::PROCESS.uid || euid == super::PROCESS.euid {
-            super::PROCESS.euid = euid;
-        } else { return crate::errno::EPERM; }
-    }
+    if !can_set_id(ruid, super::PROCESS.uid, super::PROCESS.euid) { return crate::errno::EPERM; }
+    if !can_set_id(euid, super::PROCESS.uid, super::PROCESS.euid) { return crate::errno::EPERM; }
+    if ruid != u32::MAX { super::PROCESS.uid = ruid; }
+    if euid != u32::MAX { super::PROCESS.euid = euid; }
     0
 }
 
 /// setregid(rgid, egid) — POSIX.1
 pub unsafe fn setregid(rgid: u32, egid: u32) -> isize {
-    let is_root = super::PROCESS.euid == 0;
-    if rgid != u32::MAX {
-        if is_root || rgid == super::PROCESS.gid || rgid == super::PROCESS.egid {
-            super::PROCESS.gid = rgid;
-        } else { return crate::errno::EPERM; }
-    }
-    if egid != u32::MAX {
-        if is_root || egid == super::PROCESS.gid || egid == super::PROCESS.egid {
-            super::PROCESS.egid = egid;
-        } else { return crate::errno::EPERM; }
-    }
+    if !can_set_id(rgid, super::PROCESS.gid, super::PROCESS.egid) { return crate::errno::EPERM; }
+    if !can_set_id(egid, super::PROCESS.gid, super::PROCESS.egid) { return crate::errno::EPERM; }
+    if rgid != u32::MAX { super::PROCESS.gid = rgid; }
+    if egid != u32::MAX { super::PROCESS.egid = egid; }
     0
 }
 
