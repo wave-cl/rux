@@ -101,7 +101,15 @@ pub unsafe fn map_user_pages(
     }
 }
 
-// ── Path resolution helper (used by both POSIX and Linux) ───────────
+// ── Credentials helper ──────────────────────────────────────────────
+
+/// Build credentials from the current process state.
+#[inline(always)]
+pub unsafe fn current_cred() -> rux_fs::Credentials {
+    rux_fs::Credentials { euid: PROCESS.euid, egid: PROCESS.egid }
+}
+
+// ── Path resolution helper (used by both POSIX and Linux) ──────���────
 
 /// Get current time in seconds (for timestamp updates on file operations).
 pub fn current_time_secs() -> u64 {

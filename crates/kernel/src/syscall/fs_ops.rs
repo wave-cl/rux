@@ -497,24 +497,18 @@ pub fn link_at(olddirfd: usize, old_ptr: usize, newdirfd: usize, new_ptr: usize)
 /// faccessat(dirfd, path, amode, flags) — check file accessibility
 pub fn faccessat(dirfd: usize, path_ptr: usize, amode: usize) -> isize {
     unsafe {
-        use rux_fs::FileSystem;
         let path = crate::uaccess::read_user_cstr(path_ptr);
         if path.is_empty() { return crate::errno::ENOENT; }
         let ino = match super::resolve_at(dirfd, path) {
             Ok(ino) => ino,
             Err(_) => return crate::errno::ENOENT,
         };
-        // F_OK (amode == 0): just check existence — already resolved
-        if amode == 0 { return 0; }
-        let fs = crate::kstate::fs();
-        let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
-        if fs.stat(ino, &mut stat).is_err() { return crate::errno::ENOENT; }
-        let mut req = 0u32;
-        if amode & 4 != 0 { req |= crate::perm::R_OK; }
-        if amode & 2 != 0 { req |= crate::perm::W_OK; }
-        if amode & 1 != 0 { req |= crate::perm::X_OK; }
-        if crate::perm::check_access(stat.mode, stat.uid, stat.gid, req) { 0 }
-        else { crate::errno::EACCES }
+        if amode == 0 { return 0; } // F_OK: existence check only
+        let cred = super::current_cred();
+        match crate::kstate::fs().check_access(ino, amode as u32, &cred) {
+            Ok(()) => 0,
+            Err(_) => crate::errno::EACCES,
+        }
     }
 }
 

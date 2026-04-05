@@ -149,6 +149,121 @@ impl Vfs {
     }
 }
 
+// ── Permission checks (Linux VFS-conformant) ─────────────────────────
+
+/// Check if `cred` can access an inode with `requested` permission bits.
+/// Root (euid 0) bypasses all checks.
+#[inline]
+fn check_perm(stat: &InodeStat, cred: &crate::Credentials, requested: u32) -> Result<(), VfsError> {
+    if cred.euid == 0 { return Ok(()); } // root can do anything
+    let bits = if cred.euid == stat.uid {
+        (stat.mode >> 6) & 7 // owner bits
+    } else if cred.egid == stat.gid {
+        (stat.mode >> 3) & 7 // group bits
+    } else {
+        stat.mode & 7         // other bits
+    };
+    if requested & !bits == 0 { Ok(()) } else { Err(VfsError::PermissionDenied) }
+}
+
+impl Vfs {
+    /// Stat a tagged inode (internal helper for permission checks).
+    fn inode_stat(&self, ino: InodeId) -> Result<InodeStat, VfsError> {
+        let mut buf = unsafe { core::mem::zeroed::<InodeStat>() };
+        self.stat(ino, &mut buf)?;
+        Ok(buf)
+    }
+
+    /// Check W+X on parent directory — required before create/mkdir/unlink/
+    /// rmdir/link/symlink/rename. Matches Linux `may_create()`/`may_delete()`.
+    fn may_modify_dir(&self, dir: InodeId, cred: &crate::Credentials) -> Result<(), VfsError> {
+        let st = self.inode_stat(dir)?;
+        check_perm(&st, cred, crate::W_OK | crate::X_OK)
+    }
+
+    // ── Checked operations (permission-enforcing wrappers) ──────────
+
+    /// Create a regular file, checking W+X on parent directory.
+    pub fn checked_create(&mut self, dir: InodeId, name: FileName<'_>, mode: u32, cred: &crate::Credentials) -> Result<InodeId, VfsError> {
+        self.may_modify_dir(dir, cred)?;
+        self.create(dir, name, mode)
+    }
+
+    /// Create a directory, checking W+X on parent directory.
+    pub fn checked_mkdir(&mut self, dir: InodeId, name: FileName<'_>, mode: u32, cred: &crate::Credentials) -> Result<InodeId, VfsError> {
+        self.may_modify_dir(dir, cred)?;
+        self.mkdir(dir, name, mode)
+    }
+
+    /// Remove a file, checking W+X on parent directory.
+    pub fn checked_unlink(&mut self, dir: InodeId, name: FileName<'_>, cred: &crate::Credentials) -> Result<(), VfsError> {
+        self.may_modify_dir(dir, cred)?;
+        self.unlink(dir, name)
+    }
+
+    /// Remove a directory, checking W+X on parent directory.
+    pub fn checked_rmdir(&mut self, dir: InodeId, name: FileName<'_>, cred: &crate::Credentials) -> Result<(), VfsError> {
+        self.may_modify_dir(dir, cred)?;
+        self.rmdir(dir, name)
+    }
+
+    /// Create a hard link, checking W+X on parent directory.
+    pub fn checked_link(&mut self, dir: InodeId, name: FileName<'_>, target: InodeId, cred: &crate::Credentials) -> Result<(), VfsError> {
+        self.may_modify_dir(dir, cred)?;
+        self.link(dir, name, target)
+    }
+
+    /// Create a symlink, checking W+X on parent directory.
+    pub fn checked_symlink(&mut self, dir: InodeId, name: FileName<'_>, target: &[u8], cred: &crate::Credentials) -> Result<InodeId, VfsError> {
+        self.may_modify_dir(dir, cred)?;
+        self.symlink(dir, name, target)
+    }
+
+    /// Rename, checking W+X on both old and new parent directories.
+    pub fn checked_rename(&mut self, old_dir: InodeId, old_name: FileName<'_>, new_dir: InodeId, new_name: FileName<'_>, cred: &crate::Credentials) -> Result<(), VfsError> {
+        self.may_modify_dir(old_dir, cred)?;
+        if old_dir != new_dir { self.may_modify_dir(new_dir, cred)?; }
+        self.rename(old_dir, old_name, new_dir, new_name)
+    }
+
+    /// Truncate, checking W on the file.
+    pub fn checked_truncate(&mut self, ino: InodeId, size: u64, cred: &crate::Credentials) -> Result<(), VfsError> {
+        let st = self.inode_stat(ino)?;
+        check_perm(&st, cred, crate::W_OK)?;
+        self.truncate(ino, size)
+    }
+
+    /// Check access permissions on a file (for open/access syscalls).
+    pub fn check_access(&self, ino: InodeId, requested: u32, cred: &crate::Credentials) -> Result<(), VfsError> {
+        let st = self.inode_stat(ino)?;
+        check_perm(&st, cred, requested)
+    }
+
+    /// chmod: only owner or root.
+    pub fn checked_chmod(&mut self, ino: InodeId, mode: u32, cred: &crate::Credentials) -> Result<(), VfsError> {
+        if cred.euid != 0 {
+            let st = self.inode_stat(ino)?;
+            if cred.euid != st.uid { return Err(VfsError::PermissionDenied); }
+        }
+        self.chmod(ino, mode)
+    }
+
+    /// chown: only root.
+    pub fn checked_chown(&mut self, ino: InodeId, uid: u32, gid: u32, cred: &crate::Credentials) -> Result<(), VfsError> {
+        if cred.euid != 0 { return Err(VfsError::PermissionDenied); }
+        self.chown(ino, uid, gid)
+    }
+
+    /// utimes: owner or root.
+    pub fn checked_utimes(&mut self, ino: InodeId, atime: u64, mtime: u64, cred: &crate::Credentials) -> Result<(), VfsError> {
+        if cred.euid != 0 {
+            let st = self.inode_stat(ino)?;
+            if cred.euid != st.uid { return Err(VfsError::PermissionDenied); }
+        }
+        self.utimes(ino, atime, mtime)
+    }
+}
+
 impl FileSystem for Vfs {
     fn root_inode(&self) -> InodeId {
         let root_ino = self.get_fs(0).map(|fs| fs.root_inode()).unwrap_or(0);

@@ -6,7 +6,6 @@ mod scheduler;
 mod elf;
 mod boot;
 mod cmdline;
-mod perm;
 mod kstate;
 mod pipe;
 mod cow;

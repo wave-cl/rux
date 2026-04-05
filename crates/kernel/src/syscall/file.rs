@@ -148,10 +148,12 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
 }
 
 /// Create a new file and open it. Shared by open() and openat() O_CREAT paths.
+/// Checks W+X on parent directory via VFS layer.
 unsafe fn create_and_open(dir_ino: rux_fs::InodeId, fname: rux_fs::FileName<'_>, flags: usize, mode: usize) -> isize {
     use rux_fs::FileSystem;
+    let cred = super::current_cred();
     let fs = crate::kstate::fs();
-    match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
+    match fs.checked_create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000, &cred) {
         Ok(ino) => {
             let now = super::current_time_secs();
             let _ = fs.utimes(ino, now, now);
@@ -171,20 +173,16 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
 
         match super::resolve_with_cwd(path) {
             Ok(ino) => {
-                // Permission check
-                use rux_fs::FileSystem;
-                let fs = crate::kstate::fs();
-                let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
-                if fs.stat(ino, &mut stat).is_ok() {
-                    let o_rdonly = flags & 3 == 0;
-                    let o_wronly = flags & 3 == 1;
-                    let o_rdwr = flags & 3 == 2;
-                    let mut req = 0u32;
-                    if o_rdonly || o_rdwr { req |= crate::perm::R_OK; }
-                    if o_wronly || o_rdwr { req |= crate::perm::W_OK; }
-                    if !crate::perm::check_access(stat.mode, stat.uid, stat.gid, req) {
-                        return crate::errno::EACCES;
-                    }
+                // Permission check via VFS layer
+                let cred = super::current_cred();
+                let o_rdonly = flags & 3 == 0;
+                let o_wronly = flags & 3 == 1;
+                let o_rdwr = flags & 3 == 2;
+                let mut req = 0u32;
+                if o_rdonly || o_rdwr { req |= rux_fs::R_OK; }
+                if o_wronly || o_rdwr { req |= rux_fs::W_OK; }
+                if let Err(_) = crate::kstate::fs().check_access(ino, req, &cred) {
+                    return crate::errno::EACCES;
                 }
                 fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
             }

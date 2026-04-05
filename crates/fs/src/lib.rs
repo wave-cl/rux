@@ -115,6 +115,21 @@ impl OpenFlags {
 
 // ── VFS errors ──────────────────────────────────────────────���───────────
 
+// ── Credentials ────────────────────────────────────────────────────────
+
+/// Caller credentials for VFS permission checks.
+/// Passed into `Vfs::checked_*` methods by the syscall layer.
+#[derive(Clone, Copy)]
+pub struct Credentials {
+    pub euid: u32,
+    pub egid: u32,
+}
+
+/// Permission bits for access checks.
+pub const R_OK: u32 = 4;
+pub const W_OK: u32 = 2;
+pub const X_OK: u32 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum VfsError {
@@ -259,7 +274,11 @@ const _: () = assert!(core::mem::size_of::<DirEntry>() == 272);
 /// `stat` and `readdir` write into caller-provided buffers to avoid copies.
 ///
 /// Read-only filesystems (procfs, devfs) return `ReadOnly` for all mutating
-/// operations. Permission checks are done in the syscall layer, not here.
+/// operations. Permission checks (DAC) are enforced by the `Vfs` layer's
+/// `checked_*` methods — individual `FileSystem` implementations do not
+/// check permissions. This matches the Linux VFS architecture where
+/// `may_create()`/`may_delete()`/`inode_permission()` run before the
+/// filesystem's `inode_operations` methods are called.
 ///
 /// ## Error semantics
 ///
