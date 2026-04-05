@@ -102,6 +102,11 @@ CONF
     mkdir -p "$STAGING/var/cache/apk"
     mkdir -p "$STAGING/tmp"
 
+    # Disable busybox trigger — it runs busybox --install + find|awk pipeline
+    # which hangs on rux (complex fork/exec chains). Busybox symlinks are
+    # already correct from the minirootfs tarball.
+    : > "$STAGING/lib/apk/db/triggers" 2>/dev/null || true
+
     # Disable services that need features we don't have yet
     for svc in hwclock modules sysctl bootmisc hostname networking; do
         rm -f "$STAGING/etc/runlevels/boot/$svc" 2>/dev/null

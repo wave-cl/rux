@@ -171,7 +171,7 @@ echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
 echo all_tests_done
 apk update 2>&1 | tail -1
-apk add --no-scripts --no-interactive python3 jq 2>/dev/null
+apk add --no-interactive python3 jq 2>/dev/null
 python3 --version 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
 python3 -c "import json,os; print(json.dumps({'kernel':'rux','pid':os.getpid()}))" 2>&1
@@ -401,7 +401,7 @@ echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
 apk update 2>&1 | tail -1
-apk add --no-scripts --no-interactive python3 2>/dev/null
+apk add --no-interactive python3 2>/dev/null
 python3 --version 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
 echo all_tests_done
