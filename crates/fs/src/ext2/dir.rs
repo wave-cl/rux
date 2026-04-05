@@ -36,20 +36,27 @@ pub(crate) unsafe fn lookup(fs: &Ext2Fs, dir_ino: u32, name: &[u8]) -> Result<u3
         return Err(VfsError::NotADirectory);
     }
 
+    // Use inode size but also allow scanning up to direct+indirect blocks,
+    // since the inode size may be stale if a recent add_entry grew the directory
+    // and the cache evicted the updated inode block before we read it.
     let size = raw.size as u64;
+    // Scan at least `size` bytes, but check extra blocks in case size is stale
+    let max_scan = size.max(12 * fs.block_size as u64);
     let bs = fs.block_size as usize;
     let mut buf = [0u8; 4096];
     let mut pos: u64 = 0;
 
-    while pos < size {
-        // Read the block containing this position
+    while pos < max_scan {
         let file_block = (pos / bs as u64) as u32;
-        let phys_block = super::block::translate(fs, &raw, file_block)?;
+        let phys_block = match super::block::translate(fs, &raw, file_block) {
+            Ok(b) => b,
+            Err(_) => break,
+        };
         if phys_block == 0 { break; }
         fs.read_block(phys_block as u64, &mut buf)?;
 
-        let mut off = (pos % bs as u64) as usize;
-        while off < bs && (pos + off as u64 - (pos / bs as u64) * bs as u64) < size {
+        let mut off = 0usize;
+        while off < bs {
             if off + 8 > bs { break; }
             let d_ino = le32(&buf, off);
             let rec_len = le16(&buf, off + 4) as usize;

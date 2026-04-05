@@ -425,14 +425,19 @@ impl FileSystem for Ext2Fs {
     fn rename(&mut self, old_dir: InodeId, old_name: FileName<'_>, new_dir: InodeId, new_name: FileName<'_>) -> Result<(), VfsError> {
         fs_lock();
         unsafe {
-            // Look up the inode first
-            let ino = dir::lookup(self, old_dir as u32, old_name.as_bytes())?;
+            let ino = match dir::lookup(self, old_dir as u32, old_name.as_bytes()) {
+                Ok(ino) => ino,
+                Err(_) => { fs_unlock(); return Err(VfsError::NotFound); }
+            };
             let raw = self.read_inode_raw(ino)?;
             let ft = if inode::mode_to_type(raw.mode) == InodeType::Directory { 2u8 } else { 1u8 };
-            // Add to new location
-            dir::add_entry(self, new_dir as u32, ino, new_name.as_bytes(), ft)?;
-            // Remove from old location
-            dir::remove_entry(self, old_dir as u32, old_name.as_bytes())?;
+            if let Err(e) = dir::add_entry(self, new_dir as u32, ino, new_name.as_bytes(), ft) {
+                fs_unlock(); return Err(e);
+            }
+            if let Err(_) = dir::remove_entry(self, old_dir as u32, old_name.as_bytes()) {
+                fs_unlock(); return Err(VfsError::IoError);
+            }
+            fs_unlock();
             Ok(())
         }
     }

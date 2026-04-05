@@ -502,6 +502,35 @@ pub unsafe fn msync(addr: usize, len: usize) {
 
 /// mmap(addr, len, prot, flags, fd, offset) — POSIX.1
 ///
+/// aarch64: Clean D-cache and invalidate I-cache for a virtual address range.
+/// Required after writing data that will be executed (mmap PROT_EXEC, ELF loading).
+/// Uses per-line DC CVAU + IC IVAU for precise maintenance, then DSB+ISB.
+#[cfg(target_arch = "aarch64")]
+unsafe fn sync_icache(va: usize, len: usize) {
+    // CTR_EL0.DminLine and IminLine give cache line sizes
+    // QEMU virt: typically 64 bytes, but read dynamically for correctness
+    let ctr: u64;
+    core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr, options(nostack));
+    let dline = 4 << ((ctr >> 16) & 0xF);  // D-cache minimum line (bytes)
+    let iline = 4 << (ctr & 0xF);          // I-cache minimum line (bytes)
+
+    // Clean D-cache to point of unification
+    let mut addr = va & !(dline - 1);
+    while addr < va + len {
+        core::arch::asm!("dc cvau, {}", in(reg) addr, options(nostack));
+        addr += dline;
+    }
+    core::arch::asm!("dsb ish", options(nostack));
+
+    // Invalidate I-cache to point of unification
+    let mut addr = va & !(iline - 1);
+    while addr < va + len {
+        core::arch::asm!("ic ivau, {}", in(reg) addr, options(nostack));
+        addr += iline;
+    }
+    core::arch::asm!("dsb ish", "isb", options(nostack));
+}
+
 /// Supports MAP_ANONYMOUS, MAP_PRIVATE file-backed, and MAP_SHARED file-backed
 /// (with write-back on munmap).
 pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, offset: usize) -> isize {
@@ -549,6 +578,16 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
                 let file_offset = offset as u64;
                 let dst = core::slice::from_raw_parts_mut(result as *mut u8, len);
                 let _ = fs.read(ino, file_offset, dst);
+
+                // aarch64: flush I-cache after writing executable pages.
+                // aarch64 has separate I/D caches — data written via store
+                // instructions is visible in D-cache but the I-cache may
+                // still hold stale entries. Without this, executing freshly
+                // mmap'd .so code reads garbage instructions.
+                #[cfg(target_arch = "aarch64")]
+                if prot & PROT_EXEC != 0 {
+                    sync_icache(result, aligned_len);
+                }
 
                 // Track MAP_SHARED mappings for write-back on munmap
                 if mmap_flags & MAP_SHARED != 0 {

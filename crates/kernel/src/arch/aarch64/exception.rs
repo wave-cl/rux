@@ -75,9 +75,16 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     if unsafe { crate::demand_paging::handle_user_fault(far, wnr) } {
                         return;
                     }
-                    super::console::write_str("rux: SIGSEGV at ");
-                    write_hex(far as usize);
-                    super::console::write_str("\n");
+                    // Unresolvable user-space fault → SIGSEGV
+                    unsafe {
+                        let r = _frame as *const u64;
+                        let elr = *r.add(31);
+                        super::console::write_str("rux: SIGSEGV addr=");
+                        write_hex(far as usize);
+                        super::console::write_str(" pc=");
+                        write_hex(elr as usize);
+                        super::console::write_str("\n");
+                    }
                     crate::syscall::posix::exit(139);
                 }
                 0b100000 | 0b100001 => {

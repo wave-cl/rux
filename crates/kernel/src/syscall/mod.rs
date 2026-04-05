@@ -439,7 +439,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Stubs: accepted but no-op ─────────────────────────────
         Syscall::Mprotect => posix::mprotect(a0, a1, a2),
-        Syscall::Access |
+        Syscall::Access => posix::faccessat((-100isize) as usize, a0, a1), // AT_FDCWD
         Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
         Syscall::Getgroups | Syscall::Getrlimit |
         Syscall::Futex => posix::futex(a0, a1, a2),
