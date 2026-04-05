@@ -175,16 +175,11 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                 fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
             }
             Err(_) if o_creat => {
-                use rux_fs::{FileSystem, FileName};
-                let (dir_ino, name) = match super::resolve_parent_and_name(path_ptr) {
-                    Ok(v) => v,
-                    Err(e) => return e,
+                use rux_fs::FileSystem;
+                let (dir_ino, fname) = match super::resolve_parent_fname(path_ptr) {
+                    Ok(v) => v, Err(e) => return e,
                 };
                 let fs = crate::kstate::fs();
-                let fname = match FileName::new(name) {
-                    Ok(f) => f,
-                    Err(_) => return crate::errno::EINVAL,
-                };
                 match fs.create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000) {
                     Ok(ino) => {
                         let now = super::current_time_secs();
@@ -303,10 +298,10 @@ pub fn lseek(fd: usize, offset: i64, whence: usize) -> isize {
 pub fn pread64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return crate::errno::EBADF; }
-        if (*fdt::FD_TABLE)[fd].is_pipe { return crate::errno::ESPIPE; }
+        let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
+        if f.is_pipe { return crate::errno::ESPIPE; }
         if crate::uaccess::validate_user_ptr(buf, len).is_err() { return crate::errno::EFAULT; }
-        let ino = (*fdt::FD_TABLE)[fd].ino;
+        let ino = f.ino;
         let user_buf = core::slice::from_raw_parts_mut(buf as *mut u8, len);
         match crate::kstate::fs().read(ino, offset as u64, user_buf) {
             Ok(n) => n as isize,
@@ -323,21 +318,11 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
         2 => 0,  // F_SETFD
         3 => {
             // F_GETFL
-            unsafe {
-                if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active {
-                    (*fdt::FD_TABLE)[fd].flags as isize
-                } else {
-                    0
-                }
-            }
+            unsafe { fdt::get_fd(fd).map_or(0, |f| f.flags as isize) }
         }
         4 => {
             // F_SETFL — store the flags (O_NONBLOCK, O_APPEND, etc.)
-            unsafe {
-                if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active {
-                    (*fdt::FD_TABLE)[fd].flags = arg as u32;
-                }
-            }
+            unsafe { if let Some(f) = fdt::get_fd_mut(fd) { f.flags = arg as u32; } }
             0
         }
         _ => 0,
@@ -348,10 +333,10 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
 pub fn pwrite64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return crate::errno::EBADF; }
-        if (*fdt::FD_TABLE)[fd].is_pipe { return crate::errno::ESPIPE; }
+        let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
+        if f.is_pipe { return crate::errno::ESPIPE; }
         if crate::uaccess::validate_user_ptr(buf, len).is_err() { return crate::errno::EFAULT; }
-        let ino = (*fdt::FD_TABLE)[fd].ino;
+        let ino = f.ino;
         let user_buf = core::slice::from_raw_parts(buf as *const u8, len);
         let fs = crate::kstate::fs();
         match fs.write(ino, offset as u64, user_buf) {
@@ -365,8 +350,8 @@ pub fn pwrite64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
 pub fn ftruncate(fd: usize, length: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 || !(*fdt::FD_TABLE)[fd].active { return crate::errno::EBADF; }
-        let ino = (*fdt::FD_TABLE)[fd].ino;
+        let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
+        let ino = f.ino;
         let fs = crate::kstate::fs();
         match fs.truncate(ino, length as u64) {
             Ok(()) => 0,

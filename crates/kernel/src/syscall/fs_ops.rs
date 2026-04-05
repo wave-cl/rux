@@ -404,52 +404,20 @@ pub fn fchownat(dirfd: usize, path_ptr: usize, uid: usize, gid: usize) -> isize 
 
 /// link(oldpath, newpath) — POSIX.1: create a hard link.
 pub fn link(old_ptr: usize, new_ptr: usize) -> isize {
-    unsafe {
-        use rux_fs::{FileSystem, FileName};
-        let old_path = crate::uaccess::read_user_cstr(old_ptr);
-        let old_ino = match super::resolve_with_cwd(old_path) {
-            Ok(ino) => ino,
-            Err(e) => return e,
-        };
-        let (dir_ino, name) = match super::resolve_parent_and_name(new_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        let fname = match FileName::new(name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
-        match fs.link(dir_ino, fname, old_ino) {
-            Ok(()) => 0,
-            Err(_) => crate::errno::EEXIST,
-        }
-    }
+    link_at((-100isize) as usize, old_ptr, (-100isize) as usize, new_ptr) // AT_FDCWD
 }
 
 /// chmod(path, mode) — POSIX.1: change file permissions.
 pub fn chmod(path_ptr: usize, mode: usize) -> isize {
-    unsafe {
-        use rux_fs::FileSystem;
-        let path = crate::uaccess::read_user_cstr(path_ptr);
-        let ino = match super::resolve_with_cwd(path) {
-            Ok(ino) => ino,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        match fs.chmod(ino, mode as u32) {
-            Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
-        }
-    }
+    chmod_at((-100isize) as usize, path_ptr, mode) // AT_FDCWD
 }
 
 /// fchmod(fd, mode) — POSIX.1: change file permissions by fd.
 pub fn fchmod(fd: usize, mode: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 { return crate::errno::EBADF; }
-        let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
-        if !f.active { return crate::errno::EBADF; }
-        let fs = crate::kstate::fs();
-        match fs.chmod(f.ino, mode as u32) {
+        let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
+        match crate::kstate::fs().chmod(f.ino, mode as u32) {
             Ok(()) => 0,
             Err(_) => crate::errno::ENOENT,
         }
@@ -458,30 +426,15 @@ pub fn fchmod(fd: usize, mode: usize) -> isize {
 
 /// chown(path, uid, gid) — POSIX.1: change file ownership.
 pub fn chown(path_ptr: usize, uid: usize, gid: usize) -> isize {
-    unsafe {
-        use rux_fs::FileSystem;
-        let path = crate::uaccess::read_user_cstr(path_ptr);
-        let ino = match super::resolve_with_cwd(path) {
-            Ok(ino) => ino,
-            Err(e) => return e,
-        };
-        let fs = crate::kstate::fs();
-        match fs.chown(ino, uid as u32, gid as u32) {
-            Ok(()) => 0,
-            Err(_) => crate::errno::ENOENT,
-        }
-    }
+    fchownat((-100isize) as usize, path_ptr, uid, gid) // AT_FDCWD
 }
 
 /// fchown(fd, uid, gid) — POSIX.1: change file ownership by fd.
 pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
-        if fd >= 64 { return crate::errno::EBADF; }
-        let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
-        if !f.active { return crate::errno::EBADF; }
-        let fs = crate::kstate::fs();
-        match fs.chown(f.ino, uid as u32, gid as u32) {
+        let f = match fdt::get_fd(fd) { Some(f) => f, None => return crate::errno::EBADF };
+        match crate::kstate::fs().chown(f.ino, uid as u32, gid as u32) {
             Ok(()) => 0,
             Err(_) => crate::errno::ENOENT,
         }
