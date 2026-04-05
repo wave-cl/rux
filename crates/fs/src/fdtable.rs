@@ -90,15 +90,6 @@ pub unsafe fn get_fd_mut(fd: usize) -> Option<&'static mut OpenFile> {
     if fd < MAX_FDS && (*FD_TABLE)[fd].active { Some(&mut (*FD_TABLE)[fd]) } else { None }
 }
 
-/// Open a file by path (absolute only — legacy). Returns fd.
-pub fn sys_open<F: FileSystem>(path: &[u8], fs: &mut F) -> isize {
-    let ino = match crate::path::resolve_path(fs, path) {
-        Ok(ino) => ino,
-        Err(_) => return -2,
-    };
-    sys_open_ino(ino, 0, fs)
-}
-
 /// Open a file by inode with flags. Returns fd on success, negative errno on failure.
 pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) -> isize {
     unsafe {

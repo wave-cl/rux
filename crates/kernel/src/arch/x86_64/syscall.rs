@@ -590,23 +590,23 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     t
 };
 
+/// INT 0x80 handler — legacy syscall path. Extracts all 6 args from the
+/// interrupt frame and delegates to the same dispatch as the SYSCALL path.
 pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
     unsafe {
         let regs = frame as *mut u64;
-        let nr = *regs.add(14);   // RAX = syscall number
+        // Frame layout: R15[0] R14[1] R13[2] R12[3] R11[4] R10[5] R9[6] R8[7]
+        //               RBP[8] RDI[9] RSI[10] RDX[11] RCX[12] RBX[13] RAX[14]
+        let nr = *regs.add(14);   // RAX
         let a0 = *regs.add(9);    // RDI
         let a1 = *regs.add(10);   // RSI
         let a2 = *regs.add(11);   // RDX
+        let a3 = *regs.add(5);    // R10
+        let a4 = *regs.add(7);    // R8
+        let a5 = *regs.add(6);    // R9
+        SAVED_SYSCALL_A5 = a5;
 
-        // Exec uses generic implementation
-        let result: i64 = match nr {
-            59 => { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize); }
-            _ => {
-                let sc = translate_x86_64(nr as usize);
-                crate::syscall::dispatch(sc, a0 as usize, a1 as usize, a2 as usize, 0, 0) as i64
-            }
-        };
-
+        let result = syscall_dispatch_linux(nr, a0, a1, a2, a3, a4);
         *regs.add(14) = result as u64;
     }
 }
