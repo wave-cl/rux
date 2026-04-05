@@ -25,6 +25,21 @@ pub fn exit(status: i32) -> ! {
                 }
             }
 
+            // Restore fd 0-2 as console if they were corrupted by the child.
+            // The global FD_TABLE is shared, so a child that dup2'd a file onto
+            // fd 1 (e.g., apk redirecting stdout) leaves is_console=false after exit.
+            for i in 0..3 {
+                if !(*rux_fs::fdtable::FD_TABLE)[i].is_pipe
+                    && !(*rux_fs::fdtable::FD_TABLE)[i].is_socket
+                {
+                    (*rux_fs::fdtable::FD_TABLE)[i] = rux_fs::fdtable::OpenFile {
+                        ino: 0, offset: 0, flags: 0, active: true, is_console: true,
+                        is_pipe: false, pipe_id: 0, pipe_write: false,
+                        is_socket: false, socket_idx: 0,
+                    };
+                }
+            }
+
             TASK_TABLE[idx].exit_code = status;
 
             // CLONE_THREAD: thread exit — write 0 to clear_child_tid, skip zombie.

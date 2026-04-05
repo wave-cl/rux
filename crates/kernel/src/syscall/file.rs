@@ -96,7 +96,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         return super::memory::eventfd_write(fd, buf);
     }
     if fd <= 2 && fdt::is_console_fd(fd) {
-        let write_len = len.min(65536); // Cap to prevent unbounded spin
+        let write_len = len.min(65536);
         if crate::uaccess::validate_user_ptr(buf, write_len).is_err() { return crate::errno::EFAULT; }
         unsafe {
             let ptr = buf as *const u8;
