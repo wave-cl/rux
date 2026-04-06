@@ -81,28 +81,27 @@ pub unsafe fn current_user_page_table() -> crate::arch::PageTable {
 
 /// Map zeroed pages into the current user page table.
 /// Used by brk() and mmap() to add pages to the user address space.
+/// Returns true if all pages were mapped, false on OOM (partial map may exist).
 pub unsafe fn map_user_pages(
     start_va: usize,
     end_va: usize,
     flags: rux_mm::MappingFlags,
-) {
+) -> bool {
     let alloc = crate::kstate::alloc();
     let mut upt = current_user_page_table();
 
-    // Inline loop instead of map_zeroed_pages with closures —
-    // the dyn FnMut closures caused page faults on x86_64 when
-    // the binary layout changed (closure vtable dispatch issue).
     for pa in (start_va as u64..end_va as u64).step_by(4096) {
         use rux_mm::FrameAllocator;
         let frame = match alloc.alloc(rux_mm::PageSize::FourK) {
             Ok(f) => f,
-            Err(_) => break, // OOM: stop allocating, partial map is ok
+            Err(_) => return false, // OOM
         };
         core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
         let va = rux_klib::VirtAddr::new(pa as usize);
         let _ = upt.unmap_4k(va);
         let _ = upt.map_4k(va, frame, flags, alloc);
     }
+    true
 }
 
 // ── Credentials helper ──────────────────────────────────────────────
@@ -595,8 +594,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 2: memory management ─────────────────────────────
         Syscall::Madvise => 0, // hints are advisory — safe to ignore
         Syscall::Mincore => crate::errno::ENOSYS,
-        Syscall::Mremap => memory::mremap(a0, a1, a2, a3),
-        Syscall::Msync => { unsafe { memory::msync(a0, a1); } 0 }
+        Syscall::Mremap => memory::mremap(a0, a1, a2, a3, a4),
+        Syscall::Msync => { unsafe { memory::msync(a0, a1, a2); } 0 }
         Syscall::Mlock | Syscall::Munlock |
         Syscall::Mlockall | Syscall::Munlockall => 0, // all pages are locked (no swap)
 

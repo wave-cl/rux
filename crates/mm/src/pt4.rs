@@ -644,6 +644,29 @@ impl<A: ArchPaging> PageTable4Level<A> {
     pub fn cow_bit() -> u64 { A::cow_bit() }
     /// Return the architecture's PROT_NONE marker bit.
     pub fn prot_none_bit() -> u64 { A::prot_none_bit() }
+    pub fn prot_marker_bit() -> u64 { A::prot_marker_bit() }
+    pub fn prot_r_bit() -> u64 { A::prot_r_bit() }
+    pub fn prot_w_bit() -> u64 { A::prot_w_bit() }
+    pub fn prot_x_bit() -> u64 { A::prot_x_bit() }
+
+    /// Encode prot flags (PROT_READ=1, PROT_WRITE=2, PROT_EXEC=4) into software PTE bits.
+    pub fn encode_prot_marker(prot: u8) -> u64 {
+        let mut bits = A::prot_marker_bit();
+        if prot & 1 != 0 { bits |= A::prot_r_bit(); }
+        if prot & 2 != 0 { bits |= A::prot_w_bit(); }
+        if prot & 4 != 0 { bits |= A::prot_x_bit(); }
+        bits
+    }
+
+    /// Decode prot flags from a software PTE marker. Returns (has_marker, prot).
+    pub fn decode_prot_marker(raw_pte: u64) -> (bool, u8) {
+        if raw_pte & A::prot_marker_bit() == 0 { return (false, 0); }
+        let mut prot = 0u8;
+        if raw_pte & A::prot_r_bit() != 0 { prot |= 1; }
+        if raw_pte & A::prot_w_bit() != 0 { prot |= 2; }
+        if raw_pte & A::prot_x_bit() != 0 { prot |= 4; }
+        (true, prot)
+    }
 
     /// Convert MappingFlags to raw PTE flags (delegates to `A::mapping_to_pte_flags`).
     pub fn pte_flags(flags: MappingFlags) -> u64 {

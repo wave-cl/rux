@@ -84,6 +84,10 @@ impl ArchPaging for Aarch64Paging {
 
     fn cow_bit() -> u64 { pte::COW }
     fn prot_none_bit() -> u64 { pte::PROT_NONE }
+    fn prot_marker_bit() -> u64 { pte::PROT_MARKER }
+    fn prot_r_bit() -> u64 { pte::PROT_R }
+    fn prot_w_bit() -> u64 { pte::PROT_W }
+    fn prot_x_bit() -> u64 { pte::PROT_X }
 }
 
 /// Concrete aarch64 page table type.

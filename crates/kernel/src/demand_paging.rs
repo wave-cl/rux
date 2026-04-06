@@ -5,10 +5,31 @@
 
 use rux_arch::MemoryLayout;
 
-/// Allocate and map a zero-filled RWX user page at the faulting address.
-/// Returns true if the page was successfully mapped.
+/// Allocate and map a zero-filled user page at the faulting address.
+/// Reads software PTE marker bits to determine permissions:
+/// - Prot marker with R/W/X bits → map with those permissions
+/// - No marker → default RWX (stack, heap, ELF segments)
 #[inline]
 pub unsafe fn demand_page(addr: usize) -> bool {
+    let va = rux_klib::VirtAddr::new(addr & !0xFFF);
+    let raw_pte = crate::syscall::current_user_page_table().read_leaf_pte(va);
+
+    // Decode prot marker from software PTE bits
+    let (has_marker, prot) = crate::arch::PageTable::decode_prot_marker(raw_pte);
+    let flags = if has_marker {
+        let mut f = rux_mm::MappingFlags::USER;
+        if prot & 1 != 0 { f = f.or(rux_mm::MappingFlags::READ); }
+        if prot & 2 != 0 { f = f.or(rux_mm::MappingFlags::WRITE); }
+        if prot & 4 != 0 { f = f.or(rux_mm::MappingFlags::EXECUTE); }
+        f
+    } else {
+        // No marker — default RWX (stack, heap, ELF segments)
+        rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::EXECUTE)
+            .or(rux_mm::MappingFlags::USER)
+    };
+
     use rux_mm::FrameAllocator;
     let alloc = crate::kstate::alloc();
     let frame = match alloc.alloc(rux_mm::PageSize::FourK) {
@@ -16,11 +37,6 @@ pub unsafe fn demand_page(addr: usize) -> bool {
         Err(_) => return false,
     };
     core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
-    let va = rux_klib::VirtAddr::new(addr & !0xFFF);
-    let flags = rux_mm::MappingFlags::READ
-        .or(rux_mm::MappingFlags::WRITE)
-        .or(rux_mm::MappingFlags::EXECUTE)
-        .or(rux_mm::MappingFlags::USER);
     let mut upt = crate::syscall::current_user_page_table();
     let _ = upt.unmap_4k(va);
     match upt.map_4k(va, frame, flags, alloc) {

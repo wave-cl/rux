@@ -17,6 +17,12 @@ pub const COW: u64         = 1 << 9;
 /// intentionally inaccessible (vs unmapped). Page fault handler
 /// checks this to deliver SIGSEGV instead of demand-paging.
 pub const PROT_NONE: u64   = 1 << 10;
+/// Software prot marker: PTE has encoded prot bits (non-present, demand-pageable).
+pub const PROT_MARKER: u64 = 1 << 11;
+/// Software prot bits: R=bit52, W=bit53, X=bit54 (in non-present PTEs).
+pub const PROT_R: u64      = 1 << 52;
+pub const PROT_W: u64      = 1 << 53;
+pub const PROT_X: u64      = 1 << 54;
 pub const NO_EXECUTE: u64  = 1 << 63;
 
 /// Mask for the physical address field (bits 12-51).

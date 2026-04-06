@@ -43,7 +43,10 @@ pub fn brk(addr: usize) -> isize {
                 let flags = rux_mm::MappingFlags::READ
                     .or(rux_mm::MappingFlags::WRITE)
                     .or(rux_mm::MappingFlags::USER);
-                super::map_user_pages(old_page, new_page, flags);
+                if !super::map_user_pages(old_page, new_page, flags) {
+                    // OOM: return current brk unchanged (Linux behavior)
+                    return super::PROCESS.program_brk as isize;
+                }
             }
             super::PROCESS.program_brk = addr;
         } else if addr < old_brk {

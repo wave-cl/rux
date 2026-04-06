@@ -13,6 +13,12 @@ pub const COW: u64         = 1 << 55;
 /// intentionally inaccessible. Fault handler checks this to deliver
 /// SIGSEGV instead of demand-paging.
 pub const PROT_NONE: u64   = 1 << 56;
+/// Software prot marker: descriptor has encoded prot bits (invalid, demand-pageable).
+pub const PROT_MARKER: u64 = 1 << 57;
+/// Software prot bits: R=bit58, W=bit59, X=bit60 (in invalid descriptors).
+pub const PROT_R: u64      = 1 << 58;
+pub const PROT_W: u64      = 1 << 59;
+pub const PROT_X: u64      = 1 << 60;
 pub const PXN: u64         = 1 << 53;
 pub const UXN: u64         = 1 << 54;
 

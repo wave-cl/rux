@@ -496,7 +496,10 @@ unsafe fn writeback_shared(addr: usize, len: usize) {
 }
 
 /// msync(addr, len, flags) — write back MAP_SHARED pages.
-pub unsafe fn msync(addr: usize, len: usize) {
+/// MS_ASYNC (1): hint, return immediately. MS_SYNC (4): synchronous write-back.
+pub unsafe fn msync(addr: usize, len: usize, flags: usize) {
+    const MS_ASYNC: usize = 1;
+    if flags & MS_ASYNC != 0 { return; } // async: no-op (write-back on munmap)
     writeback_shared(addr, (len + 0xFFF) & !0xFFF);
 }
 
@@ -617,17 +620,27 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
         }
         // Non-MAP_FIXED anonymous: lazy — demand pager maps zero pages on fault.
 
-        // PROT_NONE: write marker PTEs so the demand pager knows these
-        // addresses are intentionally inaccessible (not demand-pageable).
+        // Write software PTE markers for the demand pager:
+        // - PROT_NONE: marker bit prevents demand-paging (→ SIGSEGV)
+        // - Non-zero prot (lazy anonymous): marker encodes R/W/X bits so
+        //   demand pager maps with correct permissions (not default RWX)
         if is_prot_none {
-            let prot_none_bit = crate::arch::PageTable::prot_none_bit();
+            let marker = crate::arch::PageTable::prot_none_bit();
             let mut upt = super::current_user_page_table();
             let alloc = crate::kstate::alloc();
             for va in (result..result + aligned_len).step_by(4096) {
-                // Write a non-present PTE with the PROT_NONE marker bit
                 let _ = upt.unmap_4k(rux_klib::VirtAddr::new(va));
-                // Set the marker in the leaf PTE slot directly
-                upt.write_leaf_pte(rux_klib::VirtAddr::new(va), prot_none_bit, alloc);
+                upt.write_leaf_pte(rux_klib::VirtAddr::new(va), marker, alloc);
+            }
+        } else if mmap_flags & MAP_ANONYMOUS != 0 && mmap_flags & MAP_FIXED == 0 && prot != 7 {
+            // Non-RWX anonymous lazy mapping: write prot markers so the demand
+            // pager doesn't grant more permissions than requested.
+            // Skip for prot==7 (RWX) since that's the default.
+            let marker = crate::arch::PageTable::encode_prot_marker(prot as u8);
+            let mut upt = super::current_user_page_table();
+            let alloc = crate::kstate::alloc();
+            for va in (result..result + aligned_len).step_by(4096) {
+                upt.write_leaf_pte(rux_klib::VirtAddr::new(va), marker, alloc);
             }
         }
 
@@ -668,10 +681,35 @@ pub fn munmap(addr: usize, len: usize) -> isize {
 
 /// mremap(old_addr, old_size, new_size, flags) — Linux.
 /// Grows or shrinks a memory mapping. MREMAP_MAYMOVE allows relocation.
-pub fn mremap(old_addr: usize, old_size: usize, new_size: usize, flags: usize) -> isize {
+pub fn mremap(old_addr: usize, old_size: usize, new_size: usize, flags: usize, new_addr_arg: usize) -> isize {
     const MREMAP_MAYMOVE: usize = 1;
+    const MREMAP_FIXED: usize = 2;
     if old_addr & 0xFFF != 0 { return crate::errno::EINVAL; }
     if new_size == 0 { return crate::errno::EINVAL; }
+
+    // MREMAP_FIXED: move mapping to a specific address
+    if flags & MREMAP_FIXED != 0 {
+        if new_addr_arg & 0xFFF != 0 { return crate::errno::EINVAL; }
+        let old_aligned = (old_size + 0xFFF) & !0xFFF;
+        let new_aligned = (new_size + 0xFFF) & !0xFFF;
+        unsafe {
+            // Unmap target range
+            munmap(new_addr_arg, new_aligned);
+            // Map new pages at the fixed address
+            let pg_flags = rux_mm::MappingFlags::READ
+                .or(rux_mm::MappingFlags::WRITE)
+                .or(rux_mm::MappingFlags::USER);
+            super::map_user_pages(new_addr_arg, new_addr_arg + new_aligned, pg_flags);
+            // Copy old data
+            let copy_len = old_aligned.min(new_aligned);
+            core::ptr::copy_nonoverlapping(
+                old_addr as *const u8, new_addr_arg as *mut u8, copy_len,
+            );
+            // Unmap old range
+            munmap(old_addr, old_aligned);
+        }
+        return new_addr_arg as isize;
+    }
 
     let old_aligned = (old_size + 0xFFF) & !0xFFF;
     let new_aligned = (new_size + 0xFFF) & !0xFFF;
