@@ -125,11 +125,17 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 let is_zombie = t.state == TaskState::Zombie;
                 let is_stopped = t.state == TaskState::Stopped && (options & WUNTRACED != 0);
                 if !is_zombie && !is_stopped { continue; }
-                // pid matching: usize::MAX (-1) = any child, 0 = same process group
+                // pid matching: usize::MAX (-1) = any child, 0 = same process group,
+                // pid < -1 = process group abs(pid)
                 if pid == 0 {
                     if t.pgid != TASK_TABLE[current_task_idx()].pgid { continue; }
-                } else if pid != usize::MAX && t.pid as usize != pid {
-                    continue;
+                } else if pid != usize::MAX {
+                    let spid = pid as isize;
+                    if spid < -1 {
+                        if t.pgid != (-spid) as u32 { continue; }
+                    } else if t.pid as usize != pid {
+                        continue;
+                    }
                 }
 
                 let child_pid = t.pid as isize;

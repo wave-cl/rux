@@ -44,6 +44,10 @@ unsafe fn init_child_slot(
     child.program_brk = parent.program_brk;
     child.mmap_base = parent.mmap_base;
     child.fs_ctx = parent.fs_ctx;
+    child.uid = parent.uid;
+    child.euid = parent.euid;
+    child.gid = parent.gid;
+    child.egid = parent.egid;
 
     // fork inherits parent's pending signals; clone starts fresh
     child.signal_hot = if inherit_signals {
@@ -221,6 +225,10 @@ unsafe fn sync_globals_to_slot(idx: usize) {
     slot.signal_restorer = crate::syscall::PROCESS.signal_restorer;
     slot.last_child_exit = crate::syscall::PROCESS.last_child_exit;
     slot.child_available = crate::syscall::PROCESS.child_available;
+    slot.uid = crate::syscall::PROCESS.uid;
+    slot.euid = crate::syscall::PROCESS.euid;
+    slot.gid = crate::syscall::PROCESS.gid;
+    slot.egid = crate::syscall::PROCESS.egid;
 
     use rux_arch::ForkOps;
     crate::arch::Arch::snapshot_hw_state(

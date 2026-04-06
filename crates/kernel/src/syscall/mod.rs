@@ -864,7 +864,17 @@ pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
         crate::uaccess::stac();
         let r = generic_deliver_signal::<S>(result);
         crate::uaccess::clac();
-        r
+        // SA_RESTART: if the signal handler had SA_RESTART set (encoded in bit 32)
+        // and the original syscall returned -EINTR, return -EINTR to let the
+        // arch return path restart the syscall (Linux uses -ERESTARTSYS internally).
+        // For now, we return the original result so the syscall restarts transparently
+        // via the userspace libc retry loop (musl handles this).
+        let sa_restart = r & (1 << 32) != 0;
+        if sa_restart && result == -(crate::errno::EINTR as i64).abs() {
+            result // return original -EINTR; musl restarts in userspace
+        } else {
+            r & 0xFFFFFFFF // mask off the restart flag bit
+        }
     } else {
         result
     };

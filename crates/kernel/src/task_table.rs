@@ -56,6 +56,12 @@ pub struct TaskSlot {
     pub signal_hot: SignalHot,
     pub signal_restorer: [usize; 32],
 
+    // ── Credentials (per-task, swapped on context switch) ────────────
+    pub uid: u32,
+    pub euid: u32,
+    pub gid: u32,
+    pub egid: u32,
+
     // ── File descriptors (mirrors FD_TABLE global) ────────────────────
     pub fds: [OpenFile; MAX_FDS],
 
@@ -93,6 +99,7 @@ impl TaskSlot {
             fs_ctx: FsContext::new(),
             signal_hot: SignalHot::new(),
             signal_restorer: [0; 32],
+            uid: 0, euid: 0, gid: 0, egid: 0,
             fds: [EMPTY_FD; MAX_FDS],
             pt_root: 0,
             kstack_top: 0, saved_ksp: 0,
@@ -309,6 +316,10 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     );
     old.last_child_exit = (*proc_ptr).last_child_exit;
     old.child_available = (*proc_ptr).child_available;
+    old.uid = (*proc_ptr).uid;
+    old.euid = (*proc_ptr).euid;
+    old.gid = (*proc_ptr).gid;
+    old.egid = (*proc_ptr).egid;
 
     // Save hardware state (user SP, TLS)
     crate::arch::Arch::save_task_hw(&mut old.saved_user_sp, &mut old.tls);
@@ -327,6 +338,10 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     );
     (*proc_ptr).last_child_exit = new.last_child_exit;
     (*proc_ptr).child_available = new.child_available;
+    (*proc_ptr).uid = new.uid;
+    (*proc_ptr).euid = new.euid;
+    (*proc_ptr).gid = new.gid;
+    (*proc_ptr).egid = new.egid;
     // Point FD_TABLE at the new task's fd array (pointer swap, not copy).
     rux_fs::fdtable::set_active_fds(&mut (*tt_ptr)[new_idx].fds);
 

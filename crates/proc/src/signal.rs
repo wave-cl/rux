@@ -165,18 +165,14 @@ pub enum SignalHandler {
     User = 2,
 }
 
-/// sigaction flags (SA_*).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum SaFlags {
-    Restart    = 1 << 0,
-    NoCldStop  = 1 << 1,
-    NoCldWait  = 1 << 2,
-    SigInfo    = 1 << 3,
-    OnStack    = 1 << 4,
-    NoDeFer    = 1 << 5,
-    ResetHand  = 1 << 6,
-}
+/// Linux sigaction flags (SA_*) — must match kernel ABI values.
+pub const SA_NOCLDSTOP: u32 = 0x00000001;
+pub const SA_NOCLDWAIT: u32 = 0x00000002;
+pub const SA_SIGINFO: u32   = 0x00000004;
+pub const SA_ONSTACK: u32   = 0x08000000;
+pub const SA_RESTART: u32   = 0x10000000;
+pub const SA_NODEFER: u32   = 0x40000000;
+pub const SA_RESETHAND: u32 = 0x80000000;
 
 /// Per-signal handler configuration (analogous to `struct sigaction`).
 #[derive(Debug, Clone, Copy)]
@@ -579,13 +575,19 @@ pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
     S::sig_write_user_sp(new_sp);
     S::sig_redirect_to_handler(action.handler, signum);
 
+    // SA_RESETHAND: reset handler to default after delivery (one-shot)
+    if action.flags & SA_RESETHAND != 0 {
+        let _ = cold.set_action(sig, SignalAction::DEFAULT);
+    }
+
     // Block signals during handler (unless SA_NODEFER)
-    let sa_nodefer = action.flags & 0x40000000 != 0;
-    if !sa_nodefer {
+    if action.flags & SA_NODEFER == 0 {
         hot.blocked = SignalSet(hot.blocked.0 | action.mask.0 | sig.to_bit());
     }
 
-    signum as i64
+    // Return (signal number, whether SA_RESTART was set)
+    let restart = action.flags & SA_RESTART != 0;
+    if restart { signum as i64 | (1 << 32) } else { signum as i64 }
 }
 
 /// Restore pre-signal state from the signal frame on the user stack.
