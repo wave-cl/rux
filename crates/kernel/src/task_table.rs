@@ -69,6 +69,9 @@ pub struct TaskSlot {
 
     // ── File descriptors (mirrors FD_TABLE global) ────────────────────
     pub fds: [OpenFile; MAX_FDS],
+    /// If != u16::MAX, this task shares its fd table with TASK_TABLE[shared_fds_with].
+    /// CLONE_FILES threads point to the thread group leader's fd array.
+    pub shared_fds_with: u16,
 
     // ── Hardware context ──────────────────────────────────────────────
     pub pt_root: u64,          // CR3 / TTBR0_EL1
@@ -107,6 +110,7 @@ impl TaskSlot {
             uid: 0, euid: 0, suid: 0, gid: 0, egid: 0, sgid: 0,
             sid: 0,
             fds: [EMPTY_FD; MAX_FDS],
+            shared_fds_with: u16::MAX,
             pt_root: 0,
             kstack_top: 0, saved_ksp: 0,
             saved_user_sp: 0, tls: 0, asid: 0,
@@ -353,8 +357,13 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     (*proc_ptr).gid = new.gid;
     (*proc_ptr).egid = new.egid;
     (*proc_ptr).sgid = new.sgid;
-    // Point FD_TABLE at the new task's fd array (pointer swap, not copy).
-    rux_fs::fdtable::set_active_fds(&mut (*tt_ptr)[new_idx].fds);
+    // Point FD_TABLE at the task's fd array — or the shared leader's array.
+    let fds_idx = if (*tt_ptr)[new_idx].shared_fds_with != u16::MAX {
+        (*tt_ptr)[new_idx].shared_fds_with as usize
+    } else {
+        new_idx
+    };
+    rux_fs::fdtable::set_active_fds(&mut (*tt_ptr)[fds_idx].fds);
 
     // Restore hardware state (user SP, TLS, kernel stack top)
     crate::arch::Arch::restore_task_hw(new.saved_user_sp, new.tls, new.kstack_top);

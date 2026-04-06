@@ -197,8 +197,20 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
     TASK_TABLE[child_idx].pt_root = parent.pt_root;
     TASK_TABLE[child_idx].asid = parent.asid;
 
-    // Copy FDs (both fork and clone copy — threads start with same view)
-    copy_fds_with_pipe_refs(&parent.fds, &mut TASK_TABLE[child_idx].fds);
+    // CLONE_FILES: share fd table with parent (threads see same fds).
+    // Without CLONE_FILES: copy fds (fork semantics).
+    if flags & crate::errno::CLONE_FILES != 0 {
+        // Point child at parent's fd array — any fd operation in either
+        // thread is visible to the other. No copy needed.
+        let parent_fds_owner = if parent.shared_fds_with != u16::MAX {
+            parent.shared_fds_with as usize // parent already shares — chain to root
+        } else {
+            parent_idx
+        };
+        TASK_TABLE[child_idx].shared_fds_with = parent_fds_owner as u16;
+    } else {
+        copy_fds_with_pipe_refs(&parent.fds, &mut TASK_TABLE[child_idx].fds);
+    }
 
     // Override user stack if provided
     if child_stack != 0 {

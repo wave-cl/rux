@@ -497,6 +497,8 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
     const TIOCGWINSZ: usize = 0x5413;
     const TIOCSPGRP: usize = 0x5410;
     const TIOCGPGRP: usize = 0x540F;
+    const TIOCSCTTY: usize = 0x540E;
+    const TIOCNOTTY: usize = 0x5422;
 
     match request {
         TIOCGWINSZ => {
@@ -567,6 +569,21 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
                 if crate::uaccess::validate_user_ptr(arg, 4).is_err() { return crate::errno::EFAULT; }
                 unsafe { crate::tty::TTY.foreground_pgid = *(arg as *const i32) as u32; }
             }
+            0
+        }
+        TIOCSCTTY => {
+            // Acquire controlling terminal: set session as owner
+            unsafe {
+                let idx = crate::task_table::current_task_idx();
+                let sid = crate::task_table::TASK_TABLE[idx].sid;
+                crate::tty::TTY.session_id = sid;
+                crate::tty::TTY.foreground_pgid = crate::task_table::TASK_TABLE[idx].pgid;
+            }
+            0
+        }
+        TIOCNOTTY => {
+            // Give up controlling terminal
+            unsafe { crate::tty::TTY.session_id = 0; }
             0
         }
         _ => -25 // -ENOTTY

@@ -22,6 +22,8 @@ pub struct Tty {
     pub isig: bool,
     /// Foreground process group for SIGINT delivery.
     pub foreground_pgid: u32,
+    /// Session ID that owns this controlling terminal (0 = no session).
+    pub session_id: u32,
     /// VMIN — minimum bytes for raw read (0 = non-blocking).
     pub vmin: u8,
     /// VTIME — timeout in deciseconds for raw read (0 = no timeout).
@@ -37,6 +39,7 @@ impl Tty {
             echo: true,
             isig: true,
             foreground_pgid: 1,
+            session_id: 1, // PID 1's session owns the console
             vmin: 1,
             vtime: 0,
         }
