@@ -205,6 +205,16 @@ pub unsafe fn load_elf_from_inode(
     crate::uaccess::stac();
     let user_sp = rux_proc::execargs::write_to_stack(stack_top as usize);
     crate::uaccess::clac();
+
+    // Copy cmdline to current task slot for /proc/[pid]/cmdline
+    {
+        let (cmdline, cmdline_len) = rux_proc::execargs::get_cmdline();
+        let idx = crate::task_table::current_task_idx();
+        let slot = &mut crate::task_table::TASK_TABLE[idx];
+        let len = (cmdline_len as usize).min(128);
+        slot.cmdline[..len].copy_from_slice(&cmdline[..len]);
+        slot.cmdline_len = len as u8;
+    }
     {
         use rux_arch::UserModeOps;
         crate::arch::Arch::enter_user_mode(entry_point, user_sp);

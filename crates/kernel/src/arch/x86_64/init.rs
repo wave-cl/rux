@@ -558,6 +558,17 @@ pub fn x86_64_init(multiboot_info: usize) {
                 count
             },
             || crate::task_table::current_pid(),
+            |pid, buf| unsafe {
+                use crate::task_table::*;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
+                        let len = (TASK_TABLE[i].cmdline_len as usize).min(buf.len());
+                        buf[..len].copy_from_slice(&TASK_TABLE[i].cmdline[..len]);
+                        return len;
+                    }
+                }
+                0
+            },
         );
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr: alloc_addr as *mut rux_mm::frame::BuddyAllocator,

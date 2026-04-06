@@ -151,15 +151,9 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         } else {
             fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
         };
-        // SIGPIPE: writing to a pipe with no readers
+        // SIGPIPE: set pending signal (post_syscall delivers it)
         if result == crate::errno::EPIPE {
-            use rux_proc::signal::*;
-            let cold: &rux_proc::signal::SignalCold = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx());
-            let action = *cold.get_action(Signal::Pipe);
-            if action.handler_type == SignalHandler::Default {
-                super::posix::exit(128 + 13);
-            }
-            return crate::errno::EPIPE;
+            super::PROCESS.signal_hot.pending = super::PROCESS.signal_hot.pending.add(13); // SIGPIPE=13
         }
         // Update mtime on successful file write (skip pipes/console)
         if result > 0 && fd < rux_fs::fdtable::MAX_FDS {

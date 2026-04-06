@@ -84,6 +84,7 @@ pub struct ProcFs {
     pub get_free_frames: fn() -> usize,
     pub get_active_pids: fn(&mut [u32]) -> usize,
     pub get_current_pid: fn() -> u32,
+    pub get_task_cmdline: fn(u32, &mut [u8]) -> usize,
 }
 
 impl ProcFs {
@@ -93,8 +94,9 @@ impl ProcFs {
         get_free_frames: fn() -> usize,
         get_active_pids: fn(&mut [u32]) -> usize,
         get_current_pid: fn() -> u32,
+        get_task_cmdline: fn(u32, &mut [u8]) -> usize,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline }
     }
 
     /// Check if a PID exists by querying the kernel task table.
@@ -165,7 +167,7 @@ impl ProcFs {
                 } else if ino >= PID_STATM_BASE {
                     self.gen_pid_statm(buf)
                 } else if ino >= PID_CMDLINE_BASE {
-                    self.gen_pid_cmdline(buf)
+                    self.gen_pid_cmdline(pid, buf)
                 } else {
                     self.gen_pid_stat(pid, buf)
                 }
@@ -204,12 +206,16 @@ impl ProcFs {
         pos
     }
 
-    /// Generate /proc/[pid]/cmdline — null-separated argv
-    fn gen_pid_cmdline(&self, buf: &mut [u8]) -> usize {
-        let s = b"/bin/sh\0";
-        let len = s.len().min(buf.len());
-        buf[..len].copy_from_slice(&s[..len]);
-        len
+    /// Generate /proc/[pid]/cmdline — null-separated argv from task slot
+    fn gen_pid_cmdline(&self, pid: u64, buf: &mut [u8]) -> usize {
+        let len = (self.get_task_cmdline)(pid as u32, buf);
+        if len > 0 { len } else {
+            // Fallback for tasks without cmdline (e.g., init)
+            let s = b"/bin/sh\0";
+            let n = s.len().min(buf.len());
+            buf[..n].copy_from_slice(&s[..n]);
+            n
+        }
     }
 
     /// Generate /proc/[pid]/statm — memory in pages

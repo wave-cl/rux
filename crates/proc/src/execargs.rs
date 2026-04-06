@@ -19,6 +19,15 @@ static mut ENVP_OFFSETS: [usize; MAX_ARGS] = [0; MAX_ARGS];
 static mut ENVP_LENS: [usize; MAX_ARGS] = [0; MAX_ARGS];
 static mut ENVC: usize = 0;
 
+/// Cmdline buffer: null-separated argv, filled by write_to_stack.
+static mut CMDLINE_BUF: [u8; 128] = [0; 128];
+static mut CMDLINE_LEN: u8 = 0;
+
+/// Get the last exec'd cmdline (null-separated argv bytes).
+pub fn get_cmdline() -> (&'static [u8], u8) {
+    unsafe { (&CMDLINE_BUF, CMDLINE_LEN) }
+}
+
 /// Dynamic linking auxv entries (set by exec, cleared for static binaries).
 static mut AUXV_PHDR: usize = 0;   // AT_PHDR: address of program headers
 static mut AUXV_PHENT: usize = 0;  // AT_PHENT: size of one program header entry
@@ -266,6 +275,19 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     }
 
     (*auxv.add(ai)) = [0, 0]; // AT_NULL
+
+    // Build cmdline: null-separated argv for /proc/[pid]/cmdline
+    let mut cpos = 0u8;
+    for i in 0..argc {
+        let len = ARGV_LENS[i].min(127 - cpos as usize);
+        let off = ARGV_OFFSETS[i];
+        for j in 0..len {
+            CMDLINE_BUF[cpos as usize + j] = ARGV_BUF[off + j];
+        }
+        cpos += len as u8;
+        if (cpos as usize) < 127 { CMDLINE_BUF[cpos as usize] = 0; cpos += 1; }
+    }
+    CMDLINE_LEN = cpos;
 
     sp
 }

@@ -168,7 +168,9 @@ impl Tty {
         let target = if vmin > 0 { vmin } else { 1 };
         let mut got = 0usize;
         while got < target.min(len) {
-            let b = A::read_byte();
+            let mut b = A::read_byte();
+            // ICRNL: convert CR to LF (c_iflag & ICRNL is always set)
+            if b == b'\r' { b = b'\n'; }
             *ptr.add(got) = b;
             got += 1;
         }

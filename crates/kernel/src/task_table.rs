@@ -92,6 +92,10 @@ pub struct TaskSlot {
     pub clear_child_tid: usize, // address to write 0 + futex wake on exit
     pub futex_addr: usize,      // address being waited on (WaitingForFutex)
 
+    // ── Command line (for /proc/[pid]/cmdline) ─────────────────────
+    pub cmdline: [u8; 128],     // null-separated argv
+    pub cmdline_len: u8,
+
     // ── FPU/SIMD state ──────────────────────────────────────────────
     pub fpu_state: rux_arch::FpuState,
 }
@@ -118,6 +122,7 @@ impl TaskSlot {
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
             waiting_pipe_id: 0,
+            cmdline: [0; 128], cmdline_len: 0,
             fpu_state: rux_arch::FpuState::new(),
         }
     }

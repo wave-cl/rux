@@ -176,6 +176,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                 let mut revents: u32 = 0;
                 const EPOLLIN: u32 = 1;
                 const EPOLLOUT: u32 = 4;
+                const EPOLLHUP: u32 = 0x10;
                 if e.events & EPOLLIN != 0 {
                     if super::socket::is_socket(fd) {
                         if super::socket::socket_has_data(fd) { revents |= EPOLLIN; }
@@ -184,9 +185,9 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                     } else if is_timerfd(fd) {
                         if timerfd_has_data(fd) { revents |= EPOLLIN; }
                     } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].is_pipe {
-                        // Pipe: check if data available in the pipe buffer
                         let pid = (*fdt::FD_TABLE)[fd].pipe_id;
                         if crate::pipe::has_data(pid) { revents |= EPOLLIN; }
+                        if crate::pipe::writers_closed(pid) { revents |= EPOLLHUP; }
                     } else {
                         revents |= EPOLLIN; // regular files always readable
                     }

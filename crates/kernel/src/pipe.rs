@@ -11,6 +11,11 @@ pub fn has_data(pipe_id: u8) -> bool {
     rux_ipc::pipe::has_data(pipe_id)
 }
 
+/// Check if all writers have closed the pipe.
+pub fn writers_closed(pipe_id: u8) -> bool {
+    rux_ipc::pipe::writers_closed(pipe_id)
+}
+
 /// Create a new pipe. Returns (pipe_id, read_fd, write_fd) or error.
 pub fn create() -> Result<(u8, isize, isize), isize> {
     rux_fs::fdtable::create_pipe(PIPE)

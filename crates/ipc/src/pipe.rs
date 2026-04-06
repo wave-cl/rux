@@ -41,6 +41,14 @@ pub fn has_data(pipe_id: u8) -> bool {
     }
 }
 
+/// Check if all writers have closed the pipe (EOF condition).
+pub fn writers_closed(pipe_id: u8) -> bool {
+    unsafe {
+        let p = &PIPES[pipe_id as usize];
+        p.active && p.writers == 0
+    }
+}
+
 /// Allocate a pipe slot. Returns pipe_id or -EMFILE.
 pub fn alloc() -> Result<u8, isize> {
     unsafe {
