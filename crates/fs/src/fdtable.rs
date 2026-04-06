@@ -24,13 +24,17 @@ pub struct PipeFns {
     pub alloc: fn() -> Result<u8, isize>,
 }
 
+/// FD_CLOEXEC — close this fd on exec.
+pub const FD_CLOEXEC: u8 = 1;
+
 #[derive(Clone, Copy)]
 pub struct OpenFile {
     pub ino: u64,
     pub offset: usize,
-    pub flags: u32,
+    pub flags: u32,       // O_* file status flags (O_APPEND, O_NONBLOCK, etc.)
+    pub fd_flags: u8,     // FD flags (FD_CLOEXEC) — separate from file status flags
     pub active: bool,
-    pub is_console: bool,  // true = fd routes to console (stdin/stdout/stderr default)
+    pub is_console: bool,
     pub is_pipe: bool,
     pub pipe_id: u8,
     pub pipe_write: bool,
@@ -39,7 +43,7 @@ pub struct OpenFile {
 }
 
 pub const EMPTY_FD: OpenFile = OpenFile {
-    ino: 0, offset: 0, flags: 0, active: false, is_console: false,
+    ino: 0, offset: 0, flags: 0, fd_flags: 0, active: false, is_console: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
     is_socket: false, socket_idx: 0,
 };
@@ -107,8 +111,9 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
                 if flags & 0x200 != 0 {
                     let _ = fs.truncate(ino, 0);
                 }
+                let fd_flags = if flags & 0o2000000 != 0 { FD_CLOEXEC } else { 0 }; // O_CLOEXEC
                 (*FD_TABLE)[fd] = OpenFile {
-                    ino: ino as u64, offset, flags, active: true, is_console: false,
+                    ino: ino as u64, offset, flags, fd_flags, active: true, is_console: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                     is_socket: false, socket_idx: 0,
                 };
@@ -172,7 +177,7 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
         if oldfd <= 2 && (!(*FD_TABLE)[oldfd].active || (*FD_TABLE)[oldfd].is_console) {
             // Duping a console fd (stdin/stdout/stderr not redirected)
             (*FD_TABLE)[newfd] = OpenFile {
-                ino: 0, offset: 0, flags: 0, active: true, is_console: true,
+                ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: true,
                 is_pipe: false, pipe_id: 0, pipe_write: false,
                 is_socket: false, socket_idx: 0,
             };
@@ -213,7 +218,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if !(*FD_TABLE)[fd].active {
                 (*FD_TABLE)[fd] = OpenFile {
-                    ino: 0, offset: 0, flags: 0, active: true, is_console: false,
+                    ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: false,
                     is_pipe: true, pipe_id, pipe_write: is_write,
                     is_socket: false, socket_idx: 0,
                 };
@@ -316,11 +321,14 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
     }
 }
 
-/// Reset the fd table (called on exec to give child a clean slate).
+/// Close FD_CLOEXEC fds on exec. Non-cloexec fds are inherited.
+/// Linux closes only fds with FD_CLOEXEC set; others pass to the new program.
 pub fn reset() {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
-            (*FD_TABLE)[fd].active = false;
+            if (*FD_TABLE)[fd].active && (*FD_TABLE)[fd].fd_flags & FD_CLOEXEC != 0 {
+                (*FD_TABLE)[fd].active = false;
+            }
         }
     }
 }
