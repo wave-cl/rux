@@ -42,6 +42,18 @@ pub fn sys_mount(
                     use rux_mm::FrameAllocator;
                     crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK)
                 },
+                |buf| unsafe {
+                    use crate::task_table::*;
+                    let mut count = 0;
+                    for i in 0..MAX_PROCS {
+                        if TASK_TABLE[i].active && TASK_TABLE[i].state != TaskState::Free && count < buf.len() {
+                            buf[count] = TASK_TABLE[i].pid;
+                            count += 1;
+                        }
+                    }
+                    count
+                },
+                || crate::task_table::current_pid(),
             );
             let _ = vfs.mount(dir_ino, name, rux_fs::vfs::MountedFs::Proc(&raw mut MOUNT_PROCFS));
             0

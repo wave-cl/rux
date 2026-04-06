@@ -82,6 +82,8 @@ pub struct ProcFs {
     pub get_ticks: fn() -> u64,
     pub get_total_frames: fn() -> usize,
     pub get_free_frames: fn() -> usize,
+    pub get_active_pids: fn(&mut [u32]) -> usize,
+    pub get_current_pid: fn() -> u32,
 }
 
 impl ProcFs {
@@ -89,13 +91,17 @@ impl ProcFs {
         get_ticks: fn() -> u64,
         get_total_frames: fn() -> usize,
         get_free_frames: fn() -> usize,
+        get_active_pids: fn(&mut [u32]) -> usize,
+        get_current_pid: fn() -> u32,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid }
     }
 
-    /// Check if a PID exists. Accept PIDs 1..64 (single-user stub).
+    /// Check if a PID exists by querying the kernel task table.
     fn pid_exists(&self, pid: u64) -> bool {
-        pid >= 1 && pid < 64
+        let mut pids = [0u32; 64];
+        let count = (self.get_active_pids)(&mut pids);
+        pids[..count].iter().any(|&p| p as u64 == pid)
     }
 
     /// Generate content for a virtual file into a buffer.
@@ -388,13 +394,18 @@ impl FileSystem for ProcFs {
                 buf.name[..name.len()].copy_from_slice(name);
                 return Ok(true);
             }
-            // Then: PID directories (just PID 1 for now)
+            // Then: PID directories (enumerate all active PIDs)
             let pid_offset = offset - NUM_SYS_ENTRIES;
-            if pid_offset == 0 && self.pid_exists(1) {
-                buf.ino = PID_DIR_BASE + 1;
+            let mut pids = [0u32; 64];
+            let count = (self.get_active_pids)(&mut pids);
+            if pid_offset < count {
+                let pid = pids[pid_offset];
+                buf.ino = PID_DIR_BASE + pid as u64;
                 buf.kind = InodeType::Directory;
-                buf.name_len = 1;
-                buf.name[0] = b'1';
+                let mut name_buf = [0u8; 10];
+                let n = fmt_u64(&mut name_buf, pid as u64);
+                buf.name_len = n as u8;
+                buf.name[..n].copy_from_slice(&name_buf[..n]);
                 return Ok(true);
             }
             return Ok(false);
@@ -452,8 +463,12 @@ impl FileSystem for ProcFs {
     fn symlink(&mut self, _dir: InodeId, _name: FileName<'_>, _target: &[u8]) -> Result<InodeId, VfsError> { Err(VfsError::ReadOnly) }
     fn readlink(&self, ino: InodeId, buf: &mut [u8]) -> Result<usize, VfsError> {
         if ino == INO_SELF && !buf.is_empty() {
-            buf[0] = b'1';
-            return Ok(1);
+            let pid = (self.get_current_pid)();
+            let mut tmp = [0u8; 10];
+            let n = fmt_u64(&mut tmp, pid as u64);
+            let len = n.min(buf.len());
+            buf[..len].copy_from_slice(&tmp[..len]);
+            return Ok(len);
         }
         // /proc/[pid]/exe → path to executable
         if is_pid_exe(ino) {

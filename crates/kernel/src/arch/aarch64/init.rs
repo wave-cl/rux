@@ -247,6 +247,18 @@ pub fn aarch64_init(dtb_addr: usize) {
                 (*(ALLOC_ADDR as *const rux_mm::frame::BuddyAllocator))
                     .available_frames(rux_mm::PageSize::FourK)
             },
+            |buf| unsafe {
+                use crate::task_table::*;
+                let mut count = 0;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].state != TaskState::Free && count < buf.len() {
+                        buf[count] = TASK_TABLE[i].pid;
+                        count += 1;
+                    }
+                }
+                count
+            },
+            || crate::task_table::current_pid(),
         );
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr,

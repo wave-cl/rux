@@ -49,12 +49,21 @@ pub fn resolve_path_at_checked<F: FileSystem>(
     cred: &Credentials,
 ) -> Result<InodeId, VfsError> {
     if path.is_empty() { return Ok(start); }
+    let trailing_slash = path.len() > 1 && path[path.len() - 1] == b'/';
     let root = fs.root_inode();
-    if path[0] == b'/' {
-        resolve_path_inner_checked(fs, root, path, SYMLOOP_MAX, cred)
+    let ino = if path[0] == b'/' {
+        resolve_path_inner_checked(fs, root, path, SYMLOOP_MAX, cred)?
     } else {
-        resolve_path_inner_checked(fs, start, path, SYMLOOP_MAX, cred)
+        resolve_path_inner_checked(fs, start, path, SYMLOOP_MAX, cred)?
+    };
+    // Trailing slash requires result to be a directory
+    if trailing_slash {
+        let mut st = unsafe { core::mem::zeroed::<InodeStat>() };
+        if fs.stat(ino, &mut st).is_ok() && st.mode & crate::S_IFMT != crate::S_IFDIR {
+            return Err(VfsError::NotADirectory);
+        }
     }
+    Ok(ino)
 }
 
 /// Resolve (parent_inode, basename) with execute checks on intermediate dirs.
@@ -135,6 +144,10 @@ fn resolve_path_inner_checked<F: FileSystem>(
                 return resolve_path_inner_checked(fs, root, &full[..fp], symlinks_left - 1, cred);
             } else {
                 let parent = if depth > 0 { parent_stack[depth - 1] } else { root };
+                // X check on parent before symlink target lookup
+                let mut ps = unsafe { core::mem::zeroed::<InodeStat>() };
+                fs.stat(parent, &mut ps)?;
+                crate::check_perm(&ps, cred, crate::X_OK)?;
                 let target_name = FileName::new(target)?;
                 current = fs.lookup(parent, target_name)?;
             }
@@ -288,20 +301,21 @@ pub fn resolve_nofollow_checked<F: FileSystem>(
     fs: &F, cwd: InodeId, path: &[u8], cred: &Credentials,
 ) -> Result<InodeId, isize> {
     if path.is_empty() { return Ok(cwd); }
+    let trailing_slash = path.len() > 1 && path[path.len() - 1] == b'/';
     let mut end = path.len();
     while end > 1 && path[end - 1] == b'/' { end -= 1; }
     let path = &path[..end];
     let last_slash = path.iter().rposition(|&b| b == b'/');
-    match last_slash {
+    let ino = match last_slash {
         None => {
             let fname = FileName::new(path).map_err(|_| -22isize)?;
-            fs.lookup(cwd, fname).map_err(|_| -2isize)
+            fs.lookup(cwd, fname).map_err(|_| -2isize)?
         }
         Some(0) => {
             let name = &path[1..];
             if name.is_empty() { return Ok(fs.root_inode()); }
             let fname = FileName::new(name).map_err(|_| -22isize)?;
-            fs.lookup(fs.root_inode(), fname).map_err(|_| -2isize)
+            fs.lookup(fs.root_inode(), fname).map_err(|_| -2isize)?
         }
         Some(s) => {
             let parent_path = &path[..s];
@@ -309,9 +323,16 @@ pub fn resolve_nofollow_checked<F: FileSystem>(
             let parent = resolve_path_at_checked(fs, cwd, parent_path, cred)
                 .map_err(|e| -(e.as_errno() as isize))?;
             let fname = FileName::new(name).map_err(|_| -22isize)?;
-            fs.lookup(parent, fname).map_err(|_| -2isize)
+            fs.lookup(parent, fname).map_err(|_| -2isize)?
+        }
+    };
+    if trailing_slash {
+        let mut st = unsafe { core::mem::zeroed::<InodeStat>() };
+        if fs.stat(ino, &mut st).is_ok() && st.mode & crate::S_IFMT != crate::S_IFDIR {
+            return Err(-20); // ENOTDIR
         }
     }
+    Ok(ino)
 }
 
 /// Resolve a path to (parent_inode, basename).

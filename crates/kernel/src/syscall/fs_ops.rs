@@ -356,8 +356,14 @@ pub fn symlink_at(target_ptr: usize, dirfd: usize, link_ptr: usize) -> isize {
             Ok(v) => v, Err(e) => return e,
         };
         let cred = super::current_cred();
-        match crate::kstate::fs().checked_symlink(dir_ino, fname, &target_buf[..tlen], &cred) {
-            Ok(_) => 0,
+        let fs = crate::kstate::fs();
+        match fs.checked_symlink(dir_ino, fname, &target_buf[..tlen], &cred) {
+            Ok(ino) => {
+                use rux_fs::FileSystem;
+                let now = super::current_time_secs();
+                let _ = fs.utimes(ino, now, now);
+                0
+            }
             Err(e) => -(e.as_errno() as isize),
         }
     }

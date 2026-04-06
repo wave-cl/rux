@@ -54,6 +54,10 @@ pub use native::probe_and_init_net;
 /// Delegates to the `StatLayout::fill_stat` default method in rux-arch.
 pub unsafe fn fill_linux_stat<A: StatLayout>(buf: usize, s: &rux_fs::InodeStat) {
     A::fill_stat(buf, s.ino, s.nlink, s.mode, s.uid, s.gid, s.size, s.blocks);
+    // Write rdev if the arch defines a non-zero offset for it
+    if A::RDEV_OFF > 0 {
+        *((buf + A::RDEV_OFF) as *mut u64) = s.rdev as u64;
+    }
 }
 
 /// Map kernel identity pages into a user page table.

@@ -12,8 +12,10 @@ const INO_ZERO: InodeId = 2;
 const INO_URANDOM: InodeId = 3;
 const INO_CONSOLE: InodeId = 4;
 const INO_TTY: InodeId = 5;
+const INO_RANDOM: InodeId = 6;
+const INO_FULL: InodeId = 7;
 
-const NUM_ENTRIES: usize = 5;
+const NUM_ENTRIES: usize = 7;
 
 const ENTRIES: [(&[u8], InodeId); NUM_ENTRIES] = [
     (b"null", INO_NULL),
@@ -21,7 +23,22 @@ const ENTRIES: [(&[u8], InodeId); NUM_ENTRIES] = [
     (b"urandom", INO_URANDOM),
     (b"console", INO_CONSOLE),
     (b"tty", INO_TTY),
+    (b"random", INO_RANDOM),
+    (b"full", INO_FULL),
 ];
+
+/// Linux major:minor encoded as (major << 8) | minor.
+fn dev_rdev(ino: InodeId) -> u32 {
+    match ino {
+        INO_NULL => (1 << 8) | 3,       // 1:3
+        INO_ZERO => (1 << 8) | 5,       // 1:5
+        INO_FULL => (1 << 8) | 7,       // 1:7
+        INO_RANDOM | INO_URANDOM => (1 << 8) | 9, // 1:9
+        INO_CONSOLE => (5 << 8) | 1,    // 5:1
+        INO_TTY => (5 << 8) | 0,        // 5:0
+        _ => 0,
+    }
+}
 
 /// Simple PRNG state for /dev/urandom (xorshift64).
 static mut RNG_STATE: u64 = 0x12345678_9ABCDEF0;
@@ -55,9 +72,11 @@ impl FileSystem for DevFs {
                 buf.mode = S_IFDIR | 0o755;
                 buf.nlink = 2;
             }
-            INO_NULL | INO_ZERO | INO_URANDOM | INO_CONSOLE | INO_TTY => {
+            INO_NULL | INO_ZERO | INO_URANDOM | INO_CONSOLE | INO_TTY |
+            INO_RANDOM | INO_FULL => {
                 buf.mode = S_IFCHR | 0o666;
                 buf.nlink = 1;
+                buf.rdev = dev_rdev(ino);
             }
             _ => return Err(VfsError::NotFound),
         }
@@ -85,16 +104,32 @@ impl FileSystem for DevFs {
                 }
                 Ok(buf.len())
             }
-            INO_CONSOLE | INO_TTY => Ok(0), // no console read via devfs
+            INO_RANDOM => {
+                // /dev/random: same as urandom (no blocking entropy pool distinction)
+                let mut i = 0;
+                while i + 8 <= buf.len() {
+                    let r = next_random();
+                    buf[i..i+8].copy_from_slice(&r.to_le_bytes());
+                    i += 8;
+                }
+                while i < buf.len() { buf[i] = next_random() as u8; i += 1; }
+                Ok(buf.len())
+            }
+            INO_FULL => {
+                // /dev/full: reads return zeros (like /dev/zero)
+                for b in buf.iter_mut() { *b = 0; }
+                Ok(buf.len())
+            }
+            INO_CONSOLE | INO_TTY => Ok(0),
             _ => Err(VfsError::NotFound),
         }
     }
 
     fn write(&mut self, ino: InodeId, _offset: u64, buf: &[u8]) -> Result<usize, VfsError> {
         match ino {
-            INO_NULL => Ok(buf.len()), // discard
-            INO_ZERO => Err(VfsError::NotSupported),
-            INO_CONSOLE | INO_TTY => Ok(buf.len()), // discard (real console goes through ioctl/serial)
+            INO_NULL => Ok(buf.len()),
+            INO_FULL => Err(VfsError::NoSpace), // /dev/full: always ENOSPC
+            INO_CONSOLE | INO_TTY => Ok(buf.len()),
             _ => Err(VfsError::NotSupported),
         }
     }
