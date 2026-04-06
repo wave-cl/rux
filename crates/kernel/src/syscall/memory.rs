@@ -485,6 +485,7 @@ unsafe fn writeback_shared(addr: usize, len: usize) {
     for m in SHARED_MAPS.iter_mut() {
         if !m.active { continue; }
         // Check overlap
+        if m.va == 0 || m.len == 0 { continue; }
         let m_end = m.va + m.len;
         let r_end = addr + len;
         if m.va < r_end && addr < m_end {
