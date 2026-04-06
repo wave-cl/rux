@@ -974,17 +974,18 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     let is_fork_child = crate::task_table::current_task_idx() != 0;
 
     if is_fork_child {
-        // Switch CR3 to kernel PT so it's safe to free the forked PT.
+        // Switch CR3/TTBR0 to kernel PT so it's safe to work with page tables.
         let kpt = crate::pgtrack::kernel_pt_root();
         if kpt != 0 {
             use rux_arch::PageTableRootOps;
             crate::arch::Arch::write(kpt);
         }
-        // Free the forked PT (the address space we're replacing).
-        // Use the COW-aware variant: shared frames are only freed when their
-        // refcount reaches zero (dec_ref returns true).
-        let old_pt_root = crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root;
-        if old_pt_root != 0 {
+        // Free the old PT — but NOT for CLONE_VM (vfork) children, since
+        // they share the parent's address space. The parent still needs it.
+        let idx = crate::task_table::current_task_idx();
+        let is_clone_vm = crate::task_table::TASK_TABLE[idx].clone_flags & crate::errno::CLONE_VM as u32 != 0;
+        let old_pt_root = crate::task_table::TASK_TABLE[idx].pt_root;
+        if old_pt_root != 0 && !is_clone_vm {
             let old_pt = crate::arch::PageTable::from_root(
                 rux_klib::PhysAddr::new(old_pt_root as usize)
             );

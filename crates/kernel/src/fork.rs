@@ -222,8 +222,8 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
 
     enqueue_child(child_idx);
 
-    // Write child tid to user space if requested
-    if child_tid_ptr != 0 {
+    // Write child tid to user space if CLONE_CHILD_SETTID requested
+    if flags & crate::errno::CLONE_CHILD_SETTID != 0 && child_tid_ptr > 0x1000 {
         crate::uaccess::put_user(child_tid_ptr, child_pid as u32);
     }
 

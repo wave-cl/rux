@@ -489,7 +489,7 @@ check "dev/urandom"            "8"
 check "touch timestamp"        "Modify:"
 check "pipe cat"               "abc"
 check "signal trap"            "trapped_sig"
-# aarch64: crashes in musl during timeout fork+exec+alarm
+# aarch64: vfork+exec corrupts parent 
 # check "timeout (alarm)"        "timeout_exit="
 check "tail (lseek)"           "/bin/sh"
 check "find /etc"              "passwd"
