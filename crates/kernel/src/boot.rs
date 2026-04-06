@@ -212,8 +212,8 @@ unsafe fn try_mount_ext2_root(
     log(")\n");
 
 
-    EXT2_FS.write(ext2);
-    let ext2_ptr = EXT2_FS.assume_init_mut() as *mut rux_fs::ext2::Ext2Fs;
+    (*(&raw mut EXT2_FS)).write(ext2);
+    let ext2_ptr = (*(&raw mut EXT2_FS)).assume_init_mut() as *mut rux_fs::ext2::Ext2Fs;
     let vfs = &mut *vfs_ptr;
     vfs.set_root(rux_fs::vfs::MountedFs::Ext2(ext2_ptr));
     true

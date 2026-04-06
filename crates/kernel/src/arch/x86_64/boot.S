@@ -3,8 +3,6 @@
  * and jump to the 64-bit Rust entry point.
  */
 
-.att_syntax prefix
-
 /* Multiboot header — must be in first 8K of the binary */
 .section .multiboot2, "a"
 .align 4

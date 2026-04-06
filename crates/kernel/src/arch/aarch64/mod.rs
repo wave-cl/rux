@@ -129,8 +129,8 @@ pub unsafe fn probe_blk(vq_addr: usize, log: fn(&str)) -> Option<(*const dyn rux
     match rux_drivers::virtio::blk::VirtioBlk::new(base, vq_addr) {
         Ok(blk) => {
             let cap = blk.capacity_sectors();
-            VIRTIO_BLK_MMIO.write(blk);
-            Some((VIRTIO_BLK_MMIO.assume_init_ref() as *const _, cap))
+            (*(&raw mut VIRTIO_BLK_MMIO)).write(blk);
+            Some(((*(&raw const VIRTIO_BLK_MMIO)).assume_init_ref() as *const _, cap))
         }
         Err(_) => { log("rux: virtio-blk: init failed\n"); None }
     }

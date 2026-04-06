@@ -482,7 +482,7 @@ static mut SHARED_MAPS: [SharedMapping; MAX_SHARED_MAPS] = {
 unsafe fn writeback_shared(addr: usize, len: usize) {
     use rux_fs::FileSystem;
     let fs = crate::kstate::fs();
-    for m in SHARED_MAPS.iter_mut() {
+    for m in (*(&raw mut SHARED_MAPS)).iter_mut() {
         if !m.active { continue; }
         // Check overlap
         if m.va == 0 || m.len == 0 { continue; }
@@ -575,8 +575,8 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             }
             fixed_addr
         } else {
-            let r = unsafe { super::PROCESS.mmap_base };
-            unsafe { super::PROCESS.mmap_base += aligned_len; }
+            let r = super::PROCESS.mmap_base;
+            super::PROCESS.mmap_base += aligned_len;
             r
         };
 
@@ -610,7 +610,7 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
 
                 // Track MAP_SHARED mappings for write-back on munmap
                 if mmap_flags & MAP_SHARED != 0 {
-                    if let Some(slot) = SHARED_MAPS.iter_mut().find(|s| !s.active) {
+                    if let Some(slot) = (*(&raw mut SHARED_MAPS)).iter_mut().find(|s| !s.active) {
                         *slot = SharedMapping {
                             active: true, va: result, len, ino, offset: file_offset,
                         };

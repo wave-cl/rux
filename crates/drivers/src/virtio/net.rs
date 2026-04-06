@@ -191,7 +191,7 @@ pub unsafe fn send(frame: &[u8]) -> bool {
     let desc = NET.tx_desc as *mut Descriptor;
     // Use descriptor 0 for header, 1 for data
     let d0 = &mut *desc.add(0);
-    d0.addr = &NET.tx_hdr as *const VirtioNetHdr as u64;
+    d0.addr = core::ptr::addr_of!(NET.tx_hdr) as u64;
     d0.len = VirtioNetHdr::SIZE as u32;
     d0.flags = DESC_F_NEXT;
     d0.next = 1;

@@ -25,7 +25,7 @@ static mut CMDLINE_LEN: u8 = 0;
 
 /// Get the last exec'd cmdline (null-separated argv bytes).
 pub fn get_cmdline() -> (&'static [u8], u8) {
-    unsafe { (&CMDLINE_BUF, CMDLINE_LEN) }
+    unsafe { (&*(&raw const CMDLINE_BUF), *(&raw const CMDLINE_LEN)) }
 }
 
 /// Dynamic linking auxv entries (set by exec, cleared for static binaries).

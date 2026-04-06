@@ -268,7 +268,7 @@ pub fn mkdir_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
         let cred = super::current_cred();
         let fs = crate::kstate::fs();
         let umask = super::PROCESS.fs_ctx.umask as u32;
-        match fs.checked_mkdir(dir_ino, fname, (mode as u32 & 0o7777 & !umask), &cred) {
+        match fs.checked_mkdir(dir_ino, fname, mode as u32 & 0o7777 & !umask, &cred) {
             Ok(ino) => {
                 let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs());
                 0

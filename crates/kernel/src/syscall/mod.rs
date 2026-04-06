@@ -307,6 +307,7 @@ pub enum Syscall {
 }
 
 impl Syscall {
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             Syscall::Read => "read", Syscall::Write => "write",
@@ -328,7 +329,7 @@ impl Syscall {
             Syscall::Fstat | Syscall::FstatAt | Syscall::Stat => "stat",
             Syscall::Statx => "statx",
             Syscall::Getdents64 => "getdents64",
-            Syscall::Unknown(n) => "unknown",
+            Syscall::Unknown(_) => "unknown",
             _ => "other",
         }
     }
@@ -475,7 +476,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Futex => posix::futex(a0, a1, a2),
         Syscall::Sigaltstack => unsafe {
             // sigaltstack(ss, old_ss) — set/get alternate signal stack
-            let cold = &mut PROCESS.signal_cold;
+            let cold = &mut (*(&raw mut PROCESS)).signal_cold;
             if a1 != 0 { // old_ss: write current state
                 if crate::uaccess::validate_user_ptr(a1, 24).is_err() { return crate::errno::EFAULT as isize; }
                 crate::uaccess::put_user(a1, cold.alt_stack_base);

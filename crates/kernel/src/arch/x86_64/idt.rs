@@ -84,8 +84,6 @@ static mut IDT: [IdtEntry; IDT_ENTRIES] = [IdtEntry::EMPTY; IDT_ENTRIES];
 
 // Generate 256 interrupt stubs via assembly
 core::arch::global_asm!(r#"
-.att_syntax prefix
-
 // Common interrupt handler: saves all GPRs, calls Rust dispatch
 .global interrupt_common
 interrupt_common:
@@ -139,7 +137,7 @@ interrupt_return:
     addq $16, %rsp
 
     iretq
-"#);
+"#, options(att_syntax));
 
 // Macro to generate per-vector stubs. Exceptions with error codes (8, 10-14, 17, 21, 29, 30)
 // have the CPU push the error code; others need a dummy 0 pushed for uniform stack layout.
@@ -147,22 +145,22 @@ macro_rules! isr_stub {
     // No error code — push dummy 0
     (no_err, $vec:expr) => {
         core::arch::global_asm!(
-            ".att_syntax prefix",
             concat!(".global isr_stub_", stringify!($vec)),
             concat!("isr_stub_", stringify!($vec), ":"),
             "pushq $0",                          // dummy error code
             concat!("pushq $", stringify!($vec)), // vector number
             "jmp interrupt_common",
+            options(att_syntax),
         );
     };
     // Has error code (pushed by CPU)
     (err, $vec:expr) => {
         core::arch::global_asm!(
-            ".att_syntax prefix",
             concat!(".global isr_stub_", stringify!($vec)),
             concat!("isr_stub_", stringify!($vec), ":"),
             concat!("pushq $", stringify!($vec)), // vector number (error code already on stack)
             "jmp interrupt_common",
+            options(att_syntax),
         );
     };
 }

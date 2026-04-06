@@ -87,14 +87,14 @@ pub unsafe fn init(
     gateway: [u8; 4],
     netmask: [u8; 4],
 ) {
-    DEVICE.init(send_fn, recv_fn);
-    OUR_IP = ip;
+    (*(&raw mut DEVICE)).init(send_fn, recv_fn);
+    *(&raw mut OUR_IP) = ip;
 
     let hw_addr = HardwareAddress::Ethernet(EthernetAddress(mac));
     let config = Config::new(hw_addr);
     let now = Instant::from_millis(0);
 
-    let mut iface = Interface::new(config, &mut DEVICE, now);
+    let mut iface = Interface::new(config, &mut *(&raw mut DEVICE), now);
 
     // Set IP address
     let prefix_len = netmask_to_prefix(netmask);
@@ -119,10 +119,10 @@ pub unsafe fn init(
 /// Must not be called concurrently with other network functions.
 pub unsafe fn poll(timestamp_millis: u64) {
     if !CONFIGURED.load(core::sync::atomic::Ordering::Acquire) { return; }
-    let iface = IFACE.as_mut().unwrap_unchecked();
-    let sockets = SOCKETS.as_mut().unwrap_unchecked();
+    let iface = (*(&raw mut IFACE)).as_mut().unwrap_unchecked();
+    let sockets = (*(&raw mut SOCKETS)).as_mut().unwrap_unchecked();
     let now = Instant::from_millis(timestamp_millis as i64);
-    let _ = iface.poll(now, &mut DEVICE, sockets);
+    let _ = iface.poll(now, &mut *(&raw mut DEVICE), sockets);
 }
 
 pub fn is_configured() -> bool {
@@ -130,18 +130,18 @@ pub fn is_configured() -> bool {
 }
 
 pub fn our_ip() -> [u8; 4] {
-    unsafe { OUR_IP }
+    unsafe { *(&raw const OUR_IP) }
 }
 
 // ── TCP API ────────────────────────────────────────────────────────
 
 /// Allocate a TCP socket. Returns the SocketHandle on success.
 pub unsafe fn tcp_alloc() -> Option<SocketHandle> {
-    let sockets = SOCKETS.as_mut()?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut()?;
 
     // Find a free TCP buffer slot
-    let idx = TCP_BUF_USED.iter().position(|&used| !used)?;
-    TCP_BUF_USED[idx] = true;
+    let idx = (*(&raw const TCP_BUF_USED)).iter().position(|&used| !used)?;
+    (*(&raw mut TCP_BUF_USED))[idx] = true;
 
     // Zero the buffers (use write_bytes to avoid 64KB stack copy)
     core::ptr::write_bytes(TCP_RX_BUFS[idx].as_mut_ptr(), 0, TCP_RX_BUF_SIZE);
@@ -180,8 +180,8 @@ pub unsafe fn tcp_connect(
     dst_port: u16,
     src_port: u16,
 ) -> Result<(), i32> {
-    let sockets = SOCKETS.as_mut().ok_or(-1)?;
-    let iface = IFACE.as_mut().ok_or(-1)?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut().ok_or(-1)?;
+    let iface = (*(&raw mut IFACE)).as_mut().ok_or(-1)?;
     let socket = sockets.get_mut::<tcp::Socket>(handle);
     let remote = IpEndpoint::new(IpAddress::Ipv4(Ipv4Addr::from(dst_ip)), dst_port);
     let local = IpListenEndpoint { addr: None, port: src_port };
@@ -190,21 +190,21 @@ pub unsafe fn tcp_connect(
 
 /// Send data on a TCP socket. Returns bytes sent.
 pub unsafe fn tcp_send(handle: SocketHandle, data: &[u8]) -> Result<usize, i32> {
-    let sockets = SOCKETS.as_mut().ok_or(-1)?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut().ok_or(-1)?;
     let socket = sockets.get_mut::<tcp::Socket>(handle);
     socket.send_slice(data).map_err(|_| -1)
 }
 
 /// Put a TCP socket into listen mode on the specified port.
 pub unsafe fn tcp_listen(handle: SocketHandle, port: u16) -> Result<(), i32> {
-    let sockets = SOCKETS.as_mut().ok_or(-1)?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut().ok_or(-1)?;
     let socket = sockets.get_mut::<tcp::Socket>(handle);
     socket.listen(port).map_err(|_| -1)
 }
 
 /// Receive data from a TCP socket. Returns bytes received.
 pub unsafe fn tcp_recv(handle: SocketHandle, buf: &mut [u8]) -> Result<usize, i32> {
-    let sockets = SOCKETS.as_mut().ok_or(-1)?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut().ok_or(-1)?;
     let socket = sockets.get_mut::<tcp::Socket>(handle);
     socket.recv_slice(buf).map_err(|e| match e {
         tcp::RecvError::Finished => 0, // signal EOF by returning Ok(0) via special value
@@ -214,7 +214,7 @@ pub unsafe fn tcp_recv(handle: SocketHandle, buf: &mut [u8]) -> Result<usize, i3
 
 /// Close a TCP socket (send FIN).
 pub unsafe fn tcp_close(handle: SocketHandle) {
-    if let Some(sockets) = SOCKETS.as_mut() {
+    if let Some(sockets) = (*(&raw mut SOCKETS)).as_mut() {
         let socket = sockets.get_mut::<tcp::Socket>(handle);
         socket.close();
     }
@@ -222,7 +222,7 @@ pub unsafe fn tcp_close(handle: SocketHandle) {
 
 /// Check if TCP socket has data to receive.
 pub unsafe fn tcp_can_recv(handle: SocketHandle) -> bool {
-    SOCKETS.as_mut()
+    (*(&raw mut SOCKETS)).as_mut()
         .map(|s| {
             let sock = s.get_mut::<tcp::Socket>(handle);
             sock.can_recv() || !sock.may_recv()
@@ -232,28 +232,28 @@ pub unsafe fn tcp_can_recv(handle: SocketHandle) -> bool {
 
 /// Check if TCP socket can send data.
 pub unsafe fn tcp_can_send(handle: SocketHandle) -> bool {
-    SOCKETS.as_mut()
+    (*(&raw mut SOCKETS)).as_mut()
         .map(|s| s.get_mut::<tcp::Socket>(handle).can_send())
         .unwrap_or(false)
 }
 
 /// Check if TCP socket is active (connected or connecting).
 pub unsafe fn tcp_is_active(handle: SocketHandle) -> bool {
-    SOCKETS.as_mut()
+    (*(&raw mut SOCKETS)).as_mut()
         .map(|s| s.get_mut::<tcp::Socket>(handle).is_active())
         .unwrap_or(false)
 }
 
 /// Get TCP socket state.
 pub unsafe fn tcp_state(handle: SocketHandle) -> tcp::State {
-    SOCKETS.as_mut()
+    (*(&raw mut SOCKETS)).as_mut()
         .map(|s| s.get_mut::<tcp::Socket>(handle).state())
         .unwrap_or(tcp::State::Closed)
 }
 
 /// Check if TCP socket is in Established or CloseWait state (connected).
 pub unsafe fn tcp_is_established(handle: SocketHandle) -> bool {
-    SOCKETS.as_mut()
+    (*(&raw mut SOCKETS)).as_mut()
         .map(|s| {
             let state = s.get_mut::<tcp::Socket>(handle).state();
             matches!(state, tcp::State::Established | tcp::State::CloseWait)
@@ -264,10 +264,11 @@ pub unsafe fn tcp_is_established(handle: SocketHandle) -> bool {
 /// Get the remote (peer) address of a connected TCP socket.
 /// Returns (ip4_octets, port), or ([0;4], 0) if not connected.
 pub unsafe fn tcp_remote_addr(handle: SocketHandle) -> ([u8; 4], u16) {
-    SOCKETS.as_mut()
+    (*(&raw mut SOCKETS)).as_mut()
         .and_then(|s| {
             let sock = s.get_mut::<tcp::Socket>(handle);
             sock.remote_endpoint().map(|ep| {
+                #[allow(unreachable_patterns)]
                 match ep.addr {
                     smoltcp::wire::IpAddress::Ipv4(addr) => {
                         let b = addr.octets();
@@ -284,10 +285,10 @@ pub unsafe fn tcp_remote_addr(handle: SocketHandle) -> ([u8; 4], u16) {
 
 /// Allocate a UDP socket.
 pub unsafe fn udp_alloc() -> Option<SocketHandle> {
-    let sockets = SOCKETS.as_mut()?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut()?;
 
-    let idx = UDP_BUF_USED.iter().position(|&used| !used)?;
-    UDP_BUF_USED[idx] = true;
+    let idx = (*(&raw const UDP_BUF_USED)).iter().position(|&used| !used)?;
+    (*(&raw mut UDP_BUF_USED))[idx] = true;
 
     UDP_RX_BUFS[idx] = [0; UDP_RX_BUF_SIZE];
     UDP_TX_BUFS[idx] = [0; UDP_TX_BUF_SIZE];
@@ -308,7 +309,7 @@ pub unsafe fn udp_alloc() -> Option<SocketHandle> {
 
 /// Bind a UDP socket to a port.
 pub unsafe fn udp_bind(handle: SocketHandle, port: u16) -> Result<(), i32> {
-    let sockets = SOCKETS.as_mut().ok_or(-1)?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut().ok_or(-1)?;
     let socket = sockets.get_mut::<udp::Socket>(handle);
     socket.bind(IpListenEndpoint { addr: None, port }).map_err(|_| -1)
 }
@@ -320,7 +321,7 @@ pub unsafe fn udp_send(
     dst_port: u16,
     data: &[u8],
 ) -> Result<(), i32> {
-    let sockets = SOCKETS.as_mut().ok_or(-1)?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut().ok_or(-1)?;
     let socket = sockets.get_mut::<udp::Socket>(handle);
     let dst = IpEndpoint::new(IpAddress::Ipv4(Ipv4Addr::from(dst_ip)), dst_port);
     let meta = udp::UdpMetadata::from(dst);
@@ -332,7 +333,7 @@ pub unsafe fn udp_recv(
     handle: SocketHandle,
     buf: &mut [u8],
 ) -> Result<(usize, [u8; 4], u16), i32> {
-    let sockets = SOCKETS.as_mut().ok_or(-1)?;
+    let sockets = (*(&raw mut SOCKETS)).as_mut().ok_or(-1)?;
     let socket = sockets.get_mut::<udp::Socket>(handle);
     match socket.recv_slice(buf) {
         Ok((len, meta)) => {
@@ -347,7 +348,7 @@ pub unsafe fn udp_recv(
 
 /// Check if UDP socket has data to receive.
 pub unsafe fn udp_can_recv(handle: SocketHandle) -> bool {
-    SOCKETS.as_mut()
+    (*(&raw mut SOCKETS)).as_mut()
         .map(|s| s.get_mut::<udp::Socket>(handle).can_recv())
         .unwrap_or(false)
 }
@@ -356,15 +357,15 @@ pub unsafe fn udp_can_recv(handle: SocketHandle) -> bool {
 
 /// Free a socket handle, returning its slot to the pool.
 pub unsafe fn socket_free(handle: SocketHandle) {
-    if let Some(sockets) = SOCKETS.as_mut() {
+    if let Some(sockets) = (*(&raw mut SOCKETS)).as_mut() {
         // Free the TCP buffer slot so it can be reused
         let raw = handle_to_raw(handle);
         if raw < MAX_SOCKETS {
-            let buf_idx = HANDLE_TO_BUF[raw];
+            let buf_idx = (*(&raw const HANDLE_TO_BUF))[raw];
             if buf_idx >= 0 && (buf_idx as usize) < MAX_TCP_SOCKETS {
-                TCP_BUF_USED[buf_idx as usize] = false;
+                (*(&raw mut TCP_BUF_USED))[buf_idx as usize] = false;
             }
-            HANDLE_TO_BUF[raw] = -1;
+            (*(&raw mut HANDLE_TO_BUF))[raw] = -1;
         }
         sockets.remove(handle);
     }
@@ -372,9 +373,9 @@ pub unsafe fn socket_free(handle: SocketHandle) {
 
 /// Allocate an ephemeral port number.
 pub unsafe fn alloc_port() -> u16 {
-    NEXT_PORT += 1;
-    if NEXT_PORT == 0 { NEXT_PORT = 49152; }
-    NEXT_PORT
+    *(&raw mut NEXT_PORT) += 1;
+    if *(&raw const NEXT_PORT) == 0 { *(&raw mut NEXT_PORT) = 49152; }
+    *(&raw const NEXT_PORT)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────

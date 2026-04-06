@@ -235,7 +235,6 @@ unsafe extern "C" fn syscall_entry_gs() {
 // syscall register frame (same layout as syscall_entry pushes).
 // Pops all saved regs (with RAX=0 for fork return), then sysretq.
 core::arch::global_asm!(r#"
-.att_syntax prefix
 .global fork_child_sysret
 fork_child_sysret:
     popq %r9
@@ -255,11 +254,10 @@ fork_child_sysret:
     popq %rcx
     movq SAVED_USER_RSP(%rip), %rsp
     sysretq
-"#);
+"#, options(att_syntax));
 
 // GS-based fork child return trampoline (for KVM/real hardware).
 core::arch::global_asm!(r#"
-.att_syntax prefix
 .global fork_child_sysret_gs
 fork_child_sysret_gs:
     popq %r9
@@ -280,7 +278,7 @@ fork_child_sysret_gs:
     movq %gs:0, %rsp
     swapgs
     sysretq
-"#);
+"#, options(att_syntax));
 
 extern "C" {
     pub fn fork_child_sysret();
@@ -638,8 +636,6 @@ static mut VFORK_JMP: JmpBuf = JmpBuf {
 
 // setjmp/longjmp in pure assembly for correctness
 core::arch::global_asm!(r#"
-.att_syntax prefix
-
 // vfork_setjmp: saves callee-saved regs + RSP + return address into VFORK_JMP.
 // Returns 0 on first call.
 // RDI = pointer to JmpBuf
@@ -671,7 +667,7 @@ vfork_longjmp:
     movq 48(%rdi), %rsp
     movq %rsi, %rax            // return value
     jmpq *56(%rdi)             // jump to saved return address
-"#);
+"#, options(att_syntax));
 
 extern "C" {
     fn vfork_setjmp(buf: *mut JmpBuf) -> i64;

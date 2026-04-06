@@ -604,7 +604,7 @@ pub fn sendfile(out_fd: usize, in_fd: usize, offset_ptr: usize, count: usize) ->
             if let Some(f) = fdt::get_fd_mut(in_fd) { f.offset = off as usize; }
         }
     }
-    let mut buf = [0u8; 4096];
+    let buf = [0u8; 4096]; // mutated via raw pointer in read()
     let mut total: isize = 0;
     let mut remaining = count;
     while remaining > 0 {

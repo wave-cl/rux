@@ -152,7 +152,7 @@ pub unsafe fn send(frame: &[u8]) -> bool {
 
     let desc = STATE.tx_desc as *mut Descriptor;
     let d0 = &mut *desc.add(0);
-    d0.addr = &STATE.tx_hdr as *const NetHdr as u64;
+    d0.addr = &raw const (*(&raw const STATE)).tx_hdr as *const NetHdr as u64;
     d0.len = VIRTIO_NET_HDR_SIZE as u32;
     d0.flags = DESC_F_NEXT;
     d0.next = 1;

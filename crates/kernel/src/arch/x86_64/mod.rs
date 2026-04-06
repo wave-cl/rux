@@ -15,9 +15,9 @@ pub mod fork;
 pub mod task_switch;
 
 // Include boot assembly: multiboot1 header + 32→64 bit transition
-core::arch::global_asm!(include_str!("boot.S"));
+core::arch::global_asm!(include_str!("boot.S"), options(att_syntax));
 // AP trampoline: 16-bit → long mode startup code, copied to 0x8000 at runtime
-core::arch::global_asm!(include_str!("ap_trampoline.S"));
+core::arch::global_asm!(include_str!("ap_trampoline.S"), options(att_syntax));
 
 /// Zero-sized marker type for x86_64 architecture trait implementations.
 pub struct X86_64;
@@ -144,8 +144,8 @@ pub unsafe fn probe_blk(vq_addr: usize, log: fn(&str)) -> Option<(*const dyn rux
     match rux_drivers::virtio::blk_pci::VirtioBlkPci::probe(vq_addr) {
         Ok(blk) => {
             let cap = blk.capacity_sectors();
-            VIRTIO_BLK_PCI.write(blk);
-            Some((VIRTIO_BLK_PCI.assume_init_ref() as *const _, cap))
+            (*(&raw mut VIRTIO_BLK_PCI)).write(blk);
+            Some(((*(&raw const VIRTIO_BLK_PCI)).assume_init_ref() as *const _, cap))
         }
         Err(_) => { log("rux: no virtio-blk-pci device found\n"); None }
     }
