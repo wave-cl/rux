@@ -283,6 +283,37 @@ pub fn resolve_nofollow<F: FileSystem>(fs: &F, cwd: InodeId, path: &[u8]) -> Res
     }
 }
 
+/// Like resolve_nofollow but with execute permission checks on intermediates.
+pub fn resolve_nofollow_checked<F: FileSystem>(
+    fs: &F, cwd: InodeId, path: &[u8], cred: &Credentials,
+) -> Result<InodeId, isize> {
+    if path.is_empty() { return Ok(cwd); }
+    let mut end = path.len();
+    while end > 1 && path[end - 1] == b'/' { end -= 1; }
+    let path = &path[..end];
+    let last_slash = path.iter().rposition(|&b| b == b'/');
+    match last_slash {
+        None => {
+            let fname = FileName::new(path).map_err(|_| -22isize)?;
+            fs.lookup(cwd, fname).map_err(|_| -2isize)
+        }
+        Some(0) => {
+            let name = &path[1..];
+            if name.is_empty() { return Ok(fs.root_inode()); }
+            let fname = FileName::new(name).map_err(|_| -22isize)?;
+            fs.lookup(fs.root_inode(), fname).map_err(|_| -2isize)
+        }
+        Some(s) => {
+            let parent_path = &path[..s];
+            let name = &path[s + 1..];
+            let parent = resolve_path_at_checked(fs, cwd, parent_path, cred)
+                .map_err(|e| -(e.as_errno() as isize))?;
+            let fname = FileName::new(name).map_err(|_| -22isize)?;
+            fs.lookup(parent, fname).map_err(|_| -2isize)
+        }
+    }
+}
+
 /// Resolve a path to (parent_inode, basename).
 /// Used by open/creat/unlink/mkdir to find the parent directory.
 pub fn resolve_parent_and_name<'a, F: FileSystem>(

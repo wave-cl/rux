@@ -14,25 +14,31 @@ pub fn lstat(pathname: usize, buf: usize) -> isize {
     fstatat(0xffffff9c, pathname, buf, 0x100) // AT_SYMLINK_NOFOLLOW
 }
 
-/// Write a minimal stat buffer with just mode and blksize.
-unsafe fn synthetic_stat(buf: usize, mode: u32) {
+/// Write a synthetic stat buffer for special fds (console, pipes).
+/// Sets mode, blksize, nlink=1, ino=fd+1 (non-zero), dev=0.
+unsafe fn synthetic_stat(buf: usize, mode: u32, fd: usize) {
     let p = buf as *mut u8;
     for i in 0..144 { *p.add(i) = 0; }
     *((buf + STAT_MODE_OFF) as *mut u32) = mode;
     *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
+    // st_ino: use fd+1 so it's non-zero (offset 0 on both x86_64 and aarch64)
+    *(buf as *mut u64) = (fd + 1) as u64;
+    // st_nlink: 1 (offset 16 on x86_64, varies — use StatLayout if available)
+    // For simplicity, write at a known offset for both arches
+    *((buf + 16) as *mut u32) = 1;
 }
 
 /// fstat(fd, statbuf) — POSIX.1
 pub fn fstat(fd: usize, buf: usize) -> isize {
     if buf == 0 { return crate::errno::EFAULT; }
     if fd <= 2 && fdt::is_console_fd(fd) {
-        unsafe { synthetic_stat(buf, 0o20666); } // S_IFCHR | 0666
+        unsafe { synthetic_stat(buf, 0o20666, fd); } // S_IFCHR | 0666
         return 0;
     }
     if fd <= 2 {
         unsafe {
             if (*fdt::FD_TABLE)[fd].is_pipe {
-                synthetic_stat(buf, 0o10666); // S_IFIFO | 0666
+                synthetic_stat(buf, 0o10666, fd); // S_IFIFO | 0666
                 return 0;
             }
         }
@@ -44,7 +50,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
         let fs = crate::kstate::fs();
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
         if fs.stat(f.ino, &mut vfs_stat).is_err() {
-            synthetic_stat(buf, 0o100644); // S_IFREG | 0644
+            synthetic_stat(buf, 0o100644, fd); // S_IFREG | 0644
             return 0;
         }
         crate::arch::fill_linux_stat::<crate::arch::Arch>(buf, &vfs_stat);

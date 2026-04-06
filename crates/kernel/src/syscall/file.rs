@@ -6,11 +6,19 @@ type Arch = crate::arch::Arch;
 
 const O_CREAT: usize = 0x40;
 const O_EXCL: usize = 0x80;
-const O_NOFOLLOW: usize = 0x20000;
-const O_DIRECTORY: usize = 0x10000;
 const O_APPEND: usize = 0x400;
 #[allow(dead_code)]
 const O_NONBLOCK: usize = 0x800;
+
+// O_DIRECTORY and O_NOFOLLOW have different values on x86_64 vs aarch64
+#[cfg(target_arch = "x86_64")]
+const O_DIRECTORY: usize = 0x10000;
+#[cfg(target_arch = "x86_64")]
+const O_NOFOLLOW: usize = 0x20000;
+#[cfg(target_arch = "aarch64")]
+const O_DIRECTORY: usize = 0x4000;
+#[cfg(target_arch = "aarch64")]
+const O_NOFOLLOW: usize = 0x8000;
 /// read(fd, buf, count) — POSIX.1
 /// readv(fd, iov, iovcnt) — scatter read
 pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
@@ -190,11 +198,31 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
 
         let o_creat = flags & O_CREAT != 0;
 
-        match super::resolve_with_cwd(path) {
+        // O_NOFOLLOW: resolve without following the final symlink
+        let resolve_result = if flags & O_NOFOLLOW != 0 {
+            let cred = super::current_cred();
+            rux_fs::path::resolve_nofollow_checked(
+                crate::kstate::fs(), super::PROCESS.fs_ctx.cwd, path, &cred,
+            )
+        } else {
+            super::resolve_with_cwd(path)
+        };
+
+        match resolve_result {
             Ok(ino) => {
                 // O_EXCL: fail if file exists when creating exclusively
                 if o_creat && flags & O_EXCL != 0 {
                     return crate::errno::EEXIST;
+                }
+                // O_NOFOLLOW: fail if final component is a symlink
+                if flags & O_NOFOLLOW != 0 {
+                    use rux_fs::FileSystem;
+                    let mut st = core::mem::zeroed::<rux_fs::InodeStat>();
+                    if crate::kstate::fs().stat(ino, &mut st).is_ok() {
+                        if st.mode & rux_fs::S_IFMT == rux_fs::S_IFLNK {
+                            return crate::errno::ELOOP;
+                        }
+                    }
                 }
                 // O_DIRECTORY: fail if not a directory
                 if flags & O_DIRECTORY != 0 {
@@ -206,12 +234,6 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                         }
                     }
                 }
-                // O_NOFOLLOW: fail if target is a symlink (resolved path shouldn't be,
-                // but check the original unresolved path)
-                // Note: resolve_with_cwd follows symlinks, so O_NOFOLLOW on the
-                // final component requires resolve_nofollow. For now, the check
-                // is a no-op since we always follow. This is acceptable — most
-                // callers use O_NOFOLLOW|O_PATH which we don't support yet.
                 // Permission check via VFS layer
                 let cred = super::current_cred();
                 let o_rdonly = flags & 3 == 0;

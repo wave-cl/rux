@@ -18,6 +18,7 @@ pub const EFAULT: isize = -14;     // Bad address
 pub const EEXIST: isize = -17;     // File exists
 pub const ENOTDIR: isize = -20;    // Not a directory
 pub const EINVAL: isize = -22;     // Invalid argument
+pub const ELOOP: isize = -40;      // Too many levels of symbolic links
 pub const ESPIPE: isize = -29;     // Illegal seek (pipe)
 pub const EPIPE: isize = -32;      // Broken pipe
 pub const ERANGE: isize = -34;     // Numerical result out of range
