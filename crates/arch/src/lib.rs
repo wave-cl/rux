@@ -242,6 +242,13 @@ pub unsafe trait SignalOps {
     /// Redirect execution to the signal handler with signum as first argument.
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8);
 
+    /// Redirect execution to an SA_SIGINFO handler: (signum, siginfo_ptr, ucontext_ptr).
+    /// Default: calls sig_redirect_to_handler (ignores extra args).
+    unsafe fn sig_redirect_to_handler_siginfo(handler: usize, signum: u8, siginfo_ptr: usize) {
+        Self::sig_redirect_to_handler(handler, signum);
+        let _ = siginfo_ptr; // arch override should pass this as arg2
+    }
+
     /// Read the signal frame at `frame_addr`, restore arch-specific registers.
     /// Returns (original_syscall_result, saved_blocked_mask).
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64);

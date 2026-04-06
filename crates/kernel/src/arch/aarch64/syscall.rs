@@ -157,6 +157,15 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         *regs.add(30) = SIGRETURN_TRAMPOLINE_VA as u64;    // x30 (LR) = sigreturn trampoline
     }
 
+    unsafe fn sig_redirect_to_handler_siginfo(handler: usize, signum: u8, siginfo_ptr: usize) {
+        let regs = CURRENT_REGS_PTR;
+        *regs.add(31) = handler as u64;                    // ELR_EL1 = handler
+        *regs.add(0) = signum as u64;                      // x0 = signal number
+        *regs.add(1) = siginfo_ptr as u64;                 // x1 = siginfo_t*
+        *regs.add(2) = 0u64;                               // x2 = ucontext* (NULL)
+        *regs.add(30) = SIGRETURN_TRAMPOLINE_VA as u64;    // x30 (LR) = sigreturn trampoline
+    }
+
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
         let frame = frame_addr as *const SignalFrameAarch64;
         let saved_elr = (*frame).saved_elr;

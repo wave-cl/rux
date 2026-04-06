@@ -578,10 +578,25 @@ pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
     } else {
         S::sig_read_user_sp()
     };
-    let new_sp = (user_sp - S::SIGNAL_FRAME_SIZE) & !0xF;
-    S::sig_write_frame(new_sp, syscall_result, hot.blocked.0, restorer[signum as usize], signum);
+    // Allocate space for signal frame + optional siginfo_t (128 bytes)
+    let sa_siginfo = action.flags & SA_SIGINFO != 0;
+    let extra = if sa_siginfo { 128 } else { 0 }; // sizeof(siginfo_t) = 128
+    let new_sp = (user_sp - S::SIGNAL_FRAME_SIZE - extra) & !0xF;
+    let frame_addr = new_sp + extra; // frame is above siginfo
+    S::sig_write_frame(frame_addr, syscall_result, hot.blocked.0, restorer[signum as usize], signum);
     S::sig_write_user_sp(new_sp);
-    S::sig_redirect_to_handler(action.handler, signum);
+
+    if sa_siginfo {
+        // Write minimal siginfo_t at new_sp (below frame)
+        let si = new_sp;
+        let si_ptr = si as *mut u8;
+        for i in 0..128 { *si_ptr.add(i) = 0; } // zero the struct
+        *(si as *mut i32) = signum as i32;         // si_signo (offset 0)
+        *((si + 8) as *mut i32) = 0;              // si_code = SI_USER (offset 8)
+        S::sig_redirect_to_handler_siginfo(action.handler, signum, si);
+    } else {
+        S::sig_redirect_to_handler(action.handler, signum);
+    }
 
     // SA_RESETHAND: reset handler to default after delivery (one-shot)
     if action.flags & SA_RESETHAND != 0 {

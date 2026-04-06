@@ -375,6 +375,14 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);   // RDI = signum
     }
 
+    unsafe fn sig_redirect_to_handler_siginfo(handler: usize, signum: u8, siginfo_ptr: usize) {
+        let kt = CURRENT_KSTACK_TOP as usize;
+        core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);   // RCX → RIP
+        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);   // RDI = signum
+        core::ptr::write_volatile((kt - 72) as *mut u64, siginfo_ptr as u64); // RSI = siginfo
+        core::ptr::write_volatile((kt - 64) as *mut u64, 0u64);            // RDX = ucontext (NULL)
+    }
+
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
         // frame_addr = SAVED_USER_RSP at sigreturn time = frame_start + 8
         // (signal handler's `ret` popped the restorer word, advancing RSP by 8)
