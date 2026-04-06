@@ -83,11 +83,6 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                         write_hex(far as usize);
                         super::console::write_str(" pc=");
                         write_hex(elr as usize);
-                        // Debug: dump key state for Python crash diagnosis
-                        super::console::write_str(" x19=");
-                        write_hex(*r.add(19) as usize);
-                        super::console::write_str(" dfsc=");
-                        write_hex((esr & 0x3F) as usize);
                         super::console::write_str("\n");
                     }
                     crate::syscall::posix::exit(139);
