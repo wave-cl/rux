@@ -114,10 +114,12 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     // Environment strings
     // Note: ENV=/etc/profile causes ash to crash during early init.
     // Tests run via `. /etc/profile` fed through stdin instead.
-    let env_strs: [&[u8]; 3] = [
+    let env_strs: [&[u8]; 5] = [
         b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0",
         b"HOME=/root\0",
         b"TERM=linux\0",
+        b"LANG=C.UTF-8\0",
+        b"PYTHONUTF8=1\0",
     ];
 
     // Calculate string area size (saturating to prevent overflow from stale data)

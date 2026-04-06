@@ -837,7 +837,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(_path_ptr: usize, _argv_pt
 }
 
 #[cfg(not(feature = "native"))]
-pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize) -> ! {
+pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize, envp_ptr: usize) -> ! {
     use rux_arch::ConsoleOps;
 
     let fs = crate::kstate::fs();
@@ -846,7 +846,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     let path = crate::uaccess::read_user_cstr(path_ptr);
 
     crate::uaccess::stac();
-    rux_proc::execargs::set_from_user(path, argv_ptr, 0);
+    rux_proc::execargs::set_from_user(path, argv_ptr, envp_ptr);
     crate::uaccess::clac();
 
     let ino = match rux_fs::path::resolve_path(fs, path) {

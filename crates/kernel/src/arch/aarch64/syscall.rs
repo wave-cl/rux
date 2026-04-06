@@ -50,7 +50,7 @@ pub fn handle_syscall(frame: *mut u8) {
                     crate::fork::sys_fork() as i64
                 }
             }
-            221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize) }
+            221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize, a2 as usize) }
             139 => {
                 // rt_sigreturn — restore pre-signal state (reads signal frame from user stack)
                 crate::uaccess::stac();

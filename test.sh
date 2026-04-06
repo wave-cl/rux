@@ -522,8 +522,10 @@ check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "perl"                 "perl:42"
 check "python3 version"      "Python 3"
-# TODO: python3 -c crashes on aarch64 (SIGSEGV in _PySys_InitMain during Py_Initialize)
-# Needs QEMU gdb stub investigation. perl + python3 --version both work.
+# TODO: python3 -c SIGSEGV on aarch64 — interp+0x550 (config field) is NULL
+# during _PySys_InitMain. Root cause: a config init function returns -1,
+# skipping stdio setup. LANG=C.UTF-8 and PYTHONUTF8=1 don't help.
+# Needs GDB with QEMU gdbstub for interactive debugging.
 # check "python3 print"        "4950"
 check "subshell"             "subshell_ok"
 check "fork + pipe"          "2"
