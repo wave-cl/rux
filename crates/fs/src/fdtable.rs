@@ -183,6 +183,8 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
             };
         } else {
             (*FD_TABLE)[newfd] = (*FD_TABLE)[oldfd];
+            // POSIX: dup2 clears FD_CLOEXEC on the new fd
+            (*FD_TABLE)[newfd].fd_flags = 0;
             // Increment pipe ref count for the dup'd fd (skip in vfork child)
             if (*FD_TABLE)[newfd].is_pipe {
                 if let Some(p) = pipes {
@@ -294,12 +296,13 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
 
 /// Seek on a file descriptor. Returns new offset, negative on error.
 pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> isize {
-    if fd < FIRST_FILE_FD { return -9; }
+    if fd < FIRST_FILE_FD { return -29; } // ESPIPE: console/pipe fds are not seekable
     unsafe {
         let f = match get_fd_mut(fd) {
             Some(f) => f,
             None => return -9,
         };
+        if f.is_pipe { return -29; } // ESPIPE: pipes are not seekable
         let new_off: i64 = match whence {
             0 => offset, // SEEK_SET
             1 => f.offset as i64 + offset, // SEEK_CUR

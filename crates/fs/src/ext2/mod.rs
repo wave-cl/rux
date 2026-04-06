@@ -199,13 +199,22 @@ impl Ext2Fs {
                 .map_err(|_| VfsError::IoError)?;
         }
 
-        // Update cache if this block is cached
+        // Update cache (or insert if not cached) for read-after-write consistency
         let inner = &mut *self.inner.get();
+        let mut found = false;
         for entry in inner.cache.iter_mut() {
             if entry.valid && entry.block_no == block_no {
                 entry.data[..bs].copy_from_slice(&buf[..bs]);
+                found = true;
                 break;
             }
+        }
+        if !found {
+            let idx = inner.cache_idx;
+            inner.cache_idx = (idx + 1) % 32;
+            inner.cache[idx].block_no = block_no;
+            inner.cache[idx].data[..bs].copy_from_slice(&buf[..bs]);
+            inner.cache[idx].valid = true;
         }
 
         Ok(())

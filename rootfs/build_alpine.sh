@@ -27,7 +27,7 @@ build_alpine() {
     local ARCH="$1"
     local ALPINE_ARCH="$2"  # Alpine arch name (x86_64 or aarch64)
     local OUTPUT="$OUT_DIR/alpine_${ARCH}.img"
-    local IMG_SIZE_MB=64
+    local IMG_SIZE_MB=256
     local STAGING="$OUT_DIR/alpine_staging_${ARCH}"
     local TARBALL="$OUT_DIR/alpine-minirootfs-${ALPINE_VERSION}.0-${ALPINE_ARCH}.tar.gz"
 
