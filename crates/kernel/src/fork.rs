@@ -227,6 +227,19 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
         crate::uaccess::put_user(child_tid_ptr, child_pid as u32);
     }
 
+    // CLONE_VFORK: block parent until child execs or exits.
+    // The child shares the parent's address space — running both
+    // concurrently would corrupt shared state (stack, globals).
+    if flags & crate::errno::CLONE_VFORK != 0 {
+        // Save parent state, yield to child, wait for child to exec/exit
+        let parent_idx = current_task_idx();
+        TASK_TABLE[parent_idx].state = TaskState::Sleeping;
+        TASK_TABLE[parent_idx].wake_at = 0; // woken by child's exec/exit
+        // Mark child so exec/exit knows to wake the parent
+        TASK_TABLE[child_idx].clone_flags |= crate::errno::CLONE_VFORK as u32;
+        crate::scheduler::get().schedule();
+    }
+
     child_pid as isize
 }
 
@@ -234,7 +247,7 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
 
 /// Sync current PROCESS/FD_TABLE globals into the given task slot.
 #[inline]
-unsafe fn sync_globals_to_slot(idx: usize) {
+pub unsafe fn sync_globals_to_slot(idx: usize) {
     let slot = &mut TASK_TABLE[idx];
     slot.program_brk = crate::syscall::PROCESS.program_brk;
     slot.mmap_base = crate::syscall::PROCESS.mmap_base;

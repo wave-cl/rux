@@ -48,6 +48,7 @@ pub const SIGTSTP: u8 = 20;
 // ── Clone flags (Linux) ─────────────────────────────────────────────
 
 pub const CLONE_VM: usize = 0x100;
+pub const CLONE_VFORK: usize = 0x4000;
 #[allow(dead_code)]
 pub const CLONE_FS: usize = 0x200;
 #[allow(dead_code)]

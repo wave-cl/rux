@@ -974,16 +974,15 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     let is_fork_child = crate::task_table::current_task_idx() != 0;
 
     if is_fork_child {
+        let idx = crate::task_table::current_task_idx();
+        let is_clone_vm = crate::task_table::TASK_TABLE[idx].clone_flags & crate::errno::CLONE_VM as u32 != 0;
+
         // Switch CR3/TTBR0 to kernel PT so it's safe to work with page tables.
         let kpt = crate::pgtrack::kernel_pt_root();
         if kpt != 0 {
             use rux_arch::PageTableRootOps;
             crate::arch::Arch::write(kpt);
         }
-        // Free the old PT — but NOT for CLONE_VM (vfork) children, since
-        // they share the parent's address space. The parent still needs it.
-        let idx = crate::task_table::current_task_idx();
-        let is_clone_vm = crate::task_table::TASK_TABLE[idx].clone_flags & crate::errno::CLONE_VM as u32 != 0;
         let old_pt_root = crate::task_table::TASK_TABLE[idx].pt_root;
         if old_pt_root != 0 && !is_clone_vm {
             let old_pt = crate::arch::PageTable::from_root(
@@ -993,6 +992,19 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
             // Set pt_root to kernel PT (not 0) so if preempted before the new
             // user PT is loaded, swap_process_state switches to a valid PT.
             crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root = kpt;
+        }
+        // CLONE_VFORK: wake the blocked parent now that child has exec'd
+        if is_clone_vm {
+            let idx = crate::task_table::current_task_idx();
+            let ppid = crate::task_table::TASK_TABLE[idx].ppid;
+            if let Some(pi) = crate::task_table::find_task_by_pid(ppid) {
+                if crate::task_table::TASK_TABLE[pi].state == crate::task_table::TaskState::Sleeping {
+                    crate::task_table::TASK_TABLE[pi].state = crate::task_table::TaskState::Ready;
+                    crate::scheduler::get().wake_task(pi);
+                }
+            }
+            // Clear CLONE_VM flag — child now has its own address space
+            crate::task_table::TASK_TABLE[idx].clone_flags &= !(crate::errno::CLONE_VM as u32);
         }
     } else {
         // Init/vfork path: begin_child switches CR3 and frees previous child's frames.

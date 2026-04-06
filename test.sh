@@ -489,7 +489,7 @@ check "dev/urandom"            "8"
 check "touch timestamp"        "Modify:"
 check "pipe cat"               "abc"
 check "signal trap"            "trapped_sig"
-# aarch64: vfork+exec corrupts parent 
+# aarch64: vfork needs setjmp/longjmp
 # check "timeout (alarm)"        "timeout_exit="
 check "tail (lseek)"           "/bin/sh"
 check "find /etc"              "passwd"
