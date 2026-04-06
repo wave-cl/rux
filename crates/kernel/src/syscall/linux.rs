@@ -29,18 +29,29 @@ pub fn pipe2(pipefd_ptr: usize, flags: usize) -> isize {
 // ── Memory: brk (Linux historical, not POSIX) ──────────────────────
 
 /// brk(addr) — Linux-specific heap management.
+/// Grows or shrinks the process heap. Returns the actual break on success.
 pub fn brk(addr: usize) -> isize {
     unsafe {
         if super::PROCESS.program_brk == 0 { super::PROCESS.program_brk = 0x800000; }
         if addr == 0 { return super::PROCESS.program_brk as isize; }
-        if addr >= super::PROCESS.program_brk {
-            let old_page = (super::PROCESS.program_brk + 0xFFF) & !0xFFF;
+        let old_brk = super::PROCESS.program_brk;
+        if addr > old_brk {
+            // Growing: map new pages
+            let old_page = (old_brk + 0xFFF) & !0xFFF;
             let new_page = (addr + 0xFFF) & !0xFFF;
             if new_page > old_page {
                 let flags = rux_mm::MappingFlags::READ
                     .or(rux_mm::MappingFlags::WRITE)
                     .or(rux_mm::MappingFlags::USER);
                 super::map_user_pages(old_page, new_page, flags);
+            }
+            super::PROCESS.program_brk = addr;
+        } else if addr < old_brk {
+            // Shrinking: unmap freed pages
+            let old_page = (old_brk + 0xFFF) & !0xFFF;
+            let new_page = (addr + 0xFFF) & !0xFFF;
+            if new_page < old_page {
+                super::posix::munmap(new_page, old_page - new_page);
             }
             super::PROCESS.program_brk = addr;
         }

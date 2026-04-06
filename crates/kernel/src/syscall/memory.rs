@@ -537,6 +537,7 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
     const MAP_FIXED: usize = 0x10;
     const MAP_ANONYMOUS: usize = 0x20;
     const MAP_SHARED: usize = 0x01;
+    const MAP_FIXED_NOREPLACE: usize = 0x100000;
     const PROT_READ: usize = 1;
     const PROT_WRITE: usize = 2;
     const PROT_EXEC: usize = 4;
@@ -549,11 +550,22 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
     unsafe {
         let aligned_len = (len + 0xFFF) & !0xFFF;
 
-        let result = if mmap_flags & MAP_FIXED != 0 && addr != 0 {
+        let result = if (mmap_flags & MAP_FIXED != 0 || mmap_flags & MAP_FIXED_NOREPLACE != 0) && addr != 0 {
             let fixed_addr = addr & !0xFFF;
-            // Unmap existing pages to avoid double-mapping (ld.so uses MAP_FIXED
-            // to replace segments at exact addresses).
-            munmap(fixed_addr, aligned_len);
+            // MAP_FIXED_NOREPLACE: fail if any page in range is already mapped
+            if mmap_flags & MAP_FIXED_NOREPLACE != 0 {
+                let upt = super::current_user_page_table();
+                let mut va = fixed_addr;
+                while va < fixed_addr + aligned_len {
+                    if upt.translate(rux_klib::VirtAddr::new(va)).is_ok() {
+                        return crate::errno::EEXIST;
+                    }
+                    va += 4096;
+                }
+            } else {
+                // MAP_FIXED: unmap existing pages
+                munmap(fixed_addr, aligned_len);
+            }
             fixed_addr
         } else {
             let r = super::PROCESS.mmap_base;
@@ -561,12 +573,12 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             r
         };
 
-        // Build page flags from prot
+        // Build page flags from prot (PROT_NONE = 0 → no permissions)
         let mut pg_flags = rux_mm::MappingFlags::USER;
         if prot & PROT_READ != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
         if prot & PROT_WRITE != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::WRITE); }
         if prot & PROT_EXEC != 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::EXECUTE); }
-        if prot == 0 { pg_flags = pg_flags.or(rux_mm::MappingFlags::READ); }
+        let is_prot_none = prot == 0;
 
         if mmap_flags & MAP_ANONYMOUS == 0 && fd < rux_fs::fdtable::MAX_FDS {
             // File-backed: allocate pages and read file data
@@ -598,9 +610,10 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
                     }
                 }
             }
-        } else if mmap_flags & MAP_FIXED != 0 {
+        } else if mmap_flags & MAP_FIXED != 0 && !is_prot_none {
             // MAP_FIXED anonymous (BSS replacement by ld.so): allocate eagerly
-            // because the old pages were just munmap'd and accessed immediately
+            // because the old pages were just munmap'd and accessed immediately.
+            // Skip for PROT_NONE — the region is reserved but not accessible.
             super::map_user_pages(result, result + aligned_len, pg_flags);
         }
         // Non-MAP_FIXED anonymous: lazy — demand pager maps zero pages on fault.
@@ -866,20 +879,24 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
     use rux_arch::MemoryLayout;
     if len > crate::arch::Arch::USER_ADDR_LIMIT as usize { return crate::errno::EINVAL; }
     unsafe {
-        let upt = super::current_user_page_table();
+        let mut upt = super::current_user_page_table();
         let aligned_len = (len + 0xFFF) & !0xFFF;
 
-        let mut flags = rux_mm::MappingFlags::USER.or(rux_mm::MappingFlags::READ);
+        // Build flags from prot (PROT_NONE = 0 → USER only, no R/W/X)
+        let mut flags = rux_mm::MappingFlags::USER;
+        if prot & 1 != 0 { flags = flags.or(rux_mm::MappingFlags::READ); }
         if prot & 2 != 0 { flags = flags.or(rux_mm::MappingFlags::WRITE); }
         if prot & 4 != 0 { flags = flags.or(rux_mm::MappingFlags::EXECUTE); }
-
-        let pte_flags = crate::arch::PageTable::pte_flags(flags);
 
         let mut va = addr;
         while va < addr + aligned_len {
             let virt = rux_klib::VirtAddr::new(va);
-            if let Ok(pa) = upt.translate(virt) {
+            if prot == 0 {
+                // PROT_NONE: unmap the page so any access faults (SIGSEGV)
+                let _ = upt.unmap_4k(virt);
+            } else if let Ok(pa) = upt.translate(virt) {
                 let pa_page = rux_klib::PhysAddr::new(pa.as_usize() & !0xFFF);
+                let pte_flags = crate::arch::PageTable::pte_flags(flags);
                 upt.remap(virt, pa_page, pte_flags);
             }
             va += 4096;
