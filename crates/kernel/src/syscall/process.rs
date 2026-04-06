@@ -48,6 +48,28 @@ pub fn exit(status: i32) -> ! {
 
             TASK_TABLE[idx].exit_code = status;
 
+            // Session leader exit: send SIGHUP to all processes in the session
+            // (Linux: disassociate_ctty → kill_pgrp(SIGHUP) → kill_pgrp(SIGCONT))
+            let my_pid = TASK_TABLE[idx].pid;
+            let my_sid = TASK_TABLE[idx].sid;
+            if my_sid == my_pid { // session leader
+                for j in 0..MAX_PROCS {
+                    if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].sid == my_sid
+                        && TASK_TABLE[j].state != TaskState::Zombie
+                    {
+                        TASK_TABLE[j].signal_hot.pending =
+                            TASK_TABLE[j].signal_hot.pending.add(1); // SIGHUP = 1
+                        if TASK_TABLE[j].state == TaskState::Stopped {
+                            // Also send SIGCONT to wake stopped processes
+                            TASK_TABLE[j].signal_hot.pending =
+                                TASK_TABLE[j].signal_hot.pending.add(18); // SIGCONT = 18
+                            TASK_TABLE[j].state = TaskState::Ready;
+                            crate::scheduler::get().wake_task(j);
+                        }
+                    }
+                }
+            }
+
             // CLONE_THREAD: thread exit — write 0 to clear_child_tid, skip zombie.
             let is_thread = TASK_TABLE[idx].clone_flags as usize & crate::errno::CLONE_THREAD != 0;
             if is_thread {
@@ -116,15 +138,22 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
         let my_pid = current_pid();
         const WNOHANG: usize = 1;
         const WUNTRACED: usize = 2;
+        const WCONTINUED: usize = 8;
 
         loop {
-            // Scan for zombie or stopped children matching the pid criteria.
+            // Scan for zombie, stopped, or continued children.
             for i in 0..MAX_PROCS {
                 let t = &TASK_TABLE[i];
                 if !t.active || t.ppid != my_pid { continue; }
                 let is_zombie = t.state == TaskState::Zombie;
                 let is_stopped = t.state == TaskState::Stopped && (options & WUNTRACED != 0);
-                if !is_zombie && !is_stopped { continue; }
+                // WCONTINUED: report children that were continued from stopped state
+                // We detect this by checking: child is Ready and exit_code has the
+                // WCONTINUED marker (0xFFFF). SIGCONT handler sets this.
+                let is_continued = options & WCONTINUED != 0
+                    && t.state == TaskState::Ready
+                    && t.exit_code == 0xFFFF;
+                if !is_zombie && !is_stopped && !is_continued { continue; }
                 // pid matching: usize::MAX (-1) = any child, 0 = same process group,
                 // pid < -1 = process group abs(pid)
                 if pid == 0 {
@@ -144,8 +173,16 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 // Stopped child: report but don't reap
                 if is_stopped {
                     if wstatus_ptr != 0 {
-                        // WIFSTOPPED status: 0x7F in low byte, signal in bits 15:8
                         crate::uaccess::put_user(wstatus_ptr, exit_code as u32);
+                    }
+                    return child_pid;
+                }
+
+                // Continued child: report, clear marker
+                if is_continued {
+                    TASK_TABLE[i].exit_code = 0; // clear WCONTINUED marker
+                    if wstatus_ptr != 0 {
+                        crate::uaccess::put_user(wstatus_ptr, 0xFFFFu32); // WIFCONTINUED
                     }
                     return child_pid;
                 }

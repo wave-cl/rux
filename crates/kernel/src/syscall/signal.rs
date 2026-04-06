@@ -293,11 +293,17 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             TASK_TABLE[target_idx].signal_hot.pending =
                 TASK_TABLE[target_idx].signal_hot.pending.add(signum as u8);
 
-            // SIGCONT: resume a stopped process
+            // SIGCONT: resume a stopped process, mark for WCONTINUED
             if sig == Signal::Cont {
                 if TASK_TABLE[target_idx].state == TaskState::Stopped {
                     TASK_TABLE[target_idx].state = TaskState::Ready;
+                    TASK_TABLE[target_idx].exit_code = 0xFFFF; // WCONTINUED marker
                     crate::scheduler::get().wake_task(target_idx);
+                    // Notify parent so waitpid(WCONTINUED) unblocks
+                    notify_parent_child_exit(
+                        TASK_TABLE[target_idx].ppid,
+                        0xFFFF, // continued status
+                    );
                 }
                 return 0;
             }
