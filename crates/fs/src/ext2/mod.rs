@@ -38,7 +38,7 @@ pub struct Ext2Fs {
 }
 
 struct Ext2Inner {
-    cache: [CacheEntry; 8],
+    cache: [CacheEntry; 32],
     cache_idx: usize,
 }
 
@@ -100,16 +100,18 @@ pub(crate) fn set_le32(buf: &mut [u8], off: usize, val: u32) {
     buf[off] = b[0]; buf[off + 1] = b[1]; buf[off + 2] = b[2]; buf[off + 3] = b[3];
 }
 
+/// Block cache entry. Uses 1024-byte data buffer (matching ext2 block size)
+/// to allow more entries in the same BSS footprint.
 #[derive(Clone)]
 struct CacheEntry {
     block_no: u64,
     valid: bool,
-    data: [u8; 4096],
+    data: [u8; 1024],
 }
 
 impl CacheEntry {
     const fn empty() -> Self {
-        Self { block_no: 0, valid: false, data: [0; 4096] }
+        Self { block_no: 0, valid: false, data: [0; 1024] }
     }
 }
 
@@ -138,12 +140,10 @@ impl Ext2Fs {
             inode_count: sb.inode_count,
             bgdt_block,
             inner: UnsafeCell::new(Ext2Inner {
-                cache: [
-                    CacheEntry::empty(), CacheEntry::empty(),
-                    CacheEntry::empty(), CacheEntry::empty(),
-                    CacheEntry::empty(), CacheEntry::empty(),
-                    CacheEntry::empty(), CacheEntry::empty(),
-                ],
+                cache: {
+                    const E: CacheEntry = CacheEntry::empty();
+                    [E; 32]
+                },
                 cache_idx: 0,
             }),
         })
@@ -178,7 +178,7 @@ impl Ext2Fs {
 
         // Insert into cache (round-robin)
         let idx = inner.cache_idx;
-        inner.cache_idx = (idx + 1) % 8;
+        inner.cache_idx = (idx + 1) % 32;
         inner.cache[idx].block_no = block_no;
         inner.cache[idx].data[..bs].copy_from_slice(&buf[..bs]);
         inner.cache[idx].valid = true;
