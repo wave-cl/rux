@@ -13,6 +13,12 @@ static mut ARGV_LENS: [usize; MAX_ARGS] = [0; MAX_ARGS];
 /// Number of argv entries
 static mut ARGC: usize = 0;
 
+/// Stored envp strings
+static mut ENVP_BUF: [u8; MAX_STRBUF] = [0; MAX_STRBUF];
+static mut ENVP_OFFSETS: [usize; MAX_ARGS] = [0; MAX_ARGS];
+static mut ENVP_LENS: [usize; MAX_ARGS] = [0; MAX_ARGS];
+static mut ENVC: usize = 0;
+
 /// Dynamic linking auxv entries (set by exec, cleared for static binaries).
 static mut AUXV_PHDR: usize = 0;   // AT_PHDR: address of program headers
 static mut AUXV_PHENT: usize = 0;  // AT_PHENT: size of one program header entry
@@ -40,8 +46,9 @@ pub unsafe fn clear_dynamic_auxv() {
 
 /// Read argv from user memory (pointer to NULL-terminated array of char*).
 /// If argv_ptr is NULL or 0, uses path as argv[0].
-pub unsafe fn set_from_user(path: &[u8], argv_ptr: usize, _envp_ptr: usize) {
+pub unsafe fn set_from_user(path: &[u8], argv_ptr: usize, envp_ptr: usize) {
     ARGC = 0;
+    ENVC = 0;
     let mut buf_pos = 0usize;
 
     if argv_ptr != 0 {
@@ -68,6 +75,26 @@ pub unsafe fn set_from_user(path: &[u8], argv_ptr: usize, _envp_ptr: usize) {
         }
     }
 
+    // Read envp from user memory
+    if envp_ptr > 0x1000 {
+        let envp = envp_ptr as *const usize;
+        let mut env_pos = 0usize;
+        for i in 0..MAX_ARGS {
+            let str_ptr = *envp.add(i);
+            if str_ptr == 0 { break; }
+            let cstr = str_ptr as *const u8;
+            let mut len = 0usize;
+            while *cstr.add(len) != 0 && len < 255 { len += 1; }
+            if env_pos + len + 1 > MAX_STRBUF { break; }
+            ENVP_OFFSETS[i] = env_pos;
+            ENVP_LENS[i] = len;
+            for j in 0..len { ENVP_BUF[env_pos + j] = *cstr.add(j); }
+            ENVP_BUF[env_pos + len] = 0;
+            env_pos += len + 1;
+            ENVC += 1;
+        }
+    }
+
     // If no argv was provided, use path as argv[0]
     if ARGC == 0 {
         let len = path.len().min(255);
@@ -83,6 +110,7 @@ pub unsafe fn set_from_user(path: &[u8], argv_ptr: usize, _envp_ptr: usize) {
 pub fn set(path: &[u8], arg: &[u8]) {
     unsafe {
         ARGC = 0;
+        ENVC = 0; // boot path uses default env
 
         // argv[0] = path
         let plen = path.len().min(255);
@@ -108,39 +136,40 @@ pub fn set(path: &[u8], arg: &[u8]) {
 /// Write Linux-compatible stack layout for the new process.
 ///
 /// Layout: [sp]=argc, argv[0..n], NULL, envp[0..m], NULL, auxv, strings
+/// Default environment for boot/init (when no user envp provided).
+const DEFAULT_ENV: [&[u8]; 5] = [
+    b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0",
+    b"HOME=/root\0",
+    b"TERM=linux\0",
+    b"LANG=C.UTF-8\0",
+    b"PYTHONUTF8=1\0",
+];
+
 pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     let argc = ARGC;
+    let envc = ENVC.min(MAX_ARGS);
+    let use_user_env = envc > 0;
+    let env_count = if use_user_env { envc } else { DEFAULT_ENV.len() };
 
-    // Environment strings
-    // Note: ENV=/etc/profile causes ash to crash during early init.
-    // Tests run via `. /etc/profile` fed through stdin instead.
-    let env_strs: [&[u8]; 5] = [
-        b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0",
-        b"HOME=/root\0",
-        b"TERM=linux\0",
-        b"LANG=C.UTF-8\0",
-        b"PYTHONUTF8=1\0",
-    ];
-
-    // Calculate string area size (saturating to prevent overflow from stale data)
+    // Calculate string area size
     let mut str_size = 0usize;
     for i in 0..argc.min(MAX_ARGS) {
         str_size = str_size.saturating_add(ARGV_LENS[i].min(256).saturating_add(1));
     }
-    for env in &env_strs {
-        str_size += env.len();
+    if use_user_env {
+        for i in 0..envc {
+            str_size = str_size.saturating_add(ENVP_LENS[i].min(256).saturating_add(1));
+        }
+    } else {
+        for env in &DEFAULT_ENV { str_size += env.len(); }
     }
 
-    let word = core::mem::size_of::<usize>(); // 8 on 64-bit, 4 on 32-bit
-
-    // Auxv: 8 base pairs + up to 5 dynamic pairs, × 2 words each
-    // Base: AT_PAGESZ, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_HWCAP, AT_RANDOM, AT_NULL
+    let word = core::mem::size_of::<usize>();
     let dyn_auxv_count = if AUXV_PHDR != 0 { 5 } else { 0 };
     let auxv_size = (8 + dyn_auxv_count) * 2 * word;
-    let random_size = 16; // 16 bytes for AT_RANDOM
+    let random_size = 16;
 
-    // Header: argc + argv[0..argc] + NULL + envp[0..3] + NULL
-    let header_slots = 1 + argc + 1 + env_strs.len() + 1;
+    let header_slots = 1 + argc + 1 + env_count + 1;
     let header_size = header_slots * word;
 
     let total = header_size + auxv_size + random_size + str_size;
@@ -176,12 +205,24 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
         str_pos += len + 1;
     }
 
-    let mut env_addrs = [0usize; 8];
-    for (idx, env) in env_strs.iter().enumerate() {
-        env_addrs[idx] = str_pos;
-        let p = str_pos as *mut u8;
-        for (j, &b) in env.iter().enumerate() { *p.add(j) = b; }
-        str_pos += env.len();
+    let mut env_addrs = [0usize; MAX_ARGS];
+    if use_user_env {
+        for i in 0..envc {
+            env_addrs[i] = str_pos;
+            let p = str_pos as *mut u8;
+            let len = ENVP_LENS[i];
+            let off = ENVP_OFFSETS[i];
+            for j in 0..len { *p.add(j) = ENVP_BUF[off + j]; }
+            *p.add(len) = 0;
+            str_pos += len + 1;
+        }
+    } else {
+        for (idx, env) in DEFAULT_ENV.iter().enumerate() {
+            env_addrs[idx] = str_pos;
+            let p = str_pos as *mut u8;
+            for (j, &b) in env.iter().enumerate() { *p.add(j) = b; }
+            str_pos += env.len();
+        }
     }
 
     // Write header (pointer-width slots)
@@ -194,7 +235,7 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     }
     *hdr.add(slot) = 0; slot += 1; // argv NULL
 
-    for i in 0..env_strs.len() {
+    for i in 0..env_count {
         *hdr.add(slot) = env_addrs[i]; slot += 1;
     }
     *hdr.add(slot) = 0; slot += 1; // envp NULL

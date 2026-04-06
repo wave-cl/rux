@@ -88,7 +88,7 @@ cat /proc/version
 free | head -2
 readlink /bin/sh
 cat /proc/meminfo | head -1
-env | head -1
+env | grep PATH
 ln -s /bin/sh /tmp/mvtest && mv /tmp/mvtest /tmp/mvdone && readlink /tmp/mvdone
 echo hello | wc -w
 grep root /etc/passwd
@@ -352,7 +352,7 @@ touch /tmp/tfile && ls /tmp/tfile
 sleep 0 && echo sleepdone
 rm /tmp/tfile && echo rmdone
 wc -l /etc/passwd
-env | head -1
+env | grep PATH
 echo test > /dev/null && echo devnull_ok
 ls /dev
 kill -0 1 && echo killcheck

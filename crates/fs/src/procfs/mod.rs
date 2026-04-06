@@ -252,11 +252,11 @@ impl ProcFs {
     fn gen_pid_maps(&self, buf: &mut [u8]) -> usize {
         let mut pos = 0;
         // Text segment (typical ELF load address)
-        pos += copy_str(&mut buf[pos..], b"00400000-00500000 r-xp 00000000 fe:00 1 /bin/busybox\n");
+        pos += copy_str(&mut buf[pos..], b"08000000-08100000 r-xp 00000000 fe:00 1 /bin/busybox\n");
         // Data/BSS
-        pos += copy_str(&mut buf[pos..], b"00500000-00520000 rw-p 00100000 fe:00 1 /bin/busybox\n");
+        pos += copy_str(&mut buf[pos..], b"08100000-08120000 rw-p 00100000 fe:00 1 /bin/busybox\n");
         // Heap (brk area)
-        pos += copy_str(&mut buf[pos..], b"00800000-00900000 rw-p 00000000 00:00 0 [heap]\n");
+        pos += copy_str(&mut buf[pos..], b"08200000-08300000 rw-p 00000000 00:00 0 [heap]\n");
         // mmap region
         pos += copy_str(&mut buf[pos..], b"10000000-10100000 rw-p 00000000 00:00 0 \n");
         // Stack
