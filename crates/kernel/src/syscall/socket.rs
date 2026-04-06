@@ -221,7 +221,9 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
 }
 
 /// sendto(fd, buf, len, flags, dest_addr, addrlen)
-pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr: usize, _addrlen: usize) -> isize {
+/// Supports MSG_DONTWAIT (0x40), MSG_NOSIGNAL (0x4000).
+pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr: usize, _addrlen: usize) -> isize {
+    let _ = flags; // MSG_DONTWAIT/MSG_NOSIGNAL noted but send is already non-blocking
     let idx = match unsafe { resolve_socket(fd) } {
         Some(i) => i,
         None => return crate::errno::EBADF,
@@ -278,7 +280,9 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr
 }
 
 /// recvfrom(fd, buf, len, flags, src_addr, addrlen)
-pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
+/// Supports MSG_DONTWAIT (0x40) — non-blocking regardless of socket flags.
+pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
+    const MSG_DONTWAIT: usize = 0x40;
     if buf_ptr != 0 && crate::uaccess::validate_user_ptr(buf_ptr, len.min(4096)).is_err() { return crate::errno::EFAULT; }
     if addr_ptr != 0 && crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
     if addrlen_ptr != 0 && crate::uaccess::validate_user_ptr(addrlen_ptr, 4).is_err() { return crate::errno::EFAULT; }
@@ -287,7 +291,8 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, _flags: usize, addr_p
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
+        let nonblock = (fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0)
+            || flags & MSG_DONTWAIT != 0;
 
         #[cfg(feature = "net")]
         {
@@ -471,11 +476,18 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
 /// shutdown(fd, how) — shut down part of a full-duplex connection
 pub fn sys_shutdown(fd: usize, how: usize) -> isize {
     // how: 0=SHUT_RD, 1=SHUT_WR, 2=SHUT_RDWR
+    if how > 2 { return crate::errno::EINVAL; }
     #[cfg(feature = "net")]
     unsafe {
         let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
         if SOCKETS[idx].sock_type == SOCK_STREAM && SOCKETS[idx].smol_handle_raw >= 0 {
+            if how == 0 || how == 2 {
+                // SHUT_RD / SHUT_RDWR: mark socket as not connected for reads
+                // (smoltcp doesn't have half-close for reads, so we mark it)
+                SOCKETS[idx].connected = false;
+            }
             if how == 1 || how == 2 {
+                // SHUT_WR / SHUT_RDWR: close the TCP write side
                 rux_net::tcp_close(to_handle(SOCKETS[idx].smol_handle_raw));
             }
         }
