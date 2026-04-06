@@ -56,6 +56,14 @@ unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
 }
 
 pub fn read(fd: usize, buf: usize, len: usize) -> isize {
+    // O_WRONLY: reading from write-only fd is EBADF (skip special fds)
+    unsafe {
+        if let Some(f) = fdt::get_fd(fd) {
+            if f.flags & 3 == 1 && !f.is_console && !f.is_pipe && !f.is_socket {
+                return crate::errno::EBADF;
+            }
+        }
+    }
     if super::socket::is_socket(fd) {
         return super::socket::sys_recvfrom(fd, buf, len, 0, 0, 0);
     }
@@ -90,6 +98,14 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
 
 /// write(fd, buf, count) — POSIX.1
 pub fn write(fd: usize, buf: usize, len: usize) -> isize {
+    // O_RDONLY: writing to read-only fd is EBADF (skip special fds)
+    unsafe {
+        if let Some(f) = fdt::get_fd(fd) {
+            if f.flags & 3 == 0 && !f.is_console && !f.is_pipe && !f.is_socket {
+                return crate::errno::EBADF;
+            }
+        }
+    }
     // Socket write → sendto
     if super::socket::is_socket(fd) {
         return super::socket::sys_sendto(fd, buf, len, 0, 0, 0);
@@ -443,9 +459,11 @@ pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
         for i in 0..cnt {
             let base = (*iov.add(i))[0];
             let len = (*iov.add(i))[1];
+            if base == 0 || len == 0 { continue; }
             let n = write(fd, base, len);
-            if n < 0 { return n; }
+            if n < 0 { return if total > 0 { total } else { n }; }
             total += n;
+            if (n as usize) < len { break; } // short write — stop
         }
         total
     }
@@ -533,14 +551,20 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
     }
 }
 
-/// sendfile(out_fd, in_fd, offset, count) — Linux (widely used by busybox cat)
-pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -> isize {
-    // Use the high-level read/write which handle special devices (console,
-    // /dev/zero, /dev/urandom, pipes, sockets) — not the low-level sys_read_fd.
+/// sendfile(out_fd, in_fd, offset_ptr, count) — Linux (widely used by busybox cat)
+pub fn sendfile(out_fd: usize, in_fd: usize, offset_ptr: usize, count: usize) -> isize {
+    // If offset_ptr is non-NULL, use it as the read position (and update it).
+    // Otherwise, use the fd's current offset (via normal read).
+    unsafe {
+        if offset_ptr != 0 {
+            if crate::uaccess::validate_user_ptr(offset_ptr, 8).is_err() { return crate::errno::EFAULT; }
+            let off: u64 = crate::uaccess::get_user(offset_ptr);
+            if let Some(f) = fdt::get_fd_mut(in_fd) { f.offset = off as usize; }
+        }
+    }
     let mut buf = [0u8; 4096];
     let mut total: isize = 0;
     let mut remaining = count;
-
     while remaining > 0 {
         let chunk = remaining.min(4096);
         let n = read(in_fd, buf.as_ptr() as usize, chunk);
@@ -549,6 +573,14 @@ pub fn sendfile(out_fd: usize, in_fd: usize, _offset_ptr: usize, count: usize) -
         if written < 0 { return if total > 0 { total } else { written }; }
         total += written;
         remaining = remaining.saturating_sub(n as usize);
+    }
+    // Update offset_ptr with new position
+    unsafe {
+        if offset_ptr != 0 {
+            if let Some(f) = fdt::get_fd(in_fd) {
+                crate::uaccess::put_user(offset_ptr, f.offset as u64);
+            }
+        }
     }
     total
 }
