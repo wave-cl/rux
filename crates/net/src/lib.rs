@@ -261,6 +261,25 @@ pub unsafe fn tcp_is_established(handle: SocketHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Get the remote (peer) address of a connected TCP socket.
+/// Returns (ip4_octets, port), or ([0;4], 0) if not connected.
+pub unsafe fn tcp_remote_addr(handle: SocketHandle) -> ([u8; 4], u16) {
+    SOCKETS.as_mut()
+        .and_then(|s| {
+            let sock = s.get_mut::<tcp::Socket>(handle);
+            sock.remote_endpoint().map(|ep| {
+                match ep.addr {
+                    smoltcp::wire::IpAddress::Ipv4(addr) => {
+                        let b = addr.octets();
+                        ([b[0], b[1], b[2], b[3]], ep.port)
+                    }
+                    _ => ([0; 4], 0),
+                }
+            })
+        })
+        .unwrap_or(([0; 4], 0))
+}
+
 // ── UDP API ────────────────────────────────────────────────────────
 
 /// Allocate a UDP socket.

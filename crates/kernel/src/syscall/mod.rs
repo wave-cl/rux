@@ -583,7 +583,19 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Phase 4 server sockets ────────────────────────────────
         Syscall::Listen => socket::sys_listen(a0, a1),
         Syscall::Accept => socket::sys_accept(a0, a1, a2),
-        Syscall::Accept4 => socket::sys_accept(a0, a1, a2), // ignore flags for now
+        Syscall::Accept4 => {
+            let fd = socket::sys_accept(a0, a1, a2);
+            // Apply flags (a3): SOCK_NONBLOCK (0x800), SOCK_CLOEXEC (0x80000)
+            if fd >= 0 {
+                unsafe {
+                    if let Some(f) = rux_fs::fdtable::get_fd_mut(fd as usize) {
+                        if a3 & 0x800 != 0 { f.flags |= 0x800; } // SOCK_NONBLOCK
+                        if a3 & 0x80000 != 0 { f.fd_flags |= rux_fs::fdtable::FD_CLOEXEC; }
+                    }
+                }
+            }
+            fd
+        }
 
         // ── Phase 5 event/timer fds ───────────────────────────────
         Syscall::Eventfd2 => memory::eventfd2(a0, a1),

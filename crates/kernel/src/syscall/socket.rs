@@ -78,6 +78,7 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
     if domain as u32 != AF_INET { return crate::errno::EAFNOSUPPORT; }
     let st = stype as u32 & 0xFF;
     let sock_nonblock = stype & SOCK_NONBLOCK != 0;
+    let sock_cloexec = stype & 0x80000 != 0; // SOCK_CLOEXEC
     if st != SOCK_STREAM && st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
 
     unsafe {
@@ -123,6 +124,7 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
         fd_table[fd].is_socket = true;
         fd_table[fd].socket_idx = sock_idx as u8;
         if sock_nonblock { fd_table[fd].flags |= O_NONBLOCK; }
+        if sock_cloexec { fd_table[fd].fd_flags |= rux_fs::fdtable::FD_CLOEXEC; }
 
         fd as isize
     }
@@ -147,9 +149,18 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let (port, _ip) = read_sockaddr(addr_ptr);
+        // Check EADDRINUSE: another active TCP socket already bound to this port
+        if port != 0 {
+            for i in 0..MAX_SOCKETS {
+                if SOCKETS[i].active && i != idx && SOCKETS[i].bound_port == port
+                    && SOCKETS[i].sock_type == SOCKETS[idx].sock_type
+                {
+                    return crate::errno::EADDRINUSE;
+                }
+            }
+        }
         SOCKETS[idx].bound_port = port;
 
-        // Bind UDP socket in smoltcp
         #[cfg(feature = "net")]
         if SOCKETS[idx].sock_type == SOCK_DGRAM && SOCKETS[idx].smol_handle_raw >= 0 {
             let _ = rux_net::udp_bind(to_handle(SOCKETS[idx].smol_handle_raw), port);
@@ -427,13 +438,20 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                         }
                     }
 
-                    // 4. Write peer address if requested
+                    // 4. Get peer address from smoltcp and store in socket slot
+                    #[cfg(feature = "net")]
+                    if SOCKETS[new_sock_idx].smol_handle_raw >= 0 {
+                        let h = to_handle(SOCKETS[new_sock_idx].smol_handle_raw);
+                        let (peer_ip, peer_port) = rux_net::tcp_remote_addr(h);
+                        SOCKETS[new_sock_idx].connected_ip = peer_ip;
+                        SOCKETS[new_sock_idx].connected_port = peer_port;
+                        SOCKETS[new_sock_idx].connected = true;
+                    }
+
+                    // 5. Write peer address to user buffer if requested
                     if addr_ptr != 0 {
-                        let sa = addr_ptr as *mut u8;
-                        *sa.add(0) = AF_INET as u8; *sa.add(1) = 0;
-                        // We don't have the peer address from smoltcp easily,
-                        // so write zeros (caller can use getpeername)
-                        for i in 2..16 { *sa.add(i) = 0; }
+                        write_sockaddr(addr_ptr, SOCKETS[new_sock_idx].connected_port,
+                                       SOCKETS[new_sock_idx].connected_ip);
                         if addrlen_ptr != 0 { *(addrlen_ptr as *mut u32) = 16; }
                     }
 
@@ -597,6 +615,7 @@ pub fn sys_getpeername(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize 
     if crate::uaccess::validate_user_ptr(addr_ptr, 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let idx = match resolve_socket(fd) { Some(i) => i, None => return crate::errno::EBADF };
+        if !SOCKETS[idx].connected { return crate::errno::ENOTCONN; }
         write_sockaddr(addr_ptr, SOCKETS[idx].connected_port, SOCKETS[idx].connected_ip);
         if addrlen_ptr != 0 { *(addrlen_ptr as *mut u32) = 16; }
     }

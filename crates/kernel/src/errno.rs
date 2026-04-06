@@ -32,6 +32,7 @@ pub const ETIMEDOUT: isize = -110;     // Connection timed out
 pub const ENETUNREACH: isize = -101;   // Network is unreachable
 pub const EADDRINUSE: isize = -98;     // Address already in use
 pub const EOPNOTSUPP: isize = -95;     // Operation not supported on socket
+pub const ENOTCONN: isize = -107;     // Transport endpoint is not connected
 
 // ── Signal numbers (POSIX) ──────────────────────────────────────────
 
