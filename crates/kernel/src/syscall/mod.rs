@@ -473,7 +473,24 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Mprotect => posix::mprotect(a0, a1, a2),
         Syscall::Access => posix::faccessat((-100isize) as usize, a0, a1), // AT_FDCWD
         Syscall::Futex => posix::futex(a0, a1, a2),
-        Syscall::Sigaltstack | Syscall::SchedYield | Syscall::Alarm |
+        Syscall::Sigaltstack => unsafe {
+            // sigaltstack(ss, old_ss) — set/get alternate signal stack
+            let cold = &mut PROCESS.signal_cold;
+            if a1 != 0 { // old_ss: write current state
+                if crate::uaccess::validate_user_ptr(a1, 24).is_err() { return crate::errno::EFAULT as isize; }
+                crate::uaccess::put_user(a1, cold.alt_stack_base);
+                crate::uaccess::put_user(a1 + core::mem::size_of::<usize>(), cold.alt_stack_flags as usize);
+                crate::uaccess::put_user(a1 + 2 * core::mem::size_of::<usize>(), cold.alt_stack_size);
+            }
+            if a0 != 0 { // ss: set new state
+                if crate::uaccess::validate_user_ptr(a0, 24).is_err() { return crate::errno::EFAULT as isize; }
+                cold.alt_stack_base = crate::uaccess::get_user(a0);
+                cold.alt_stack_flags = crate::uaccess::get_user::<usize>(a0 + core::mem::size_of::<usize>()) as u32;
+                cold.alt_stack_size = crate::uaccess::get_user(a0 + 2 * core::mem::size_of::<usize>());
+            }
+            0
+        },
+        Syscall::SchedYield | Syscall::Alarm |
         Syscall::Getgroups | Syscall::Getrlimit |
         Syscall::SetRobustList | Syscall::SchedGetaffinity | Syscall::Prctl => 0,
 

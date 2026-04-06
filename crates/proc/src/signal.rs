@@ -568,8 +568,16 @@ pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
     // User handler — arch-specific pre-delivery setup
     S::sig_pre_deliver();
 
-    // Push signal frame onto user stack (16-byte aligned)
-    let user_sp = S::sig_read_user_sp();
+    // Push signal frame onto user stack (or alternate stack if SA_ONSTACK)
+    let user_sp = if action.flags & SA_ONSTACK != 0
+        && cold.alt_stack_size > 0
+        && cold.alt_stack_flags & SS_DISABLE == 0
+    {
+        // Use alternate signal stack (top = base + size)
+        cold.alt_stack_base + cold.alt_stack_size
+    } else {
+        S::sig_read_user_sp()
+    };
     let new_sp = (user_sp - S::SIGNAL_FRAME_SIZE) & !0xF;
     S::sig_write_frame(new_sp, syscall_result, hot.blocked.0, restorer[signum as usize], signum);
     S::sig_write_user_sp(new_sp);
