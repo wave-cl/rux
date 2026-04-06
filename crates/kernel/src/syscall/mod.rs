@@ -491,8 +491,28 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             }
             0
         },
-        Syscall::SchedYield | Syscall::Alarm |
+        Syscall::SchedYield |
         Syscall::SetRobustList | Syscall::SchedGetaffinity => 0,
+        Syscall::Alarm => unsafe {
+            // alarm(seconds): set one-shot ITIMER_REAL, return previous remaining seconds
+            use rux_arch::TimerOps;
+            let now = crate::arch::Arch::ticks();
+            let idx = crate::task_table::current_task_idx();
+            let t = &mut crate::task_table::TASK_TABLE[idx];
+            let old_remaining = if t.itimer_real_deadline > 0 && t.itimer_real_deadline > now {
+                ((t.itimer_real_deadline - now) / 1000 + 1) as isize // round up to seconds
+            } else { 0 };
+            if a0 == 0 {
+                // alarm(0): cancel timer
+                t.itimer_real_deadline = 0;
+                t.itimer_real_interval = 0;
+            } else {
+                // alarm(N): set one-shot timer for N seconds
+                t.itimer_real_deadline = now + (a0 as u64) * 1000;
+                t.itimer_real_interval = 0;
+            }
+            old_remaining
+        },
         Syscall::Getrlimit => {
             // getrlimit(resource, rlim) — return RLIM_INFINITY
             if a1 != 0 {
@@ -559,7 +579,44 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Dup3 => posix::dup3(a0, a1, a2),
         Syscall::Sysctl => 0, // stub — OpenRC queries kernel params
         Syscall::Flock => 0, // stub — single-process, locking is a no-op
-        Syscall::SetItimer => 0, // stub — no interval timers yet
+        Syscall::SetItimer => unsafe {
+            // setitimer(which, new_value, old_value)
+            // Only ITIMER_REAL (which=0) is implemented — sends SIGALRM on wall clock expiry
+            if a0 != 0 { return 0; } // ITIMER_VIRTUAL/PROF: stub
+            use rux_arch::TimerOps;
+            let now = crate::arch::Arch::ticks();
+            let idx = crate::task_table::current_task_idx();
+            let t = &mut crate::task_table::TASK_TABLE[idx];
+            // Write old value if requested
+            if a2 != 0 && crate::uaccess::validate_user_ptr(a2, 32).is_ok() {
+                // struct itimerval: { it_interval: timeval, it_value: timeval }
+                // timeval: { tv_sec: i64, tv_usec: i64 } (on 64-bit)
+                let remaining = if t.itimer_real_deadline > 0 && t.itimer_real_deadline > now {
+                    t.itimer_real_deadline - now
+                } else { 0 };
+                let int_ms = t.itimer_real_interval;
+                crate::uaccess::put_user(a2, int_ms / 1000);        // it_interval.tv_sec
+                crate::uaccess::put_user(a2 + 8, (int_ms % 1000) * 1000); // it_interval.tv_usec
+                crate::uaccess::put_user(a2 + 16, remaining / 1000);  // it_value.tv_sec
+                crate::uaccess::put_user(a2 + 24, (remaining % 1000) * 1000); // it_value.tv_usec
+            }
+            // Read new value
+            if a1 != 0 && crate::uaccess::validate_user_ptr(a1, 32).is_ok() {
+                let int_sec: u64 = crate::uaccess::get_user(a1);
+                let int_usec: u64 = crate::uaccess::get_user(a1 + 8);
+                let val_sec: u64 = crate::uaccess::get_user(a1 + 16);
+                let val_usec: u64 = crate::uaccess::get_user(a1 + 24);
+                let interval_ms = int_sec * 1000 + int_usec / 1000;
+                let value_ms = val_sec * 1000 + val_usec / 1000;
+                t.itimer_real_interval = interval_ms;
+                if value_ms > 0 {
+                    t.itimer_real_deadline = now + value_ms;
+                } else {
+                    t.itimer_real_deadline = 0; // disarm
+                }
+            }
+            0
+        }
         Syscall::Pselect6 => memory::pselect6(a0, a1, a2, a3, a4),
         Syscall::ClockNanosleep => {
             // clock_nanosleep(clockid, flags, request, remain)
@@ -731,11 +788,22 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
             crate::errno::EINTR
         }
-        Syscall::Getitimer => {
-            // getitimer(which, value) — return zeroed timer (no active timers)
-            if a1 != 0 && crate::uaccess::validate_user_ptr(a1, 32).is_ok() {
-                unsafe { core::ptr::write_bytes(a1 as *mut u8, 0, 32); }
-            }
+        Syscall::Getitimer => unsafe {
+            // getitimer(which, value) — return current timer state
+            if a0 != 0 || a1 == 0 { return 0; } // Only ITIMER_REAL; null ptr = no-op
+            if crate::uaccess::validate_user_ptr(a1, 32).is_err() { return crate::errno::EFAULT; }
+            use rux_arch::TimerOps;
+            let now = crate::arch::Arch::ticks();
+            let idx = crate::task_table::current_task_idx();
+            let t = &crate::task_table::TASK_TABLE[idx];
+            let remaining = if t.itimer_real_deadline > 0 && t.itimer_real_deadline > now {
+                t.itimer_real_deadline - now
+            } else { 0 };
+            let int_ms = t.itimer_real_interval;
+            crate::uaccess::put_user(a1, int_ms / 1000);
+            crate::uaccess::put_user(a1 + 8, (int_ms % 1000) * 1000);
+            crate::uaccess::put_user(a1 + 16, remaining / 1000);
+            crate::uaccess::put_user(a1 + 24, (remaining % 1000) * 1000);
             0
         }
         Syscall::Lchown => posix::chown(a0, a1, a2), // same as chown for now
@@ -935,6 +1003,9 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     PROCESS.signal_cold = rux_proc::signal::SignalCold::new();
     *crate::task_table::signal_cold_mut(crate::task_table::current_task_idx()) = rux_proc::signal::SignalCold::new();
     PROCESS.signal_restorer = [0; 32];
+
+    // Note: ITIMER_REAL is preserved across exec (POSIX).
+    // busybox timeout sets alarm() then exec's — the timer must survive.
 
     // Reset arch-specific state (e.g., aarch64 signal trampoline mapping)
     V::on_exec_reset();

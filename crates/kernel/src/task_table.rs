@@ -92,6 +92,10 @@ pub struct TaskSlot {
     pub clear_child_tid: usize, // address to write 0 + futex wake on exit
     pub futex_addr: usize,      // address being waited on (WaitingForFutex)
 
+    // ── Interval timers (ITIMER_REAL → SIGALRM) ────────────────────
+    pub itimer_real_deadline: u64,  // tick count when SIGALRM fires (0 = inactive)
+    pub itimer_real_interval: u64,  // tick count for auto-reload (0 = one-shot)
+
     // ── Command line (for /proc/[pid]/cmdline) ─────────────────────
     pub cmdline: [u8; 128],     // null-separated argv
     pub cmdline_len: u8,
@@ -122,6 +126,7 @@ impl TaskSlot {
             exit_code: 0, wake_at: 0,
             last_child_exit: 0, child_available: false,
             waiting_pipe_id: 0,
+            itimer_real_deadline: 0, itimer_real_interval: 0,
             cmdline: [0; 128], cmdline_len: 0,
             fpu_state: rux_arch::FpuState::new(),
         }
@@ -256,10 +261,29 @@ pub unsafe fn wake_sleepers() {
     let now = crate::arch::Arch::ticks();
     for i in 0..MAX_PROCS {
         let t = &mut TASK_TABLE[i];
-        if t.active && t.state == TaskState::Sleeping && t.wake_at > 0 && now >= t.wake_at {
+        if !t.active { continue; }
+        // Wake sleeping tasks whose deadline has passed
+        if t.state == TaskState::Sleeping && t.wake_at > 0 && now >= t.wake_at {
             t.wake_at = 0;
             t.state = TaskState::Ready;
             crate::scheduler::get().wake_task(i);
+        }
+        // Check ITIMER_REAL expiry → set pending SIGALRM (signal 14)
+        if t.itimer_real_deadline > 0 && now >= t.itimer_real_deadline {
+            t.signal_hot.pending = t.signal_hot.pending.add(14); // SIGALRM
+            if t.itimer_real_interval > 0 {
+                // Repeating timer: reload deadline
+                t.itimer_real_deadline = now + t.itimer_real_interval;
+            } else {
+                // One-shot: disarm
+                t.itimer_real_deadline = 0;
+            }
+            // If the task is sleeping, wake it so SIGALRM can be delivered
+            if t.state == TaskState::Sleeping {
+                t.wake_at = 0;
+                t.state = TaskState::Ready;
+                crate::scheduler::get().wake_task(i);
+            }
         }
     }
 }
