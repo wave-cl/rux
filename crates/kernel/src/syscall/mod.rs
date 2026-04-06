@@ -773,7 +773,13 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::ProcessVmReadv | Syscall::ProcessVmWritev => crate::errno::ENOSYS,
         Syscall::Ptrace => crate::errno::ENOSYS,
         Syscall::SetSid => posix::setsid(),
-        Syscall::GetSid2 => 0, // return session leader pid (stub: 0)
+        Syscall::GetSid2 => unsafe {
+            let target_pid = if a0 == 0 { crate::task_table::current_pid() } else { a0 as u32 };
+            match crate::task_table::find_task_by_pid(target_pid) {
+                Some(i) => crate::task_table::TASK_TABLE[i].sid as isize,
+                None => crate::errno::ESRCH,
+            }
+        }
 
         // ── Batch 3: resource limits ──────────────────────────────
         Syscall::Getrlimit2 => {
