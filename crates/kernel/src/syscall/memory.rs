@@ -613,11 +613,23 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
         } else if mmap_flags & MAP_FIXED != 0 && !is_prot_none {
             // MAP_FIXED anonymous (BSS replacement by ld.so): allocate eagerly
             // because the old pages were just munmap'd and accessed immediately.
-            // Skip for PROT_NONE — the region is reserved but not accessible.
             super::map_user_pages(result, result + aligned_len, pg_flags);
         }
         // Non-MAP_FIXED anonymous: lazy — demand pager maps zero pages on fault.
-        // Saves hundreds of frames for malloc buffers, guard pages, etc.
+
+        // PROT_NONE: write marker PTEs so the demand pager knows these
+        // addresses are intentionally inaccessible (not demand-pageable).
+        if is_prot_none {
+            let prot_none_bit = crate::arch::PageTable::prot_none_bit();
+            let mut upt = super::current_user_page_table();
+            let alloc = crate::kstate::alloc();
+            for va in (result..result + aligned_len).step_by(4096) {
+                // Write a non-present PTE with the PROT_NONE marker bit
+                let _ = upt.unmap_4k(rux_klib::VirtAddr::new(va));
+                // Set the marker in the leaf PTE slot directly
+                upt.write_leaf_pte(rux_klib::VirtAddr::new(va), prot_none_bit, alloc);
+            }
+        }
 
         result as isize
     }
@@ -892,8 +904,10 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
         while va < addr + aligned_len {
             let virt = rux_klib::VirtAddr::new(va);
             if prot == 0 {
-                // PROT_NONE: unmap the page so any access faults (SIGSEGV)
+                // PROT_NONE: unmap the page and write marker PTE
                 let _ = upt.unmap_4k(virt);
+                let alloc = crate::kstate::alloc();
+                upt.write_leaf_pte(virt, crate::arch::PageTable::prot_none_bit(), alloc);
             } else if let Ok(pa) = upt.translate(virt) {
                 let pa_page = rux_klib::PhysAddr::new(pa.as_usize() & !0xFFF);
                 let pte_flags = crate::arch::PageTable::pte_flags(flags);

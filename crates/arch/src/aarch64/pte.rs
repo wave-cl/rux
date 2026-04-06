@@ -8,6 +8,11 @@ pub const NG: u64          = 1 << 11;
 pub const DBM: u64         = 1 << 51;
 /// Software-defined COW (copy-on-write) bit. PBHA bit 55.
 pub const COW: u64         = 1 << 55;
+/// Software-defined PROT_NONE marker. PBHA bit 56.
+/// Descriptor is INVALID (no VALID bit), but this bit marks it as
+/// intentionally inaccessible. Fault handler checks this to deliver
+/// SIGSEGV instead of demand-paging.
+pub const PROT_NONE: u64   = 1 << 56;
 pub const PXN: u64         = 1 << 53;
 pub const UXN: u64         = 1 << 54;
 

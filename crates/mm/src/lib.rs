@@ -158,6 +158,9 @@ pub trait ArchPaging {
 
     /// Software-defined COW bit in the PTE (arch-specific location).
     fn cow_bit() -> u64;
+    /// Software-defined PROT_NONE marker bit in the PTE.
+    /// Set on non-present PTEs to distinguish PROT_NONE from truly unmapped.
+    fn prot_none_bit() -> u64;
 }
 
 pub trait FrameAllocator {

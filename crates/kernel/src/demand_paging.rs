@@ -44,6 +44,14 @@ pub unsafe fn handle_user_fault(addr: u64, is_write: bool) -> bool {
     }
     // Demand paging for any fault at a valid user address (>= 0x1000 avoids null guard)
     if addr >= 0x1000 && addr < crate::arch::Arch::USER_ADDR_LIMIT {
+        // Check for PROT_NONE marker — the PTE is non-present but has the
+        // software PROT_NONE bit set, meaning this address is intentionally
+        // inaccessible (guard page). Deliver SIGSEGV, don't demand-page.
+        let raw_pte = crate::syscall::current_user_page_table()
+            .read_leaf_pte(rux_klib::VirtAddr::new(addr as usize & !0xFFF));
+        if raw_pte & crate::arch::PageTable::prot_none_bit() != 0 {
+            return false; // PROT_NONE → SIGSEGV
+        }
         if demand_page(addr as usize) {
             return true;
         }

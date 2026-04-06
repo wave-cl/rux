@@ -176,6 +176,64 @@ impl<A: ArchPaging> PageTable4Level<A> {
         }
     }
 
+    /// Read the raw leaf PTE for a virtual address, even if not present.
+    /// Returns the raw PTE value, or 0 if the page table walk fails at an
+    /// intermediate level (the intermediate tables must be present).
+    pub fn read_leaf_pte(&self, virt: VirtAddr) -> u64 {
+        unsafe {
+            let l3 = self.root.as_usize() as *const PageTablePage;
+            let l3e = (*l3).entries[pt_index(virt, PageLevel::L3)];
+            if !A::Pte::is_present(l3e) { return 0; }
+            let l2 = A::Pte::phys_addr(l3e).as_usize() as *const PageTablePage;
+            let l2e = (*l2).entries[pt_index(virt, PageLevel::L2)];
+            if !A::Pte::is_present(l2e) { return 0; }
+            if A::Pte::is_huge(l2e) { return l2e.raw(); }
+            let l1 = A::Pte::phys_addr(l2e).as_usize() as *const PageTablePage;
+            let l1e = (*l1).entries[pt_index(virt, PageLevel::L1)];
+            if !A::Pte::is_present(l1e) { return 0; }
+            if A::Pte::is_huge(l1e) { return l1e.raw(); }
+            let l0 = A::Pte::phys_addr(l1e).as_usize() as *const PageTablePage;
+            (*l0).entries[pt_index(virt, PageLevel::L0)].raw()
+        }
+    }
+
+    /// Write a raw PTE value to the leaf slot for `virt`. Allocates intermediate
+    /// page table levels if needed. Used for software-defined markers like PROT_NONE.
+    pub fn write_leaf_pte(&mut self, virt: VirtAddr, raw: u64, alloc: &mut dyn FrameAllocator) {
+        unsafe {
+            // Walk/allocate to level 0, then write the raw value
+            let l3 = self.root.as_usize() as *mut PageTablePage;
+            let l3e = &mut (*l3).entries[pt_index(virt, PageLevel::L3)];
+            if !A::Pte::is_present(*l3e) {
+                let frame = match alloc.alloc(PageSize::FourK) {
+                    Ok(f) => f, Err(_) => return,
+                };
+                core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
+                *l3e = A::Pte::encode(frame, A::table_entry_flags());
+            }
+            let l2 = A::Pte::phys_addr(*l3e).as_usize() as *mut PageTablePage;
+            let l2e = &mut (*l2).entries[pt_index(virt, PageLevel::L2)];
+            if !A::Pte::is_present(*l2e) {
+                let frame = match alloc.alloc(PageSize::FourK) {
+                    Ok(f) => f, Err(_) => return,
+                };
+                core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
+                *l2e = A::Pte::encode(frame, A::table_entry_flags());
+            }
+            let l1 = A::Pte::phys_addr(*l2e).as_usize() as *mut PageTablePage;
+            let l1e = &mut (*l1).entries[pt_index(virt, PageLevel::L1)];
+            if !A::Pte::is_present(*l1e) {
+                let frame = match alloc.alloc(PageSize::FourK) {
+                    Ok(f) => f, Err(_) => return,
+                };
+                core::ptr::write_bytes(frame.as_usize() as *mut u8, 0, 4096);
+                *l1e = A::Pte::encode(frame, A::table_entry_flags());
+            }
+            let l0 = A::Pte::phys_addr(*l1e).as_usize() as *mut PageTablePage;
+            (*l0).entries[pt_index(virt, PageLevel::L0)] = PageTableEntry::new(raw);
+        }
+    }
+
     /// Unmap a single 4K page. Returns the physical address that was mapped.
     pub fn unmap_4k(&mut self, virt: VirtAddr) -> Result<PhysAddr, MemoryError> {
         unsafe {
@@ -584,6 +642,8 @@ impl<A: ArchPaging> PageTable4Level<A> {
 
     /// Return the architecture's COW bit value (delegates to `A::cow_bit()`).
     pub fn cow_bit() -> u64 { A::cow_bit() }
+    /// Return the architecture's PROT_NONE marker bit.
+    pub fn prot_none_bit() -> u64 { A::prot_none_bit() }
 
     /// Convert MappingFlags to raw PTE flags (delegates to `A::mapping_to_pte_flags`).
     pub fn pte_flags(flags: MappingFlags) -> u64 {

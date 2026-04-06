@@ -12,6 +12,11 @@ pub const HUGE: u64        = 1 << 7;
 pub const GLOBAL: u64      = 1 << 8;
 /// Software-defined COW (copy-on-write) bit. OS-available bit 9.
 pub const COW: u64         = 1 << 9;
+/// Software-defined PROT_NONE marker. OS-available bit 10.
+/// PTE is NOT present (no PRESENT bit), but this bit marks it as
+/// intentionally inaccessible (vs unmapped). Page fault handler
+/// checks this to deliver SIGSEGV instead of demand-paging.
+pub const PROT_NONE: u64   = 1 << 10;
 pub const NO_EXECUTE: u64  = 1 << 63;
 
 /// Mask for the physical address field (bits 12-51).
