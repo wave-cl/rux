@@ -44,9 +44,13 @@ pub fn handle_syscall(frame: *mut u8) {
             // nr=220 is clone(flags, stack, ptid, tls, ctid)
             220 => {
                 let flags = a0 as usize;
-                if flags & crate::errno::CLONE_VM != 0 {
+                if flags & crate::errno::CLONE_VM != 0
+                    && flags & crate::errno::CLONE_VFORK == 0
+                {
+                    // Thread: shared address space (CLONE_VM without CLONE_VFORK)
                     crate::fork::sys_clone(flags, a1 as usize, a4 as usize) as i64
                 } else {
+                    // Fork or vfork: COW (vfork uses COW to avoid shared-state corruption)
                     crate::fork::sys_fork() as i64
                 }
             }

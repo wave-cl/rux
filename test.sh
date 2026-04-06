@@ -374,6 +374,7 @@ echo hello | tr a-z A-Z
 echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
+timeout 1 sleep 10 ; echo timeout_exit=$?
 cat /proc/$$/stat | cut -d" " -f5
 cp /etc/passwd /tmp/cp_test && wc -l /tmp/cp_test
 echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
@@ -489,8 +490,7 @@ check "dev/urandom"            "8"
 check "touch timestamp"        "Modify:"
 check "pipe cat"               "abc"
 check "signal trap"            "trapped_sig"
-# aarch64: vfork needs setjmp/longjmp
-# check "timeout (alarm)"        "timeout_exit="
+check "timeout (alarm)"        "timeout_exit="
 check "tail (lseek)"           "/bin/sh"
 check "find /etc"              "passwd"
 check "sort"                   "root"
