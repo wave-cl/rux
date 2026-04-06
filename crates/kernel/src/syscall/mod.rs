@@ -545,7 +545,15 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Additional syscalls ────────────────────────────────────
         Syscall::Getrandom => posix::getrandom(a0, a1, a2),
-        Syscall::ClockGetres => 0, // stub — musl queries but doesn't need real value
+        Syscall::ClockGetres => {
+            // clock_getres(clockid, res) — return 1ns resolution
+            if a1 != 0 {
+                if crate::uaccess::validate_user_ptr(a1, 16).is_ok() {
+                    unsafe { *(a1 as *mut u64) = 0; *((a1 + 8) as *mut u64) = 1; } // 0s + 1ns
+                }
+            }
+            0
+        }
         Syscall::Dup3 => posix::dup3(a0, a1, a2),
         Syscall::Sysctl => 0, // stub — OpenRC queries kernel params
         Syscall::Flock => 0, // stub — single-process, locking is a no-op
@@ -721,7 +729,13 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
             crate::errno::EINTR
         }
-        Syscall::Getitimer => 0, // stub
+        Syscall::Getitimer => {
+            // getitimer(which, value) — return zeroed timer (no active timers)
+            if a1 != 0 && crate::uaccess::validate_user_ptr(a1, 32).is_ok() {
+                unsafe { core::ptr::write_bytes(a1 as *mut u8, 0, 32); }
+            }
+            0
+        }
         Syscall::Lchown => posix::chown(a0, a1, a2), // same as chown for now
         Syscall::Setfsuid => 0,
         Syscall::Setfsgid => 0,
