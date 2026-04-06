@@ -365,6 +365,14 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
             unsafe { if let Some(f) = fdt::get_fd_mut(fd) { f.flags = arg as u32; } }
             0
         }
+        1030 => {
+            // F_DUPFD_CLOEXEC — like F_DUPFD but set FD_CLOEXEC on new fd
+            let newfd = fdt::sys_dupfd(fd, arg);
+            if newfd >= 0 {
+                unsafe { if let Some(f) = fdt::get_fd_mut(newfd as usize) { f.fd_flags = fdt::FD_CLOEXEC; } }
+            }
+            newfd
+        }
         _ => 0,
     }
 }

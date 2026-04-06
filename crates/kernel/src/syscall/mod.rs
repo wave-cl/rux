@@ -490,8 +490,31 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             0
         },
         Syscall::SchedYield | Syscall::Alarm |
-        Syscall::Getgroups | Syscall::Getrlimit |
-        Syscall::SetRobustList | Syscall::SchedGetaffinity | Syscall::Prctl => 0,
+        Syscall::SetRobustList | Syscall::SchedGetaffinity => 0,
+        Syscall::Getrlimit => {
+            // getrlimit(resource, rlim) — return RLIM_INFINITY
+            if a1 != 0 {
+                if crate::uaccess::validate_user_ptr(a1, 16).is_err() { return crate::errno::EFAULT; }
+                unsafe {
+                    *(a1 as *mut u64) = u64::MAX;
+                    *((a1 + 8) as *mut u64) = u64::MAX;
+                }
+            }
+            0
+        }
+        Syscall::Prctl => match a0 {
+            3 => 1,  // PR_GET_DUMPABLE → dumpable
+            4 => 0,  // PR_SET_DUMPABLE → accept
+            _ => 0,
+        }
+        Syscall::Getgroups => {
+            if a0 == 0 { 1 }
+            else {
+                if crate::uaccess::validate_user_ptr(a1, 4).is_err() { return crate::errno::EFAULT; }
+                unsafe { *(a1 as *mut u32) = 0; }
+                1
+            }
+        }
 
         // tgkill(tgid, tid, sig) / tkill(tid, sig) — route to kill()
         Syscall::Tgkill => posix::kill(a1 as isize, a2),

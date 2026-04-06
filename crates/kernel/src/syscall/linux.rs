@@ -6,7 +6,7 @@
 // ── Pipes (Linux extension) ──────────────────────────────────────────
 
 /// pipe2(pipefd, flags) — create a pipe.
-/// Supports O_NONBLOCK (0o4000) and O_CLOEXEC (0o2000000, accepted but no-op).
+/// Supports O_NONBLOCK (0o4000) and O_CLOEXEC (0o2000000).
 pub fn pipe2(pipefd_ptr: usize, flags: usize) -> isize {
     if crate::uaccess::validate_user_ptr(pipefd_ptr, 8).is_err() { return crate::errno::EFAULT; }
     match crate::pipe::create() {
@@ -16,6 +16,11 @@ pub fn pipe2(pipefd_ptr: usize, flags: usize) -> isize {
                 if flags & 0o4000 != 0 {
                     if let Some(f) = rux_fs::fdtable::get_fd_mut(read_fd as usize) { f.flags |= 0x800; }
                     if let Some(f) = rux_fs::fdtable::get_fd_mut(write_fd as usize) { f.flags |= 0x800; }
+                }
+                // Apply O_CLOEXEC to both pipe fds
+                if flags & 0o2000000 != 0 {
+                    if let Some(f) = rux_fs::fdtable::get_fd_mut(read_fd as usize) { f.fd_flags = rux_fs::fdtable::FD_CLOEXEC; }
+                    if let Some(f) = rux_fs::fdtable::get_fd_mut(write_fd as usize) { f.fd_flags = rux_fs::fdtable::FD_CLOEXEC; }
                 }
                 crate::uaccess::put_user(pipefd_ptr, read_fd as i32);
                 crate::uaccess::put_user(pipefd_ptr + 4, write_fd as i32);

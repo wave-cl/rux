@@ -154,7 +154,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
     let out_count = maxevents.min(64);
     if crate::uaccess::validate_user_ptr(events_ptr, out_count * 12).is_err() { return crate::errno::EFAULT; }
 
-    let timeout_ms = if timeout as isize == -1 { 30_000usize } else { (timeout as usize).min(30_000) };
+    let timeout_ms = if timeout as isize == -1 { 600_000usize } else { timeout as usize };
     let has_sockets = unsafe {
         let ep = &EPOLL[idx];
         ep.entries[..ep.count].iter().any(|e| e.fd >= 0 && super::socket::is_socket(e.fd as usize))
