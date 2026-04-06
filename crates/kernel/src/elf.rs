@@ -134,6 +134,9 @@ pub unsafe fn load_elf_from_inode(
         let stack_base = 0x80000000u64 - stack_pages * 4096;
         for p in 0..stack_pages {
             let sp_frame = alloc.alloc(rux_mm::PageSize::FourK).expect("stack page");
+            // Zero the frame — Linux guarantees zero-filled pages for user processes
+            // (prevents information leaks and satisfies programs that assume zero stack)
+            core::ptr::write_bytes(sp_frame.as_usize() as *mut u8, 0, 4096);
             let _ = upt.map_4k(
                 rux_klib::VirtAddr::new((stack_base + p * 4096) as usize),
                 sp_frame, stack_flags, alloc,

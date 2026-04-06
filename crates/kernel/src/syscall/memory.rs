@@ -948,9 +948,20 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
                 let alloc = crate::kstate::alloc();
                 upt.write_leaf_pte(virt, crate::arch::PageTable::prot_none_bit(), alloc);
             } else if let Ok(pa) = upt.translate(virt) {
+                // Page is physically mapped — remap with new permissions
                 let pa_page = rux_klib::PhysAddr::new(pa.as_usize() & !0xFFF);
                 let pte_flags = crate::arch::PageTable::pte_flags(flags);
                 upt.remap(virt, pa_page, pte_flags);
+            } else {
+                // Page not mapped — might have a prot marker from lazy mmap.
+                // Update the marker so the demand pager uses the new permissions.
+                let raw_pte = upt.read_leaf_pte(virt);
+                if raw_pte != 0 {
+                    let alloc = crate::kstate::alloc();
+                    let _ = upt.unmap_4k(virt);
+                    let marker = crate::arch::PageTable::encode_prot_marker(prot as u8);
+                    upt.write_leaf_pte(virt, marker, alloc);
+                }
             }
             va += 4096;
         }

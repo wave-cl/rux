@@ -887,6 +887,10 @@ impl<A: ArchPaging> PageTable4Level<A> {
     pub unsafe fn remap(&self, virt: VirtAddr, new_phys: PhysAddr, new_flags: u64) {
         if let Some(pte) = self.leaf_pte_mut(virt) {
             *pte = A::Pte::encode(new_phys, new_flags);
+            // DSB ensures the PTE store is visible before TLB invalidation.
+            // Required by ARM architecture (Break-Before-Make), harmless on x86.
+            #[cfg(target_arch = "aarch64")]
+            core::arch::asm!("dsb ish", options(nostack));
             A::flush_tlb(virt);
         }
     }

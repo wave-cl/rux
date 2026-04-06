@@ -522,7 +522,8 @@ check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "perl"                 "perl:42"
 check "python3 version"      "Python 3"
-# python3 -c crashes on aarch64 during Py_Initialize (SIGSEGV in _PySys_InitMain)
+# TODO: python3 -c crashes on aarch64 (SIGSEGV in _PySys_InitMain during Py_Initialize)
+# Needs QEMU gdb stub investigation. perl + python3 --version both work.
 # check "python3 print"        "4950"
 check "subshell"             "subshell_ok"
 check "fork + pipe"          "2"

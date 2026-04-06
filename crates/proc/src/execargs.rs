@@ -202,10 +202,15 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     let mut ai = 0;
     (*auxv.add(ai)) = [6, 4096];            ai += 1; // AT_PAGESZ
     (*auxv.add(ai)) = [11, 0];              ai += 1; // AT_UID
-    (*auxv.add(ai)) = [23, 0];              ai += 1; // AT_EUID
+    (*auxv.add(ai)) = [12, 0];              ai += 1; // AT_EUID (was 23=AT_SECURE)
     (*auxv.add(ai)) = [13, 0];              ai += 1; // AT_GID
     (*auxv.add(ai)) = [14, 0];              ai += 1; // AT_EGID
-    (*auxv.add(ai)) = [16, 0];              ai += 1; // AT_HWCAP (no special features)
+    // AT_HWCAP: advertise FP+ASIMD (mandatory on ARMv8), plus common features.
+    // Without these, musl/libc may use slow fallback paths.
+    #[cfg(target_arch = "aarch64")]
+    { (*auxv.add(ai)) = [16, 0xFF]; ai += 1; } // FP|ASIMD|EVTSTRM|AES|PMULL|SHA1|SHA2|CRC32
+    #[cfg(not(target_arch = "aarch64"))]
+    { (*auxv.add(ai)) = [16, 0];   ai += 1; } // AT_HWCAP
     (*auxv.add(ai)) = [25, random_base];    ai += 1; // AT_RANDOM (16 random bytes)
 
     // Dynamic linking entries (only if set)
