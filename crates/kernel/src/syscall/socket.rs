@@ -22,6 +22,8 @@ struct SocketSlot {
     connected_ip: [u8; 4],
     connected_port: u16,
     connected: bool,
+    /// Socket options
+    reuse_addr: bool,
 }
 
 impl SocketSlot {
@@ -30,6 +32,7 @@ impl SocketSlot {
             active: false, sock_type: 0, bound_port: 0,
             smol_handle_raw: -1,
             connected_ip: [0; 4], connected_port: 0, connected: false,
+            reuse_addr: false,
         }
     }
 }
@@ -149,8 +152,8 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let (port, _ip) = read_sockaddr(addr_ptr);
-        // Check EADDRINUSE: another active TCP socket already bound to this port
-        if port != 0 {
+        // Check EADDRINUSE (skip if SO_REUSEADDR set on this socket)
+        if port != 0 && !SOCKETS[idx].reuse_addr {
             for i in 0..MAX_SOCKETS {
                 if SOCKETS[i].active && i != idx && SOCKETS[i].bound_port == port
                     && SOCKETS[i].sock_type == SOCKETS[idx].sock_type
@@ -590,7 +593,26 @@ pub fn sys_recvmmsg(fd: usize, msgvec_ptr: usize, vlen: usize) -> isize {
     recvd
 }
 
-// ── getsockopt / getsockname / getpeername ──────────────────────────
+// ── setsockopt / getsockopt / getsockname / getpeername ─────────────
+
+pub fn sys_setsockopt(fd: usize, level: usize, optname: usize, optval: usize, _optlen: usize) -> isize {
+    // SOL_SOCKET=1, SO_REUSEADDR=2
+    if level == 1 && optname == 2 {
+        unsafe {
+            if fd < rux_fs::fdtable::MAX_FDS && (*rux_fs::fdtable::FD_TABLE)[fd].is_socket {
+                let idx = (*rux_fs::fdtable::FD_TABLE)[fd].socket_idx as usize;
+                if idx < MAX_SOCKETS && SOCKETS[idx].active {
+                    let val = if optval != 0 && crate::uaccess::validate_user_ptr(optval, 4).is_ok() {
+                        *(optval as *const i32)
+                    } else { 1 };
+                    SOCKETS[idx].reuse_addr = val != 0;
+                }
+            }
+        }
+    }
+    // All other options: accept silently (stub)
+    0
+}
 
 pub fn sys_getsockopt(_fd: usize, _level: usize, optname: usize, optval: usize, optlen: usize) -> isize {
     if optval != 0 && crate::uaccess::validate_user_ptr(optval, 4).is_err() { return crate::errno::EFAULT; }

@@ -300,12 +300,23 @@ pub fn uname(buf: usize) -> isize {
     }
     0
 }
-pub fn clock_gettime(_clockid: usize, tp: usize) -> isize {
+/// Base epoch for CLOCK_REALTIME: 2025-04-01 00:00:00 UTC.
+/// Without an RTC, we use a fixed base and add monotonic ticks.
+const EPOCH_BASE: u64 = 1743465600; // seconds since 1970-01-01
+
+pub fn clock_gettime(clockid: usize, tp: usize) -> isize {
     if crate::uaccess::validate_user_ptr(tp, 16).is_err() { return crate::errno::EFAULT; }
     let ticks = Arch::ticks();
+    let (sec, nsec) = if clockid == 0 {
+        // CLOCK_REALTIME: wall clock = epoch base + boot ticks
+        (EPOCH_BASE + ticks / 1000, (ticks % 1000) * 1_000_000)
+    } else {
+        // CLOCK_MONOTONIC and others: time since boot
+        (ticks / 1000, (ticks % 1000) * 1_000_000)
+    };
     unsafe {
-        crate::uaccess::put_user(tp, ticks / 1000);
-        crate::uaccess::put_user(tp + 8, (ticks % 1000) * 1_000_000);
+        crate::uaccess::put_user(tp, sec);
+        crate::uaccess::put_user(tp + 8, nsec);
     }
     0
 }

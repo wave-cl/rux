@@ -174,7 +174,8 @@ unsafe fn create_and_open(dir_ino: rux_fs::InodeId, fname: rux_fs::FileName<'_>,
     use rux_fs::FileSystem;
     let cred = super::current_cred();
     let fs = crate::kstate::fs();
-    match fs.checked_create(dir_ino, fname, (mode & 0o7777) as u32 | 0o100000, &cred) {
+    let umask = super::PROCESS.fs_ctx.umask as u32;
+    match fs.checked_create(dir_ino, fname, (mode as u32 & 0o7777 & !umask) | 0o100000, &cred) {
         Ok(ino) => {
             let now = super::current_time_secs();
             let _ = fs.utimes(ino, now, now);

@@ -1048,6 +1048,12 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             } else if f.active && is_timerfd(fd) {
                 // timerfd: readable if expired
                 if events & 1 != 0 && timerfd_has_data(fd) { revents |= 1; }
+            } else if f.active && f.is_pipe {
+                // Pipe: check data availability and writer closure
+                let pid = f.pipe_id;
+                if events & 1 != 0 && crate::pipe::has_data(pid) { revents |= 1; } // POLLIN
+                if events & 4 != 0 && f.pipe_write { revents |= 4; } // POLLOUT (write end)
+                if crate::pipe::writers_closed(pid) { revents |= 0x10; } // POLLHUP
             } else if f.active || fd <= 2 {
                 // Console fds and regular file fds are always ready
                 if events & 1 != 0 { revents |= 1; }   // POLLIN
