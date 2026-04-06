@@ -39,10 +39,14 @@ pub struct ProcessState {
     pub uid: u32,
     /// Effective user ID (used for permission checks).
     pub euid: u32,
+    /// Saved set-user-ID (preserved across exec).
+    pub suid: u32,
     /// Real group ID.
     pub gid: u32,
     /// Effective group ID.
     pub egid: u32,
+    /// Saved set-group-ID (preserved across exec).
+    pub sgid: u32,
     /// Syscall filter bitmask (seccomp-lite infrastructure).
     pub syscall_filter: u64,
 }
@@ -58,7 +62,7 @@ impl ProcessState {
             signal_hot: rux_proc::signal::SignalHot::new(),
             signal_cold: rux_proc::signal::SignalCold::new(),
             signal_restorer: [0; 32],
-            uid: 0, euid: 0, gid: 0, egid: 0,
+            uid: 0, euid: 0, suid: 0, gid: 0, egid: 0, sgid: 0,
             syscall_filter: 0,
         }
     }
@@ -544,7 +548,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Truncate => posix::truncate(a0, a1),
         Syscall::Rmdir => posix::rmdir(a0),
         Syscall::Pipe => linux::pipe2(a0, 0),
-        Syscall::Getsid => unsafe { PROCESS.fs_ctx.cwd as isize }, // stub: return 0 (session = init)
+        Syscall::Getsid => unsafe {
+            // getsid(pid): pid==0 means self
+            let target_pid = if a0 == 0 { crate::task_table::current_pid() } else { a0 as u32 };
+            match crate::task_table::find_task_by_pid(target_pid) {
+                Some(i) => crate::task_table::TASK_TABLE[i].sid as isize,
+                None => crate::errno::ESRCH,
+            }
+        }
 
         // ── Phase 3 epoll ─────────────────────────────────────────
         Syscall::EpollCreate => memory::epoll_create(0),
@@ -608,17 +619,21 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Getresuid => unsafe {
             if a0 != 0 { crate::uaccess::put_user(a0, PROCESS.uid); }
             if a1 != 0 { crate::uaccess::put_user(a1, PROCESS.euid); }
-            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.uid); } // saved = real
+            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.suid); }
             0
         }
         Syscall::Getresgid => unsafe {
             if a0 != 0 { crate::uaccess::put_user(a0, PROCESS.gid); }
             if a1 != 0 { crate::uaccess::put_user(a1, PROCESS.egid); }
-            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.gid); }
+            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.sgid); }
             0
         }
-        Syscall::Setresuid => unsafe { PROCESS.uid = a0 as u32; PROCESS.euid = a1 as u32; 0 }
-        Syscall::Setresgid => unsafe { PROCESS.gid = a0 as u32; PROCESS.egid = a1 as u32; 0 }
+        Syscall::Setresuid => unsafe {
+            PROCESS.uid = a0 as u32; PROCESS.euid = a1 as u32; PROCESS.suid = a2 as u32; 0
+        }
+        Syscall::Setresgid => unsafe {
+            PROCESS.gid = a0 as u32; PROCESS.egid = a1 as u32; PROCESS.sgid = a2 as u32; 0
+        }
         Syscall::SchedSetaffinity | Syscall::SchedGetparam | Syscall::SchedSetparam |
         Syscall::SchedGetscheduler | Syscall::SchedSetscheduler => 0, // single-CPU stubs
 

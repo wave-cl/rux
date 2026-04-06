@@ -348,19 +348,21 @@ pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: us
 // ── User/group ID management ──────────────────────────────────────────
 
 /// Check if a credential change is allowed: root can set anything,
-/// non-root can only set to current real or effective value.
+/// non-root can only set to current real, effective, or saved value.
 /// `u32::MAX` means "don't change" (returns true).
 #[inline]
-unsafe fn can_set_id(new: u32, real: u32, effective: u32) -> bool {
-    new == u32::MAX || super::PROCESS.euid == 0 || new == real || new == effective
+unsafe fn can_set_id(new: u32, real: u32, effective: u32, saved: u32) -> bool {
+    new == u32::MAX || super::PROCESS.euid == 0 || new == real || new == effective || new == saved
 }
 
 /// setuid(uid) — POSIX.1
+/// Root: sets real, effective, and saved. Non-root: sets effective only.
 pub unsafe fn setuid(uid: u32) -> isize {
     if super::PROCESS.euid == 0 {
         super::PROCESS.uid = uid;
         super::PROCESS.euid = uid;
-    } else if can_set_id(uid, super::PROCESS.uid, super::PROCESS.euid) {
+        super::PROCESS.suid = uid;
+    } else if can_set_id(uid, super::PROCESS.uid, super::PROCESS.euid, super::PROCESS.suid) {
         super::PROCESS.euid = uid;
     } else {
         return crate::errno::EPERM;
@@ -369,11 +371,13 @@ pub unsafe fn setuid(uid: u32) -> isize {
 }
 
 /// setgid(gid) — POSIX.1
+/// Root: sets real, effective, and saved. Non-root: sets effective only.
 pub unsafe fn setgid(gid: u32) -> isize {
     if super::PROCESS.euid == 0 {
         super::PROCESS.gid = gid;
         super::PROCESS.egid = gid;
-    } else if can_set_id(gid, super::PROCESS.gid, super::PROCESS.egid) {
+        super::PROCESS.sgid = gid;
+    } else if can_set_id(gid, super::PROCESS.gid, super::PROCESS.egid, super::PROCESS.sgid) {
         super::PROCESS.egid = gid;
     } else {
         return crate::errno::EPERM;
@@ -382,20 +386,24 @@ pub unsafe fn setgid(gid: u32) -> isize {
 }
 
 /// setreuid(ruid, euid) — POSIX.1
+/// If either real or effective changes, saved is set to new effective.
 pub unsafe fn setreuid(ruid: u32, euid: u32) -> isize {
-    if !can_set_id(ruid, super::PROCESS.uid, super::PROCESS.euid) { return crate::errno::EPERM; }
-    if !can_set_id(euid, super::PROCESS.uid, super::PROCESS.euid) { return crate::errno::EPERM; }
+    if !can_set_id(ruid, super::PROCESS.uid, super::PROCESS.euid, super::PROCESS.suid) { return crate::errno::EPERM; }
+    if !can_set_id(euid, super::PROCESS.uid, super::PROCESS.euid, super::PROCESS.suid) { return crate::errno::EPERM; }
     if ruid != u32::MAX { super::PROCESS.uid = ruid; }
     if euid != u32::MAX { super::PROCESS.euid = euid; }
+    // POSIX: if either was changed, saved = new effective
+    if ruid != u32::MAX || euid != u32::MAX { super::PROCESS.suid = super::PROCESS.euid; }
     0
 }
 
 /// setregid(rgid, egid) — POSIX.1
 pub unsafe fn setregid(rgid: u32, egid: u32) -> isize {
-    if !can_set_id(rgid, super::PROCESS.gid, super::PROCESS.egid) { return crate::errno::EPERM; }
-    if !can_set_id(egid, super::PROCESS.gid, super::PROCESS.egid) { return crate::errno::EPERM; }
+    if !can_set_id(rgid, super::PROCESS.gid, super::PROCESS.egid, super::PROCESS.sgid) { return crate::errno::EPERM; }
+    if !can_set_id(egid, super::PROCESS.gid, super::PROCESS.egid, super::PROCESS.sgid) { return crate::errno::EPERM; }
     if rgid != u32::MAX { super::PROCESS.gid = rgid; }
     if egid != u32::MAX { super::PROCESS.egid = egid; }
+    if rgid != u32::MAX || egid != u32::MAX { super::PROCESS.sgid = super::PROCESS.egid; }
     0
 }
 
@@ -441,12 +449,16 @@ pub fn getpgid(pid: usize) -> isize {
 
 /// setsid() — POSIX.1
 /// Create a new session. Caller becomes session and process group leader.
+/// Fails with EPERM if caller is already a process group leader.
 pub fn setsid() -> isize {
     unsafe {
         use crate::task_table::*;
         let idx = current_task_idx();
         let pid = TASK_TABLE[idx].pid;
+        // POSIX: fail if already a process group leader (pgid == pid)
+        if TASK_TABLE[idx].pgid == pid { return crate::errno::EPERM; }
         TASK_TABLE[idx].pgid = pid;
+        TASK_TABLE[idx].sid = pid;
         pid as isize
     }
 }
