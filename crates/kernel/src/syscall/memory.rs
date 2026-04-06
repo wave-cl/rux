@@ -538,6 +538,7 @@ unsafe fn sync_icache(va: usize, len: usize) {
 /// (with write-back on munmap).
 pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, offset: usize) -> isize {
 
+
     const MAP_FIXED: usize = 0x10;
     const MAP_ANONYMOUS: usize = 0x20;
     const MAP_SHARED: usize = 0x01;
@@ -572,8 +573,8 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             }
             fixed_addr
         } else {
-            let r = super::PROCESS.mmap_base;
-            super::PROCESS.mmap_base += aligned_len;
+            let r = unsafe { super::PROCESS.mmap_base };
+            unsafe { super::PROCESS.mmap_base += aligned_len; }
             r
         };
 
