@@ -97,7 +97,11 @@ pub fn exit_group(status: i32) -> ! {
 }
 
 /// wait4(pid, wstatus, options, rusage) — Linux extension of POSIX waitpid.
-pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, _rusage: usize) -> isize {
+pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, rusage: usize) -> isize {
+    // Zero the rusage struct (144 bytes) so programs get valid empty data
+    if rusage != 0 && crate::uaccess::validate_user_ptr(rusage, 144).is_ok() {
+        unsafe { core::ptr::write_bytes(rusage as *mut u8, 0, 144); }
+    }
     super::posix::waitpid(pid, wstatus_ptr, options)
 }
 

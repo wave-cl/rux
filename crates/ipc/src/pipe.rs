@@ -4,7 +4,7 @@
 /// When all writers close, reads return 0 (EOF). When all readers close,
 /// writes return -EPIPE.
 
-const PIPE_BUF_SIZE: usize = 4096;
+const PIPE_BUF_SIZE: usize = 16384; // 16KB (Linux default is 64KB, but conserve BSS)
 const MAX_PIPES: usize = 32;
 
 /// Maximum concurrent processes (must match kernel's MAX_PROCS).

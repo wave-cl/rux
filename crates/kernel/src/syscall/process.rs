@@ -374,11 +374,18 @@ pub fn getrandom(buf_ptr: usize, len: usize, _flags: usize) -> isize {
     len as isize
 }
 
-/// dup3(oldfd, newfd, flags) — like dup2 but with flags
-pub fn dup3(oldfd: usize, newfd: usize, _flags: usize) -> isize {
-    // dup3 is the same as dup2 except it fails if oldfd == newfd
+/// dup3(oldfd, newfd, flags) — like dup2 but with flags (O_CLOEXEC)
+pub fn dup3(oldfd: usize, newfd: usize, flags: usize) -> isize {
     if oldfd == newfd { return crate::errno::EINVAL; }
-    super::posix::dup2(oldfd, newfd)
+    let result = super::posix::dup2(oldfd, newfd);
+    if result >= 0 && flags & 0x80000 != 0 { // O_CLOEXEC
+        unsafe {
+            if let Some(f) = rux_fs::fdtable::get_fd_mut(newfd) {
+                f.fd_flags = rux_fs::fdtable::FD_CLOEXEC;
+            }
+        }
+    }
+    result
 }
 
 pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: usize) -> isize {
