@@ -474,7 +474,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     // Directory / path ops
     t[79] = Syscall::Getcwd;     t[80] = Syscall::Chdir;
     t[82] = Syscall::Rename;     t[264] = Syscall::Renameat;
-    t[316] = Syscall::Renameat; // renameat2 → same handler (ignores flags arg)
+    t[316] = Syscall::Renameat2;
     t[83] = Syscall::Mkdir;      t[86] = Syscall::Link;
     t[265] = Syscall::Linkat;    t[87] = Syscall::Unlink;
     t[88] = Syscall::Symlink;    t[266] = Syscall::Symlinkat;

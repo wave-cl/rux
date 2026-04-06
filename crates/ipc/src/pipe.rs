@@ -96,9 +96,14 @@ pub fn write_ex(pipe_id: u8, buf: *const u8, len: usize, can_block: bool) -> isi
         if !p.active { return -9; }
         if p.readers == 0 { return -32; }
         let space = PIPE_BUF_SIZE - p.count;
+        // POSIX: writes ≤ PIPE_BUF (4096) must be atomic — all or nothing
+        if len <= 4096 && space < len {
+            if can_block { return -11; } // EAGAIN — caller will block until space
+            return 0;
+        }
         if space == 0 {
-            if can_block { return -11; } // EAGAIN — caller will block
-            return 0; // non-blocking fallback
+            if can_block { return -11; }
+            return 0;
         }
         let to_write = len.min(space);
         let first = to_write.min(PIPE_BUF_SIZE - p.write_pos);

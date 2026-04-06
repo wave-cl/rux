@@ -313,8 +313,16 @@ pub fn creat_at(dirfd: usize, path_ptr: usize) -> isize {
 
 // ── Path operations ─────────────────────────────────────────────────
 
+/// renameat2(olddirfd, old, newdirfd, new, flags) — renameat with flags
+pub fn rename_at2(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: usize, flags: usize) -> isize {
+    const RENAME_NOREPLACE: usize = 1;
+    const RENAME_EXCHANGE: usize = 2;
+    if flags & RENAME_EXCHANGE != 0 { return crate::errno::EINVAL; } // not supported
+    rename_at_inner(old_dirfd, old_ptr, new_dirfd, new_ptr, flags & RENAME_NOREPLACE != 0)
+}
+
 /// rename_at(olddirfd, old, newdirfd, new) — renameat with dirfd support
-pub fn rename_at(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: usize) -> isize {
+fn rename_at_inner(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: usize, noreplace: bool) -> isize {
     unsafe {
         use rux_fs::FileName;
         let (old_dir, old_name_ref) = match super::resolve_parent_at(old_dirfd, old_ptr) {
@@ -329,6 +337,13 @@ pub fn rename_at(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: us
         };
         let old_fname = match FileName::new(&old_name_buf[..old_name_len]) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
         let new_fname = match FileName::new(new_name) { Ok(f) => f, Err(_) => return crate::errno::EINVAL };
+        // RENAME_NOREPLACE: fail if target exists
+        if noreplace {
+            use rux_fs::FileSystem;
+            if crate::kstate::fs().lookup(new_dir, new_fname).is_ok() {
+                return crate::errno::EEXIST;
+            }
+        }
         let cred = super::current_cred();
         match crate::kstate::fs().checked_rename(old_dir, old_fname, new_dir, new_fname, &cred) {
             Ok(()) => 0,
@@ -340,7 +355,7 @@ pub fn rename_at(old_dirfd: usize, old_ptr: usize, new_dirfd: usize, new_ptr: us
 /// rename(oldpath, newpath) — POSIX.1
 pub fn rename(old_ptr: usize, new_ptr: usize) -> isize {
     let at_fdcwd = (-100isize) as usize;
-    rename_at(at_fdcwd, old_ptr, at_fdcwd, new_ptr)
+    rename_at_inner(at_fdcwd, old_ptr, at_fdcwd, new_ptr, false)
 }
 
 /// symlink(target, linkpath) — POSIX.1

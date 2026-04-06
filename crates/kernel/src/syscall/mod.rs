@@ -208,7 +208,7 @@ pub enum Syscall {
     Stat, Lstat, Fstat, FstatAt, Faccessat, Readlink, Readlinkat,
     // Directory / path ops
     Getcwd, Creat, Mknodat, Mkdir, Mkdirat, Unlink, Unlinkat, Chdir, Fchdir,
-    Rename, Renameat, Symlink, Symlinkat,
+    Rename, Renameat, Renameat2, Symlink, Symlinkat,
     // Permissions
     Chmod, Fchmod, Fchmodat, Chown, Fchown, Fchownat, Utimensat,
     // Memory
@@ -388,7 +388,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Chdir => posix::chdir(a0),
         Syscall::Fchdir => posix::fchdir(a0),
         Syscall::Rename => posix::rename(a0, a1),
-        Syscall::Renameat => posix::rename_at(a0, a1, a2, a3),
+        Syscall::Renameat => posix::rename_at2(a0, a1, a2, a3, 0),
+        Syscall::Renameat2 => posix::rename_at2(a0, a1, a2, a3, a4),
         Syscall::Symlink => posix::symlink(a0, a1),
         Syscall::Symlinkat => posix::symlink_at(a0, a1, a2),
 

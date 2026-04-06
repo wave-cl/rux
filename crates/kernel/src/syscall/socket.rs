@@ -614,11 +614,18 @@ pub fn sys_setsockopt(fd: usize, level: usize, optname: usize, optval: usize, _o
     0
 }
 
-pub fn sys_getsockopt(_fd: usize, _level: usize, optname: usize, optval: usize, optlen: usize) -> isize {
+pub fn sys_getsockopt(fd: usize, _level: usize, optname: usize, optval: usize, optlen: usize) -> isize {
     if optval != 0 && crate::uaccess::validate_user_ptr(optval, 4).is_err() { return crate::errno::EFAULT; }
     if optlen != 0 && crate::uaccess::validate_user_ptr(optlen, 4).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let val = match optname {
+            2 => {
+                // SO_REUSEADDR: return stored value from setsockopt
+                if fd < rux_fs::fdtable::MAX_FDS && (*rux_fs::fdtable::FD_TABLE)[fd].is_socket {
+                    let idx = (*rux_fs::fdtable::FD_TABLE)[fd].socket_idx as usize;
+                    if idx < MAX_SOCKETS && SOCKETS[idx].reuse_addr { 1i32 } else { 0 }
+                } else { 0 }
+            }
             4 => 0i32,     // SO_ERROR = success
             7 | 8 => 65536, // SO_SNDBUF / SO_RCVBUF
             _ => 0,

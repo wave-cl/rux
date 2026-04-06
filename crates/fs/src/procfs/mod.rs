@@ -476,8 +476,18 @@ impl FileSystem for ProcFs {
             buf[..len].copy_from_slice(&tmp[..len]);
             return Ok(len);
         }
-        // /proc/[pid]/exe → path to executable
+        // /proc/[pid]/exe → path from cmdline argv[0]
         if is_pid_exe(ino) {
+            let pid = pid_from_file(ino);
+            let mut cmdline = [0u8; 128];
+            let clen = (self.get_task_cmdline)(pid as u32, &mut cmdline);
+            if clen > 0 {
+                // argv[0] is the first null-terminated string in cmdline
+                let end = cmdline[..clen].iter().position(|&b| b == 0).unwrap_or(clen);
+                let len = end.min(buf.len());
+                buf[..len].copy_from_slice(&cmdline[..len]);
+                return Ok(len);
+            }
             let s = b"/bin/sh";
             let len = s.len().min(buf.len());
             buf[..len].copy_from_slice(&s[..len]);
