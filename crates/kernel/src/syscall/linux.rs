@@ -6,11 +6,17 @@
 // ── Pipes (Linux extension) ──────────────────────────────────────────
 
 /// pipe2(pipefd, flags) — create a pipe.
-pub fn pipe2(pipefd_ptr: usize, _flags: usize) -> isize {
+/// Supports O_NONBLOCK (0o4000) and O_CLOEXEC (0o2000000, accepted but no-op).
+pub fn pipe2(pipefd_ptr: usize, flags: usize) -> isize {
     if crate::uaccess::validate_user_ptr(pipefd_ptr, 8).is_err() { return crate::errno::EFAULT; }
     match crate::pipe::create() {
         Ok((_pipe_id, read_fd, write_fd)) => {
             unsafe {
+                // Apply O_NONBLOCK to both pipe fds
+                if flags & 0o4000 != 0 {
+                    if let Some(f) = rux_fs::fdtable::get_fd_mut(read_fd as usize) { f.flags |= 0x800; }
+                    if let Some(f) = rux_fs::fdtable::get_fd_mut(write_fd as usize) { f.flags |= 0x800; }
+                }
                 crate::uaccess::put_user(pipefd_ptr, read_fd as i32);
                 crate::uaccess::put_user(pipefd_ptr + 4, write_fd as i32);
             }

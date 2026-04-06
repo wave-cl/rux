@@ -158,6 +158,8 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
     unsafe {
         if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
+        // POSIX: if oldfd == newfd, return newfd without closing/reopening
+        if oldfd == newfd { return newfd as isize; }
         // Close newfd if it's currently open (including pipe cleanup)
         if (*FD_TABLE)[newfd].active {
             if (*FD_TABLE)[newfd].is_pipe {

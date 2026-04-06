@@ -378,8 +378,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Getcwd => posix::getcwd(a0, a1),
         Syscall::Creat => posix::creat(a0),
         Syscall::Mknodat => posix::creat_at(a0, a1),
-        Syscall::Mkdir => posix::mkdir(a0),
-        Syscall::Mkdirat => posix::mkdir_at(a0, a1),
+        Syscall::Mkdir => posix::mkdir(a0, a1),
+        Syscall::Mkdirat => posix::mkdir_at(a0, a1, a2),
         Syscall::Unlink => posix::unlink(a0),
         Syscall::Unlinkat => posix::unlink_at(a0, a1),
         Syscall::Chdir => posix::chdir(a0),
@@ -542,7 +542,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Pwrite64 => posix::pwrite64(a0, a1, a2, a3),
         Syscall::Ftruncate => posix::ftruncate(a0, a1),
         Syscall::Truncate => posix::truncate(a0, a1),
-        Syscall::Rmdir => posix::unlink(a0), // rmdir → unlink (ext2 handles both)
+        Syscall::Rmdir => posix::rmdir(a0),
         Syscall::Pipe => linux::pipe2(a0, 0),
         Syscall::Getsid => unsafe { PROCESS.fs_ctx.cwd as isize }, // stub: return 0 (session = init)
 

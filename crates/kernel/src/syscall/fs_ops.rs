@@ -221,13 +221,27 @@ pub fn chdir(path_ptr: usize) -> isize {
 }
 
 /// mkdir(pathname, mode) — POSIX.1
-pub fn mkdir(path_ptr: usize) -> isize {
-    mkdir_at((-100isize) as usize, path_ptr) // AT_FDCWD
+pub fn mkdir(path_ptr: usize, mode: usize) -> isize {
+    mkdir_at((-100isize) as usize, path_ptr, mode) // AT_FDCWD
 }
 
 /// unlink(pathname) — POSIX.1
 pub fn unlink(path_ptr: usize) -> isize {
     unlink_at((-100isize) as usize, path_ptr) // AT_FDCWD
+}
+
+/// rmdir(pathname) — POSIX.1: remove empty directory.
+pub fn rmdir(path_ptr: usize) -> isize {
+    unsafe {
+        let (dir_ino, fname) = match super::resolve_parent_fname(path_ptr) {
+            Ok(v) => v, Err(e) => return e,
+        };
+        let cred = super::current_cred();
+        match crate::kstate::fs().checked_rmdir(dir_ino, fname, &cred) {
+            Ok(()) => 0,
+            Err(e) => -(e.as_errno() as isize),
+        }
+    }
 }
 
 /// creat(pathname, mode) — POSIX.1 (equivalent to open with O_CREAT|O_WRONLY|O_TRUNC)
@@ -236,7 +250,7 @@ pub fn creat(path_ptr: usize) -> isize {
 }
 
 /// mkdir_at(dirfd, path) — mkdirat with dirfd support
-pub fn mkdir_at(dirfd: usize, path_ptr: usize) -> isize {
+pub fn mkdir_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
         let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
@@ -244,7 +258,7 @@ pub fn mkdir_at(dirfd: usize, path_ptr: usize) -> isize {
         };
         let cred = super::current_cred();
         let fs = crate::kstate::fs();
-        match fs.checked_mkdir(dir_ino, fname, 0o755, &cred) {
+        match fs.checked_mkdir(dir_ino, fname, (mode & 0o7777) as u32, &cred) {
             Ok(ino) => {
                 let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs());
                 0
@@ -399,6 +413,7 @@ pub fn fchown(fd: usize, uid: usize, gid: usize) -> isize {
 }
 
 const UTIME_NOW: u64 = 0x3FFFFFFF;
+const UTIME_OMIT: u64 = 0x3FFFFFFE;
 
 /// utimensat(dirfd, path, times, flags) — POSIX.1-2008: set file timestamps.
 /// times is a pointer to two timespec structs (atime, mtime), or NULL for current time.
@@ -406,23 +421,26 @@ pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize)
     unsafe {
         use rux_fs::FileSystem;
         let now = super::current_time_secs();
+        if path_ptr == 0 { return 0; }
+        let path = crate::uaccess::read_user_cstr(path_ptr);
+        let ino = match super::resolve_at(dirfd, path) {
+            Ok(ino) => ino,
+            Err(_) => return 0,
+        };
         let (atime, mtime) = if times_ptr == 0 {
             (now, now)
         } else {
             if crate::uaccess::validate_user_ptr(times_ptr, 32).is_err() { return crate::errno::EFAULT; }
             let a_sec = *(times_ptr as *const u64);
-            let m_sec = *((times_ptr + 16) as *const u64);
             let a_nsec = *((times_ptr + 8) as *const u64);
+            let m_sec = *((times_ptr + 16) as *const u64);
             let m_nsec = *((times_ptr + 24) as *const u64);
-            let a = if a_nsec == UTIME_NOW { now } else { a_sec };
-            let m = if m_nsec == UTIME_NOW { now } else { m_sec };
+            // Get current values for UTIME_OMIT
+            let mut cur = core::mem::zeroed::<rux_fs::InodeStat>();
+            let _ = crate::kstate::fs().stat(ino, &mut cur);
+            let a = if a_nsec == UTIME_OMIT { cur.atime } else if a_nsec == UTIME_NOW { now } else { a_sec };
+            let m = if m_nsec == UTIME_OMIT { cur.mtime } else if m_nsec == UTIME_NOW { now } else { m_sec };
             (a, m)
-        };
-        if path_ptr == 0 { return 0; }
-        let path = crate::uaccess::read_user_cstr(path_ptr);
-        let ino = match super::resolve_at(dirfd, path) {
-            Ok(ino) => ino,
-            Err(_) => return 0, // silently succeed if path not found
         };
         let cred = super::current_cred();
         match crate::kstate::fs().checked_utimes(ino, atime, mtime, &cred) {

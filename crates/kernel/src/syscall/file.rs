@@ -5,6 +5,7 @@ use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 
 const O_CREAT: usize = 0x40;
+const O_EXCL: usize = 0x80;
 const O_APPEND: usize = 0x400;
 #[allow(dead_code)]
 const O_NONBLOCK: usize = 0x800;
@@ -173,6 +174,10 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
 
         match super::resolve_with_cwd(path) {
             Ok(ino) => {
+                // O_EXCL: fail if file exists when creating exclusively
+                if o_creat && flags & O_EXCL != 0 {
+                    return crate::errno::EEXIST;
+                }
                 // Permission check via VFS layer
                 let cred = super::current_cred();
                 let o_rdonly = flags & 3 == 0;
