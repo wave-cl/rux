@@ -2,6 +2,7 @@
 
 use rux_fs::fdtable as fdt;
 use crate::arch::StatLayout;
+const STAT_SIZE: usize = <crate::arch::Arch as StatLayout>::STAT_SIZE;
 const STAT_MODE_OFF: usize = <crate::arch::Arch as StatLayout>::MODE_OFF;
 const STAT_BLKSIZE_OFF: usize = <crate::arch::Arch as StatLayout>::BLKSIZE_OFF;
 /// stat(pathname, statbuf) — POSIX.1 (follows symlinks)
@@ -18,7 +19,7 @@ pub fn lstat(pathname: usize, buf: usize) -> isize {
 /// Sets mode, blksize, nlink=1, ino=fd+1 (non-zero), dev=0.
 unsafe fn synthetic_stat(buf: usize, mode: u32, fd: usize) {
     let p = buf as *mut u8;
-    for i in 0..144 { *p.add(i) = 0; }
+    for i in 0..STAT_SIZE { *p.add(i) = 0; }
     *((buf + STAT_MODE_OFF) as *mut u32) = mode;
     *((buf + STAT_BLKSIZE_OFF) as *mut u32) = 4096;
     // st_ino: use fd+1 so it's non-zero (offset 0 on both x86_64 and aarch64)

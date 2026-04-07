@@ -167,7 +167,7 @@ pub unsafe fn load_elf_from_inode(
     {
         use rux_arch::TimerOps;
         let entropy = crate::arch::Arch::ticks() as usize;
-        let random_offset = (entropy & 0xFFF) << 12; // 0-16MB, page-aligned
+        let random_offset = (entropy & 0xFFF) << 12;
         crate::syscall::PROCESS.mmap_base = 0x10000000 + random_offset;
     }
     rux_fs::fdtable::reset();
@@ -197,7 +197,7 @@ pub unsafe fn load_elf_from_inode(
     // Stack ASLR: random offset within the mapped stack region (0-7 pages)
     let stack_top = {
         use rux_arch::TimerOps;
-        let stack_entropy = ((crate::arch::Arch::ticks() >> 8) & 0x7) as u64; // 0-7 pages
+        let stack_entropy = ((crate::arch::Arch::ticks() >> 8) & 0x7) as u64;
         stack_top - stack_entropy * 4096
     };
 
