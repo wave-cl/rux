@@ -884,14 +884,22 @@ impl<A: ArchPaging> PageTable4Level<A> {
     }
 
     /// Remap an existing mapping to a new physical frame with new flags.
+    ///
+    /// Uses Break-Before-Make on aarch64: invalidate the old PTE, flush TLB,
+    /// then write the new PTE. This prevents TLB conflict aborts on real
+    /// hardware where the old and new entries coexist momentarily.
     pub unsafe fn remap(&self, virt: VirtAddr, new_phys: PhysAddr, new_flags: u64) {
         if let Some(pte) = self.leaf_pte_mut(virt) {
-            *pte = A::Pte::encode(new_phys, new_flags);
-            // DSB ensures the PTE store is visible before TLB invalidation.
-            // Required by ARM architecture (Break-Before-Make), harmless on x86.
+            // Step 1: Invalidate old entry (Break)
+            *pte = PageTableEntry::EMPTY;
             #[cfg(target_arch = "aarch64")]
-            core::arch::asm!("dsb ish", options(nostack));
+            core::arch::asm!("dsb ishst", options(nostack));
+
+            // Step 2: Flush stale TLB entry
             A::flush_tlb(virt);
+
+            // Step 3: Write new entry (Make)
+            *pte = A::Pte::encode(new_phys, new_flags);
         }
     }
 }

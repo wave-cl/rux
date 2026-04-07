@@ -15,6 +15,12 @@ pub unsafe fn demand_page(addr: usize) -> bool {
     let va = rux_klib::VirtAddr::new(addr & !0xFFF);
     let raw_pte = crate::syscall::current_user_page_table().read_leaf_pte(va);
 
+    // If page is already mapped (VALID/PRESENT bit), this is a permission fault.
+    // Do NOT replace the existing page with zeros — return false for SIGSEGV.
+    if raw_pte & 1 != 0 {
+        return false;
+    }
+
     // Decode prot marker from software PTE bits
     let (has_marker, prot) = crate::arch::PageTable::decode_prot_marker(raw_pte);
     let flags = if has_marker {

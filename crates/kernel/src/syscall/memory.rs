@@ -593,39 +593,34 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             let fs = crate::kstate::fs();
             let ino = (*rux_fs::fdtable::FD_TABLE)[fd].ino;
             if (*rux_fs::fdtable::FD_TABLE)[fd].active && ino != 0 {
-                super::map_user_pages(result, result + aligned_len, pg_flags);
+                // Map pages with temporary WRITE permission for data loading.
+                // Final permissions are applied after the file data is written.
+                let load_flags = rux_mm::MappingFlags::USER
+                    .or(rux_mm::MappingFlags::READ)
+                    .or(rux_mm::MappingFlags::WRITE);
+                super::map_user_pages(result, result + aligned_len, load_flags);
                 let file_offset = offset as u64;
 
-                // Write file data via physical addresses (identity map), not user VAs.
-                // On aarch64, user pages with AP_EL0_RO restrict both EL0 and EL1 writes.
-                // Writing via the identity-mapped physical address bypasses user page
-                // table permissions entirely, avoiding demand-page faults.
-                {
-                    let upt = super::current_user_page_table();
-                    let mut file_pos = 0usize;
-                    while file_pos < len {
-                        let va = rux_klib::VirtAddr::new((result + file_pos) & !0xFFF);
-                        if let Ok(pa) = upt.translate(va) {
-                            let off_in_page = (result + file_pos) & 0xFFF;
-                            let chunk = (4096 - off_in_page).min(len - file_pos);
-                            let phys_dst = (pa.as_usize() + off_in_page) as *mut u8;
-                            let dst = core::slice::from_raw_parts_mut(phys_dst, chunk);
-                            let _ = fs.read(ino, file_offset + file_pos as u64, dst);
-                            file_pos += chunk;
-                        } else {
-                            break;
-                        }
-                    }
-                }
+                // Write file data directly via user VA (pages are writable)
+                let dst = core::slice::from_raw_parts_mut(result as *mut u8, len);
+                let _ = fs.read(ino, file_offset, dst);
 
                 // aarch64: flush I-cache after writing executable pages.
-                // aarch64 has separate I/D caches — data written via store
-                // instructions is visible in D-cache but the I-cache may
-                // still hold stale entries. Without this, executing freshly
-                // mmap'd .so code reads garbage instructions.
                 #[cfg(target_arch = "aarch64")]
                 if prot & PROT_EXEC != 0 {
                     sync_icache(result, aligned_len);
+                }
+
+                // Apply final permissions via remap (if different from load_flags)
+                if pg_flags != load_flags {
+                    let upt = super::current_user_page_table();
+                    let final_pte_flags = crate::arch::PageTable::pte_flags(pg_flags);
+                    for page_off in (0..aligned_len).step_by(4096) {
+                        let va = rux_klib::VirtAddr::new(result + page_off);
+                        if let Ok(pa) = upt.translate(va) {
+                            upt.remap(va, pa, final_pte_flags);
+                        }
+                    }
                 }
 
                 // Track MAP_SHARED mappings for write-back on munmap
