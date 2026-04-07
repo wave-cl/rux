@@ -168,7 +168,7 @@ test -d /proc && echo proc_is_dir
 head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
 cat /etc/issue
 export TESTENV=rux123; sh -c 'echo $TESTENV'
-umask 077; touch /tmp/umask_test && ls -l /tmp/umask_test
+umask 077; touch /tmp/umask_test && stat /tmp/umask_test | grep 0600 && echo umask_ok
 readlink /proc/self/exe
 ulimit -s
 yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
@@ -308,8 +308,7 @@ check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
 check "envp inheritance"     "rux123"
-# umask test: ls -l output not captured reliably in test harness
-# check "umask 077"            "-rw-------"
+check "umask 077"            "umask_ok"
 check "proc/self/exe"        "busybox"
 check "ulimit stack"         "unlimited"
 check "sigpipe handling"     "sigpipe_ok"
@@ -411,7 +410,7 @@ cat /etc/passwd | grep root | wc -l
 echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
 test -d /proc && echo proc_is_dir
 head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
-umask 077; touch /tmp/umask_test && ls -l /tmp/umask_test
+umask 077; touch /tmp/umask_test && stat /tmp/umask_test | grep 0600 && echo umask_ok
 readlink /proc/self/exe
 ulimit -s
 yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
@@ -428,6 +427,7 @@ python3 -c "print(sum(range(100)))" 2>&1
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
+TESTENV=rux123 sh -c 'echo $TESTENV'
 exit
 CMDS
 } | \
@@ -543,8 +543,7 @@ check "pipe chain grep"      "1"
 check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
-# umask test: ls -l output not captured reliably in test harness
-# check "umask 077"            "-rw-------"
+check "umask 077"            "umask_ok"
 check "proc/self/exe"        "busybox"
 check "ulimit stack"         "unlimited"
 check "sigpipe handling"     "sigpipe_ok"
@@ -554,14 +553,12 @@ check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "perl"                 "perl:42"
 check "python3 version"      "Python 3"
-# TODO: python3 -c SIGSEGV on aarch64 — interp+0x550 (config field) is NULL
-# during _PySys_InitMain. Root cause: a config init function returns -1,
-# skipping stdio setup. LANG=C.UTF-8 and PYTHONUTF8=1 don't help.
-# Needs GDB with QEMU gdbstub for interactive debugging.
+# TODO: python3 -c SIGSEGV on aarch64 (userspace bug in libpython 3.12.12)
 # check "python3 print"        "4950"
 check "subshell"             "subshell_ok"
 check "fork + pipe"          "2"
 check "all tests done"       "all_tests_done"
+check "envp inheritance"     "rux123"
 
 fi  # RUN_AA64
 

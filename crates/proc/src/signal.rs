@@ -578,17 +578,19 @@ pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
     } else {
         S::sig_read_user_sp()
     };
-    // Allocate space for signal frame + optional siginfo_t (128 bytes)
+    // Allocate space for signal frame + optional siginfo_t (128 bytes).
+    // Layout: [new_sp] = signal frame, [new_sp + FRAME_SIZE] = siginfo (if SA_SIGINFO).
+    // Signal frame is always at new_sp so sigreturn can find it from sp_el0.
     let sa_siginfo = action.flags & SA_SIGINFO != 0;
     let extra = if sa_siginfo { 128 } else { 0 }; // sizeof(siginfo_t) = 128
     let new_sp = (user_sp - S::SIGNAL_FRAME_SIZE - extra) & !0xF;
-    let frame_addr = new_sp + extra; // frame is above siginfo
+    let frame_addr = new_sp; // frame at base of allocation
     S::sig_write_frame(frame_addr, syscall_result, hot.blocked.0, restorer[signum as usize], signum);
     S::sig_write_user_sp(new_sp);
 
     if sa_siginfo {
-        // Write minimal siginfo_t at new_sp (below frame)
-        let si = new_sp;
+        // Write siginfo_t above the signal frame
+        let si = new_sp + S::SIGNAL_FRAME_SIZE;
         let si_ptr = si as *mut u8;
         for i in 0..128 { *si_ptr.add(i) = 0; } // zero the struct
         *(si as *mut i32) = signum as i32;         // si_signo (offset 0)

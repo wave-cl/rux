@@ -9,6 +9,7 @@ use rux_arch::MemoryLayout;
 /// Reads software PTE marker bits to determine permissions:
 /// - Prot marker with R/W/X bits → map with those permissions
 /// - No marker → default RWX (stack, heap, ELF segments)
+/// - Already-valid PTE → return false (permission fault, not demand-pageable)
 #[inline]
 pub unsafe fn demand_page(addr: usize) -> bool {
     let va = rux_klib::VirtAddr::new(addr & !0xFFF);

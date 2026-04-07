@@ -69,6 +69,13 @@ pub fn handle_syscall(frame: *mut u8) {
         };
 
 
+        // Re-sync CURRENT_REGS_PTR: after any syscall that blocked (schedule()),
+        // other tasks may have overwritten this global with their own frame pointer.
+        // Signal delivery in post_syscall uses CURRENT_REGS_PTR to modify ELR/x30,
+        // so it must point to THIS task's exception frame.
+        CURRENT_REGS_PTR = regs;
+
+
         // Return value in x0 + signal delivery + reschedule check
         *regs.add(0) = crate::syscall::post_syscall::<super::Aarch64>(result) as u64;
     }
@@ -82,6 +89,7 @@ struct SignalFrameAarch64 {
     saved_x0: u64,       // syscall return value
     saved_mask: u64,     // blocked signal mask before handler
     orig_user_sp: u64,   // original sp_el0 for exact restoration
+    saved_x30: u64,      // original x30 (LR) — signal delivery overwrites it with trampoline
 }
 
 /// Map the sigreturn trampoline page if not already mapped.
@@ -153,6 +161,7 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         (*frame).saved_x0 = syscall_result as u64;
         (*frame).saved_mask = blocked_mask;
         (*frame).orig_user_sp = sp;
+        (*frame).saved_x30 = *regs.add(30); // save x30 before trampoline overwrites it
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
@@ -178,12 +187,14 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         let saved_x0 = (*frame).saved_x0;
         let saved_mask = (*frame).saved_mask;
         let orig_user_sp = (*frame).orig_user_sp;
+        let saved_x30 = (*frame).saved_x30;
 
         // Restore exception frame registers
         let regs = CURRENT_REGS_PTR;
         *regs.add(31) = saved_elr;
         *regs.add(32) = saved_spsr;
         *regs.add(0) = saved_x0;
+        *regs.add(30) = saved_x30; // restore x30 (was overwritten with trampoline)
 
         // Restore user stack pointer
         core::arch::asm!("msr sp_el0, {}", in(reg) orig_user_sp, options(nostack));
@@ -557,15 +568,21 @@ extern "C" {
 
 /// Enter user mode (EL0) via eret.
 /// Sets ELR_EL1 = entry, SP_EL0 = user_stack, SPSR_EL1 = 0 (EL0t).
+/// Also resets SP_EL1 to the current task's kernel stack top so the
+/// next exception from EL0 uses the correct kernel stack.
 pub unsafe fn enter_user_mode(entry: usize, user_stack: usize) -> ! {
+    let idx = crate::task_table::current_task_idx();
+    let kstack_top = crate::task_table::TASK_TABLE[idx].kstack_top;
     core::arch::asm!(
         "msr sp_el0, {sp}",         // user stack pointer
         "msr elr_el1, {entry}",     // return-to address
         "msr spsr_el1, xzr",        // SPSR = 0 = EL0t, interrupts enabled
+        "mov sp, {ksp}",            // reset kernel stack for next exception
         "isb",                       // sync ELR/SPSR before eret
         "eret",
         entry = in(reg) entry,
         sp = in(reg) user_stack,
+        ksp = in(reg) kstack_top,
         options(noreturn)
     );
 }

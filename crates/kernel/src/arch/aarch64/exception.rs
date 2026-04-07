@@ -70,10 +70,23 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     super::syscall::handle_syscall(_frame as *mut u8);
                 }
                 0b100100 | 0b100101 => {
-                    // User data abort — shared COW + demand paging resolution
+                    // User data abort — route by DFSC (Data Fault Status Code, ESR bits [5:0])
+                    let dfsc = (esr & 0x3F) as u32;
                     let wnr = esr & (1 << 6) != 0;
-                    if unsafe { crate::demand_paging::handle_user_fault(far, wnr) } {
-                        return;
+                    let is_translation = dfsc & 0b111100 == 0b000100; // 0x04-0x07
+                    let is_permission  = dfsc & 0b111100 == 0b001100; // 0x0C-0x0F
+                    let is_access_flag = dfsc & 0b111100 == 0b001000; // 0x08-0x0B
+
+                    if is_permission && wnr {
+                        // Permission fault on write → try COW only (not demand paging)
+                        if unsafe { crate::cow::handle_cow_fault(far as usize).is_ok() } {
+                            return;
+                        }
+                    } else if is_translation || is_access_flag {
+                        // Translation fault or access flag fault → demand paging + COW
+                        if unsafe { crate::demand_paging::handle_user_fault(far, wnr) } {
+                            return;
+                        }
                     }
                     // Unresolvable user-space fault → SIGSEGV
                     unsafe {
@@ -88,23 +101,34 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     crate::syscall::posix::exit(139);
                 }
                 0b100000 | 0b100001 => {
-                    // User instruction abort — try demand paging (lazy mmap,
-                    // COW text pages that need re-mapping as executable).
-                    if unsafe { crate::demand_paging::handle_user_fault(far, false) } {
-                        return;
+                    // User instruction abort — route by IFSC (ESR bits [5:0])
+                    let ifsc = (esr & 0x3F) as u32;
+                    let is_translation = ifsc & 0b111100 == 0b000100; // 0x04-0x07
+
+                    if is_translation {
+                        // Translation fault → demand paging (lazy mmap, COW text re-map)
+                        if unsafe { crate::demand_paging::handle_user_fault(far, false) } {
+                            return;
+                        }
                     }
+                    // Permission fault or unresolvable → SIGSEGV
                     super::console::write_str("rux: SIGSEGV (instr) at ");
                     write_hex(far as usize);
                     super::console::write_str("\n");
                     crate::syscall::posix::exit(139);
                 }
                 _ => {
-                    super::console::write_str("rux: user sync EC=");
-                    write_hex(ec as usize);
-                    super::console::write_str(" ESR=");
-                    write_hex(esr as usize);
-                    super::console::write_str("\n");
-                    // Kill the process for unhandled user exceptions
+                    unsafe {
+                        let r = _frame as *const u64;
+                        let elr = *r.add(31);
+                        super::console::write_str("rux: user sync EC=");
+                        write_hex(ec as usize);
+                        super::console::write_str(" ESR=");
+                        write_hex(esr as usize);
+                        super::console::write_str(" pc=");
+                        write_hex(elr as usize);
+                        super::console::write_str("\n");
+                    }
                     crate::syscall::posix::exit(139);
                 }
             }

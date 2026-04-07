@@ -595,8 +595,30 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             if (*rux_fs::fdtable::FD_TABLE)[fd].active && ino != 0 {
                 super::map_user_pages(result, result + aligned_len, pg_flags);
                 let file_offset = offset as u64;
-                let dst = core::slice::from_raw_parts_mut(result as *mut u8, len);
-                let _ = fs.read(ino, file_offset, dst);
+
+                // Write file data via physical addresses (identity map), not user VAs.
+                // On aarch64, user pages with AP_EL0_RO restrict both EL0 and EL1 writes.
+                // Writing via the identity-mapped physical address bypasses the user page
+                // table permissions entirely.
+                {
+                    let upt = super::current_user_page_table();
+                    let mut file_pos = 0usize;
+                    let to_read = len;
+                    while file_pos < to_read {
+                        let va = rux_klib::VirtAddr::new((result + file_pos) & !0xFFF);
+                        if let Ok(pa) = upt.translate(va) {
+                            let off_in_page = (result + file_pos) & 0xFFF;
+                            let chunk = (4096 - off_in_page).min(to_read - file_pos);
+                            let phys_dst = (pa.as_usize() + off_in_page) as *mut u8;
+                            let dst = core::slice::from_raw_parts_mut(phys_dst, chunk);
+                            let _ = fs.read(ino, file_offset + file_pos as u64, dst);
+                            file_pos += chunk;
+                        } else {
+                            // Page not mapped (shouldn't happen after map_user_pages)
+                            break;
+                        }
+                    }
+                }
 
                 // aarch64: flush I-cache after writing executable pages.
                 // aarch64 has separate I/D caches — data written via store

@@ -7,7 +7,19 @@ type Arch = crate::arch::Arch;
 pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     use rux_proc::signal::*;
     use rux_arch::SigactionLayout;
-    if signum < 1 || signum > 31 { return crate::errno::EINVAL; }
+    if signum < 1 || signum > 64 { return crate::errno::EINVAL; }
+
+    // RT signals (32-64): accept but don't store handlers (no RT signal delivery yet).
+    // Return SIG_DFL for oldact queries. This satisfies programs (like CPython) that
+    // iterate all signals to save/restore dispositions.
+    if signum > 31 {
+        if oldact_ptr != 0 {
+            if crate::uaccess::validate_user_ptr(oldact_ptr, 32).is_err() { return crate::errno::EFAULT; }
+            unsafe { Arch::write_sigaction(oldact_ptr, 0, 0, 0, 0); } // SIG_DFL
+        }
+        return 0;
+    }
+
     let sig = match Signal::from_raw(signum as u8) {
         Some(s) => s,
         None => return crate::errno::EINVAL,
