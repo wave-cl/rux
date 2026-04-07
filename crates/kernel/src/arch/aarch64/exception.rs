@@ -88,15 +88,36 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                             return;
                         }
                     }
-                    // Unresolvable user-space fault → SIGSEGV
+                    // Unresolvable user-space fault → SIGSEGV with backtrace
                     unsafe {
                         let r = _frame as *const u64;
                         let elr = *r.add(31);
+                        let x29 = *r.add(29);
                         super::console::write_str("rux: SIGSEGV addr=");
                         write_hex(far as usize);
                         super::console::write_str(" pc=");
                         write_hex(elr as usize);
                         super::console::write_str("\n");
+                        // Walk frame pointer chain to show backtrace
+                        let upt = crate::syscall::current_user_page_table();
+                        let mut fp = x29 as usize;
+                        for depth in 0..6 {
+                            if fp < 0x1000 || fp > 0x80000000 { break; }
+                            let va = rux_klib::VirtAddr::new(fp & !0xFFF);
+                            if let Ok(pa) = upt.translate(va) {
+                                let phys = pa.as_usize() + (fp & 0xFFF);
+                                let saved_fp = *(phys as *const u64);
+                                let saved_lr = *((phys + 8) as *const u64);
+                                super::console::write_str("  #");
+                                write_hex(depth);
+                                super::console::write_str(" lr=");
+                                write_hex(saved_lr as usize);
+                                super::console::write_str(" fp=");
+                                write_hex(saved_fp as usize);
+                                super::console::write_str("\n");
+                                fp = saved_fp as usize;
+                            } else { break; }
+                        }
                     }
                     crate::syscall::posix::exit(139);
                 }

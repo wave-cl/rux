@@ -82,14 +82,19 @@ pub fn handle_syscall(frame: *mut u8) {
 }
 
 /// Signal frame layout on user stack (aarch64).
+///
+/// Must save ALL general-purpose registers (x0-x30) because the signal handler
+/// may clobber any caller-saved register (x0-x18, x30). After sigreturn, the
+/// interrupted code expects all registers to be exactly as they were before the
+/// signal was delivered. Without this, registers like x1 get clobbered by the
+/// handler and the interrupted code sees garbage values.
 #[repr(C)]
 struct SignalFrameAarch64 {
-    saved_elr: u64,      // original ELR_EL1 (user return PC)
-    saved_spsr: u64,     // original SPSR_EL1
-    saved_x0: u64,       // syscall return value
-    saved_mask: u64,     // blocked signal mask before handler
-    orig_user_sp: u64,   // original sp_el0 for exact restoration
-    saved_x30: u64,      // original x30 (LR) — signal delivery overwrites it with trampoline
+    saved_regs: [u64; 31],  // x0-x30 (full GPR state)
+    saved_elr: u64,         // original ELR_EL1 (user return PC)
+    saved_spsr: u64,        // original SPSR_EL1
+    saved_mask: u64,        // blocked signal mask before handler
+    orig_user_sp: u64,      // original sp_el0 for exact restoration
 }
 
 /// Map the sigreturn trampoline page if not already mapped.
@@ -156,12 +161,16 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         let sp: u64;
         core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
         let frame = frame_addr as *mut SignalFrameAarch64;
+        // Save all GPRs (x0-x30) — handler will clobber caller-saved registers
+        for i in 0..31 {
+            (*frame).saved_regs[i] = *regs.add(i);
+        }
+        // x0 in the frame gets the syscall result (not the pre-syscall x0)
+        (*frame).saved_regs[0] = syscall_result as u64;
         (*frame).saved_elr = *regs.add(31);
         (*frame).saved_spsr = *regs.add(32);
-        (*frame).saved_x0 = syscall_result as u64;
         (*frame).saved_mask = blocked_mask;
         (*frame).orig_user_sp = sp;
-        (*frame).saved_x30 = *regs.add(30); // save x30 before trampoline overwrites it
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
@@ -182,24 +191,22 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
 
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
         let frame = frame_addr as *const SignalFrameAarch64;
-        let saved_elr = (*frame).saved_elr;
-        let saved_spsr = (*frame).saved_spsr;
-        let saved_x0 = (*frame).saved_x0;
         let saved_mask = (*frame).saved_mask;
         let orig_user_sp = (*frame).orig_user_sp;
-        let saved_x30 = (*frame).saved_x30;
 
-        // Restore exception frame registers
+        // Restore ALL GPRs (x0-x30) — undoes handler's register clobbering
         let regs = CURRENT_REGS_PTR;
-        *regs.add(31) = saved_elr;
-        *regs.add(32) = saved_spsr;
-        *regs.add(0) = saved_x0;
-        *regs.add(30) = saved_x30; // restore x30 (was overwritten with trampoline)
+        for i in 0..31 {
+            *regs.add(i) = (*frame).saved_regs[i];
+        }
+        // Restore ELR + SPSR
+        *regs.add(31) = (*frame).saved_elr;
+        *regs.add(32) = (*frame).saved_spsr;
 
         // Restore user stack pointer
         core::arch::asm!("msr sp_el0, {}", in(reg) orig_user_sp, options(nostack));
 
-        (saved_x0 as i64, saved_mask)
+        ((*frame).saved_regs[0] as i64, saved_mask)
     }
 
     unsafe fn sig_pre_deliver() {
