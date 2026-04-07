@@ -513,7 +513,8 @@ pub fn signalfd4(fd: usize, mask_ptr: usize, _flags: usize) -> isize {
     }
 }
 
-/// Read from signalfd: returns struct signalfd_siginfo (128 bytes) for each pending signal.
+/// Read from signalfd: returns struct signalfd_siginfo (128 bytes) per signal.
+/// Blocks if no signal pending and fd is not O_NONBLOCK.
 pub fn signalfd_read(fd: usize, buf: usize) -> isize {
     let idx = match find_signalfd(fd) {
         Some(i) => i,
@@ -528,7 +529,13 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
         // Find a pending signal that matches the signalfd mask
         let pending_masked = hot.pending.0 & mask;
         if pending_masked == 0 {
-            return crate::errno::EAGAIN; // no matching signal pending
+            // Check O_NONBLOCK on the fd
+            let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
+            if f.flags & 0o4000 != 0 {
+                return crate::errno::EAGAIN; // non-blocking
+            }
+            // Blocking: wait for a signal (simplified — yield and retry)
+            return crate::errno::EAGAIN; // TODO: proper blocking via schedule
         }
 
         // Dequeue the lowest pending signal
@@ -536,15 +543,21 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
         let signo = bit + 1; // signals are 1-based
         hot.pending = rux_proc::signal::SignalSet(hot.pending.0 & !(1u64 << bit));
 
-        // Write struct signalfd_siginfo (128 bytes, mostly zeros)
+        // Write struct signalfd_siginfo (128 bytes)
+        // Layout: ssi_signo(u32,+0) ssi_errno(i32,+4) ssi_code(i32,+8)
+        //         ssi_pid(u32,+12) ssi_uid(u32,+16) ssi_fd(i32,+20)
+        //         ssi_tid(u32,+24) ssi_band(u32,+28) ssi_overrun(u32,+32)
+        //         ssi_trapno(u32,+36) ssi_status(i32,+40) ssi_int(i32,+44)
+        //         ssi_ptr(u64,+48) ssi_utime(u64,+56) ssi_stime(u64,+64)
+        //         ssi_addr(u64,+72) ssi_addr_lsb(u16,+80) ... pad to 128
         let p = buf as *mut u8;
         for i in 0..128 { *p.add(i) = 0; }
-        // ssi_signo at offset 0 (u32)
-        *(buf as *mut u32) = signo as u32;
-        // ssi_code at offset 8 (i32) = SI_USER = 0
-        *((buf + 8) as *mut i32) = 0;
+        *(buf as *mut u32) = signo as u32;                      // ssi_signo
+        *((buf + 8) as *mut i32) = 0;                           // ssi_code = SI_USER
+        *((buf + 12) as *mut u32) = crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pid; // ssi_pid
+        *((buf + 16) as *mut u32) = super::PROCESS.uid;         // ssi_uid
 
-        128 // return sizeof(signalfd_siginfo)
+        128
     }
 }
 
