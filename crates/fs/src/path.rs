@@ -143,13 +143,14 @@ fn resolve_path_inner_checked<F: FileSystem>(
                 for &b in remaining { if fp < 512 { full[fp] = b; fp += 1; } }
                 return resolve_path_inner_checked(fs, root, &full[..fp], symlinks_left - 1, cred);
             } else {
+                // Relative symlink: resolve multi-component target from parent
                 let parent = if depth > 0 { parent_stack[depth - 1] } else { root };
-                // X check on parent before symlink target lookup
-                let mut ps = unsafe { core::mem::zeroed::<InodeStat>() };
-                fs.stat(parent, &mut ps)?;
-                crate::check_perm(&ps, cred, crate::X_OK)?;
-                let target_name = FileName::new(target)?;
-                current = fs.lookup(parent, target_name)?;
+                let remaining = &path[i..];
+                let mut full = [0u8; 512];
+                let mut fp = 0;
+                for &b in target { if fp < 512 { full[fp] = b; fp += 1; } }
+                for &b in remaining { if fp < 512 { full[fp] = b; fp += 1; } }
+                return resolve_path_inner_checked(fs, parent, &full[..fp], symlinks_left - 1, cred);
             }
         }
     }
@@ -235,15 +236,16 @@ fn resolve_path_inner<F: FileSystem>(
                 for &b in remaining { if fp < 512 { full[fp] = b; fp += 1; } }
                 return resolve_path_inner(fs, root, &full[..fp], symlinks_left - 1);
             } else {
-                // Relative symlink: look up target in the parent directory.
-                // Parent is parent_stack[depth-1] (we pushed before lookup).
+                // Relative symlink: resolve target relative to parent directory.
+                // Target may be multi-component (e.g., "lua5.4/liblua.so.0"),
+                // so we build full_path = target + remaining and recurse.
                 let parent = if depth > 0 { parent_stack[depth - 1] } else { root };
-                let target_name = FileName::new(target)?;
-                current = fs.lookup(parent, target_name)?;
-                // Don't increment depth — we're replacing the symlink inode
-                // with the target inode at the same depth level.
-                // If there are remaining path components, continue resolving.
-                // (current might itself be a symlink — will be caught on next iteration)
+                let remaining = &path[i..];
+                let mut full = [0u8; 512];
+                let mut fp = 0;
+                for &b in target { if fp < 512 { full[fp] = b; fp += 1; } }
+                for &b in remaining { if fp < 512 { full[fp] = b; fp += 1; } }
+                return resolve_path_inner(fs, parent, &full[..fp], symlinks_left - 1);
             }
         }
     }
