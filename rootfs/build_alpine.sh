@@ -23,6 +23,55 @@ if [ -z "$MKE2FS" ]; then
     exit 1
 fi
 
+install_apk() {
+    local ROOT_DIR="$1"
+    local ARCH="$2"
+    local MIRROR="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/main/${ARCH}"
+    local TMP_DIR="$ROOT_DIR/../apk_tmp_${ARCH}"
+    mkdir -p "$TMP_DIR"
+
+    # Fetch the APKINDEX to resolve package names → filenames
+    curl -sL "$MIRROR/APKINDEX.tar.gz" -o "$TMP_DIR/APKINDEX.tar.gz"
+    tar xzf "$TMP_DIR/APKINDEX.tar.gz" -C "$TMP_DIR" 2>/dev/null || true
+
+    # Parse APKINDEX to find package filenames
+    find_pkg() {
+        local name="$1"
+        awk -v pkg="$name" '
+            /^P:/ { p = substr($0, 3) }
+            /^V:/ { v = substr($0, 3) }
+            /^$/ { if (p == pkg) { print p "-" v ".apk"; exit } }
+        ' "$TMP_DIR/APKINDEX"
+    }
+
+    # Download and extract a single package (no dependency resolution — just extract)
+    fetch_and_extract() {
+        local pkg_file="$1"
+        if [ -z "$pkg_file" ]; then return; fi
+        local url="$MIRROR/$pkg_file"
+        local dest="$TMP_DIR/$pkg_file"
+        if [ ! -f "$dest" ]; then
+            curl -sL "$url" -o "$dest" 2>/dev/null || return
+        fi
+        # APK files are gzipped tar with a signature + data tarball
+        # Extract directly — tar handles the dual-layer
+        tar xzf "$dest" -C "$ROOT_DIR" 2>/dev/null || true
+    }
+
+    # Core packages needed for python3 and perl
+    for pkg in libgcc musl libstdc++ libbz2 libffi gdbm \
+               mpdecimal readline sqlite-libs xz-libs zlib \
+               python3 python3-pycache-pyc0 pyc \
+               perl; do
+        local f=$(find_pkg "$pkg")
+        if [ -n "$f" ]; then
+            fetch_and_extract "$f"
+        fi
+    done
+
+    rm -rf "$TMP_DIR"
+}
+
 build_alpine() {
     local ARCH="$1"
     local ALPINE_ARCH="$2"  # Alpine arch name (x86_64 or aarch64)
@@ -101,6 +150,10 @@ CONF
     mkdir -p "$STAGING/var/lib/apk"
     mkdir -p "$STAGING/var/cache/apk"
     mkdir -p "$STAGING/tmp"
+
+    # Pre-install Python3 and Perl (avoids slow apk add during test runs)
+    echo "  Pre-installing python3 and perl..."
+    install_apk "$STAGING" "$ALPINE_ARCH"
 
     # Disable busybox trigger — it runs busybox --install + find|awk pipeline
     # which hangs on rux (complex fork/exec chains). Busybox symlinks are

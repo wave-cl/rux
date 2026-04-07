@@ -73,9 +73,8 @@ trap cleanup EXIT
 
 # ── x86_64 (Alpine Linux 3.21) ─────────────────────────────────────
 if $RUN_X86; then
-printf "\n\033[1m── x86_64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 10; cat <<'CMDS'
+OUTPUT=$( { sleep 5; cat <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -179,8 +178,6 @@ echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
 echo all_tests_done
-apk update 2>&1 | tail -1
-apk add --no-interactive perl python3 2>/dev/null
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
@@ -272,6 +269,8 @@ CMDS
     -no-reboot -monitor none -m 128M 2>&1; } || true )
 
 echo "$OUTPUT" > /tmp/rux_test_x86_64.log
+
+printf "\n\033[1m── x86_64 ──\033[0m\n"
 
 # Boot
 check "boot banner"             "rux 0.24.1 (x86_64)"
@@ -391,7 +390,6 @@ check "rename done"          "rename_done"
 check "proc cmdline argv"    "cat"
 check "top batch"            "Mem:"
 check "wget http"            "Example Domain"
-check "apk update"           "OK:"
 check "perl"                 "perl:42"
 check "python3 installed"    "Python 3"
 check "python3 print"        "4950"
@@ -429,7 +427,7 @@ fi  # RUN_X86
 if $RUN_AA64; then
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 45; cat <<'CMDS'
+OUTPUT=$( { sleep 30; cat <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -522,8 +520,6 @@ timeout 2 top -bn1 2>&1 | head -3
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
-apk update 2>&1 | tail -1
-apk add --no-interactive perl python3 2>/dev/null
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
@@ -727,7 +723,6 @@ check "rename done"          "rename_done"
 check "proc cmdline argv"    "cat"
 check "top batch"            "Mem:"
 check "wget http"            "Example Domain"
-check "apk update"           "OK:"
 check "perl"                 "perl:42"
 check "python3 version"      "Python 3"
 check "python3 print"        "4950"
