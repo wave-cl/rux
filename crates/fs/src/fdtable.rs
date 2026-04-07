@@ -198,7 +198,6 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
 
 /// Close a file descriptor. Returns 0 on success.
 pub fn sys_close(fd: usize, pipes: Option<&PipeFns>) -> isize {
-    if fd < FIRST_FILE_FD { return -9; }
     unsafe {
         let f = match get_fd(fd) {
             Some(f) => f,
