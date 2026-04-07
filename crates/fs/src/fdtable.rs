@@ -325,14 +325,32 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
 
 /// Close FD_CLOEXEC fds on exec. Non-cloexec fds are inherited.
 /// Linux closes only fds with FD_CLOEXEC set; others pass to the new program.
-pub fn reset() {
+/// Must properly close pipe ends (decrement reader/writer count) so that
+/// EOF is delivered to blocked readers when all writers are gone.
+/// Returns list of pipe_ids that were closed (caller should wake waiters).
+pub fn reset_with_pipes(pipes: Option<&PipeFns>) -> [u8; 16] {
+    let mut closed_pipes = [0xFFu8; 16];
+    let mut cp_count = 0;
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
             if (*FD_TABLE)[fd].active && (*FD_TABLE)[fd].fd_flags & FD_CLOEXEC != 0 {
+                if (*FD_TABLE)[fd].is_pipe {
+                    let pid = (*FD_TABLE)[fd].pipe_id;
+                    if let Some(p) = pipes {
+                        (p.close)(pid, (*FD_TABLE)[fd].pipe_write);
+                    }
+                    if cp_count < 16 { closed_pipes[cp_count] = pid; cp_count += 1; }
+                }
                 (*FD_TABLE)[fd].active = false;
             }
         }
     }
+    closed_pipes
+}
+
+/// Legacy reset (no pipe cleanup). Used by kernel boot path.
+pub fn reset() {
+    reset_with_pipes(None);
 }
 
 // ── Pipe creation ───────────────────────────────────────────────────

@@ -170,7 +170,12 @@ pub unsafe fn load_elf_from_inode(
         let random_offset = (entropy & 0xFFF) << 12;
         crate::syscall::PROCESS.mmap_base = 0x10000000 + random_offset;
     }
-    rux_fs::fdtable::reset();
+    {
+        let closed = rux_fs::fdtable::reset_with_pipes(Some(&crate::pipe::PIPE));
+        for &pid in &closed {
+            if pid != 0xFF { crate::pipe::wake_pipe_waiters(pid); }
+        }
+    }
 
     // Dynamic linking: if PT_INTERP exists, load the interpreter alongside
     let entry_point;
