@@ -191,6 +191,47 @@ python3 -c "import mmap; m=mmap.mmap(-1,4096); m[0:4]=b'test'; print('mmap_ok');
 for i in 1 2 3; do sh -c "echo sub$i"; done && echo multisubshell_ok
 sh -c 'sh -c "sh -c \"echo deep3\""' && echo nest3_ok
 head -c 100000 /dev/urandom > /tmp/bigstat && stat -c %s /tmp/bigstat
+stat -c %o /etc/passwd
+cd /tmp && pwd && cd / && echo fchdir_ok
+cat /proc/meminfo | grep MemTotal
+cat /proc/self/status | grep PPid
+setsid echo setsid_ok 2>&1
+dd if=/dev/urandom bs=32 count=1 2>/dev/null | wc -c
+echo trunc_test > /tmp/trunc && truncate -s 5 /tmp/trunc 2>/dev/null && wc -c < /tmp/trunc || python3 -c "open('/tmp/trunc','r+').truncate(5); print(open('/tmp/trunc').read(), end='')" && wc -c < /tmp/trunc
+python3 -c "import os; r,w=os.pipe(); os.write(w,b'pipe_ok\n'); os.close(w); print(os.read(r,32).decode(),end='')" 2>&1
+python3 -c "import os,fcntl; r,w=os.pipe(); fcntl.fcntl(r,fcntl.F_SETFL,os.O_NONBLOCK); print('nb_ok')" 2>&1
+python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('0.0.0.0',5555)); print('udp_bound'); s.close()" 2>&1
+python3 -c "
+import os,sys
+r,w=os.pipe()
+pid=os.fork()
+if pid==0:
+    os.close(r); os.write(w,b'42\n'); os._exit(0)
+os.close(w)
+_,status=os.waitpid(pid,0)
+print('wp_exit=' + str(os.waitstatus_to_exitcode(status)))
+print('wp_data=' + os.read(r,32).decode().strip())
+" 2>&1
+python3 -c "
+import signal,os
+got=[False]
+def h(s,f): got[0]=True
+signal.signal(signal.SIGUSR1, h)
+os.kill(os.getpid(), signal.SIGUSR1)
+print('sigusr1_' + ('caught' if got[0] else 'missed'))
+" 2>&1
+python3 -c "
+import signal
+old=signal.signal(signal.SIGINT, signal.SIG_IGN)
+signal.signal(signal.SIGINT, old)
+print('sigmask_ok')
+" 2>&1
+python3 -c "
+import os
+pid=os.getpid()
+pgid=os.getpgid(pid)
+print('pgid_ok' if pgid > 0 else 'FAIL')
+" 2>&1
 exit
 CMDS
 } | \
@@ -335,6 +376,21 @@ check "mmap anon rw"         "mmap_ok"
 check "multi subshell"       "multisubshell_ok"
 check "nested fork 3"        "nest3_ok"
 check "large stat size"      "100000"
+check "stat blksize"         "4096"
+check "fchdir"               "fchdir_ok"
+check "meminfo total"        "MemTotal:"
+check "proc status ppid"     "Ppid:"
+check "setsid"               "setsid_ok"
+check "getrandom 32"         "32"
+check "ftruncate"            "5"
+check "pipe python"          "pipe_ok"
+check "pipe nonblock"        "nb_ok"
+check "udp bind"             "udp_bound"
+check "fork waitpid"         "wp_exit=0"
+check "fork pipe data"       "wp_data=42"
+check "sigusr1 handler"      "sigusr1_caught"
+check "signal save/restore"  "sigmask_ok"
+check "getpgid"              "pgid_ok"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
@@ -451,6 +507,47 @@ sh -c 'echo inner1' && sh -c 'echo inner2' && echo sigchain_ok
 for i in 1 2 3; do sh -c "echo sub$i"; done && echo multisubshell_ok
 sh -c 'sh -c "sh -c \"echo deep3\""' && echo nest3_ok
 head -c 100000 /dev/urandom > /tmp/bigstat && stat -c %s /tmp/bigstat
+stat -c %o /etc/passwd
+cd /tmp && pwd && cd / && echo fchdir_ok
+cat /proc/meminfo | grep MemTotal
+cat /proc/self/status | grep PPid
+setsid echo setsid_ok 2>&1
+dd if=/dev/urandom bs=32 count=1 2>/dev/null | wc -c
+python3 -c "open('/tmp/trunc','w').write('hello'); open('/tmp/trunc','r+').truncate(5); print(open('/tmp/trunc').read(), end='')" && wc -c < /tmp/trunc
+python3 -c "import os; r,w=os.pipe(); os.write(w,b'pipe_ok\n'); os.close(w); print(os.read(r,32).decode(),end='')" 2>&1
+python3 -c "import os,fcntl; r,w=os.pipe(); fcntl.fcntl(r,fcntl.F_SETFL,os.O_NONBLOCK); print('nb_ok')" 2>&1
+python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('0.0.0.0',5555)); print('udp_bound'); s.close()" 2>&1
+python3 -c "
+import os,sys
+r,w=os.pipe()
+pid=os.fork()
+if pid==0:
+    os.close(r); os.write(w,b'42\n'); os._exit(0)
+os.close(w)
+_,status=os.waitpid(pid,0)
+print('wp_exit=' + str(os.waitstatus_to_exitcode(status)))
+print('wp_data=' + os.read(r,32).decode().strip())
+" 2>&1
+python3 -c "
+import signal,os
+got=[False]
+def h(s,f): got[0]=True
+signal.signal(signal.SIGUSR1, h)
+os.kill(os.getpid(), signal.SIGUSR1)
+print('sigusr1_' + ('caught' if got[0] else 'missed'))
+" 2>&1
+python3 -c "
+import signal
+old=signal.signal(signal.SIGINT, signal.SIG_IGN)
+signal.signal(signal.SIGINT, old)
+print('sigmask_ok')
+" 2>&1
+python3 -c "
+import os
+pid=os.getpid()
+pgid=os.getpgid(pid)
+print('pgid_ok' if pgid > 0 else 'FAIL')
+" 2>&1
 TESTENV=rux123 sh -c 'echo $TESTENV'
 exit
 CMDS
@@ -588,6 +685,21 @@ check "signal chain"         "sigchain_ok"
 check "multi subshell"       "multisubshell_ok"
 check "nested fork 3"        "nest3_ok"
 check "large stat size"      "100000"
+check "stat blksize"         "4096"
+check "fchdir"               "fchdir_ok"
+check "meminfo total"        "MemTotal:"
+check "proc status ppid"     "Ppid:"
+check "setsid"               "setsid_ok"
+check "getrandom 32"         "32"
+check "ftruncate"            "5"
+check "pipe python"          "pipe_ok"
+check "pipe nonblock"        "nb_ok"
+check "udp bind"             "udp_bound"
+check "fork waitpid"         "wp_exit=0"
+check "fork pipe data"       "wp_data=42"
+check "sigusr1 handler"      "sigusr1_caught"
+check "signal save/restore"  "sigmask_ok"
+check "getpgid"              "pgid_ok"
 check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 
