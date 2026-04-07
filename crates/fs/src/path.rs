@@ -73,6 +73,11 @@ pub fn resolve_parent_checked<'a, F: FileSystem>(
     path: &'a [u8],
     cred: &Credentials,
 ) -> Result<(InodeId, &'a [u8]), isize> {
+    // Strip trailing slashes (e.g., "/tmp/repo/.git/" → "/tmp/repo/.git")
+    let mut path = path;
+    while path.len() > 1 && path[path.len() - 1] == b'/' {
+        path = &path[..path.len() - 1];
+    }
     let mut last_slash = None;
     for j in 0..path.len() {
         if path[j] == b'/' { last_slash = Some(j); }
@@ -344,6 +349,11 @@ pub fn resolve_parent_and_name<'a, F: FileSystem>(
     cwd: InodeId,
     path: &'a [u8],
 ) -> Result<(InodeId, &'a [u8]), isize> {
+    // Strip trailing slashes
+    let mut path = path;
+    while path.len() > 1 && path[path.len() - 1] == b'/' {
+        path = &path[..path.len() - 1];
+    }
     let mut last_slash = None;
     for j in 0..path.len() {
         if path[j] == b'/' { last_slash = Some(j); }
