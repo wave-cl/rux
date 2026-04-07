@@ -145,7 +145,7 @@ pub unsafe fn init_mmio(base: usize, rx_pages: usize, tx_pages: usize) -> bool {
         // Add to available ring
         let avail_ring = (NET.rx_avail + 4) as *mut u16;
         *avail_ring.add((NET.rx_avail_idx % rx_qsize) as usize) = i;
-        NET.rx_avail_idx += 1;
+        NET.rx_avail_idx = NET.rx_avail_idx.wrapping_add(1);
     }
     // Publish available
     let avail_idx_ptr = (NET.rx_avail + 2) as *mut u16;
@@ -205,7 +205,7 @@ pub unsafe fn send(frame: &[u8]) -> bool {
     let avail_ring = (NET.tx_avail + 4) as *mut u16;
     let avail_idx_ptr = (NET.tx_avail + 2) as *mut u16;
     *avail_ring.add((NET.tx_avail_idx % NET.tx_qsize) as usize) = 0; // head = desc 0
-    NET.tx_avail_idx += 1;
+    NET.tx_avail_idx = NET.tx_avail_idx.wrapping_add(1);
     fence(Ordering::Release);
     *avail_idx_ptr = NET.tx_avail_idx;
     fence(Ordering::Release);
@@ -244,7 +244,7 @@ pub unsafe fn recv(buf: &mut [u8]) -> Option<usize> {
     let idx = NET.rx_last_used % NET.rx_qsize;
     let elem_id = core::ptr::read_volatile(used_ring.add(idx as usize * 2)) as usize;
     let elem_len = core::ptr::read_volatile(used_ring.add(idx as usize * 2 + 1)) as usize;
-    NET.rx_last_used += 1;
+    NET.rx_last_used = NET.rx_last_used.wrapping_add(1);
 
     // Copy frame data (skip virtio header)
     if elem_len > VirtioNetHdr::SIZE && elem_id < 16 {
@@ -257,7 +257,7 @@ pub unsafe fn recv(buf: &mut [u8]) -> Option<usize> {
         let avail_ring = (NET.rx_avail + 4) as *mut u16;
         let avail_idx_ptr = (NET.rx_avail + 2) as *mut u16;
         *avail_ring.add((NET.rx_avail_idx % NET.rx_qsize) as usize) = elem_id as u16;
-        NET.rx_avail_idx += 1;
+        NET.rx_avail_idx = NET.rx_avail_idx.wrapping_add(1);
         fence(Ordering::Release);
         *avail_idx_ptr = NET.rx_avail_idx;
 

@@ -164,7 +164,7 @@ pub unsafe fn send(frame: &[u8]) -> bool {
 
     let avail_ring = (STATE.tx_avail + 4) as *mut u16;
     *avail_ring.add((STATE.tx_avail_idx % STATE.dev_tx_qsize) as usize) = 0;
-    STATE.tx_avail_idx += 1;
+    STATE.tx_avail_idx = STATE.tx_avail_idx.wrapping_add(1);
     fence(Ordering::Release);
     *((STATE.tx_avail + 2) as *mut u16) = STATE.tx_avail_idx;
     fence(Ordering::Release);
@@ -199,7 +199,7 @@ pub unsafe fn recv(buf: &mut [u8]) -> Option<usize> {
     let idx = STATE.rx_last_used % STATE.dev_rx_qsize;
     let elem_id = core::ptr::read_volatile(used_ring.add(idx as usize * 2)) as usize;
     let elem_len = core::ptr::read_volatile(used_ring.add(idx as usize * 2 + 1)) as usize;
-    STATE.rx_last_used += 1;
+    STATE.rx_last_used = STATE.rx_last_used.wrapping_add(1);
 
     if elem_len > VIRTIO_NET_HDR_SIZE && elem_id < 16 {
         let frame_len = elem_len - VIRTIO_NET_HDR_SIZE;
@@ -210,7 +210,7 @@ pub unsafe fn recv(buf: &mut [u8]) -> Option<usize> {
         // Re-add to RX available ring
         let avail_ring = (STATE.rx_avail + 4) as *mut u16;
         *avail_ring.add((STATE.rx_avail_idx % STATE.dev_rx_qsize) as usize) = elem_id as u16;
-        STATE.rx_avail_idx += 1;
+        STATE.rx_avail_idx = STATE.rx_avail_idx.wrapping_add(1);
         fence(Ordering::Release);
         *((STATE.rx_avail + 2) as *mut u16) = STATE.rx_avail_idx;
 
