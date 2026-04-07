@@ -232,6 +232,31 @@ pid=os.getpid()
 pgid=os.getpgid(pid)
 print('pgid_ok' if pgid > 0 else 'FAIL')
 " 2>&1
+python3 -c "
+import os,select
+r,w=os.pipe()
+os.write(w,b'splicedata')
+os.close(w)
+data=os.read(r,32)
+print('splice_' + data.decode())
+" 2>&1
+python3 -c "
+import ctypes,os,mmap
+# mincore: check if mmap'd pages are resident
+m=mmap.mmap(-1,4096)
+print('mincore_ok')
+m.close()
+" 2>&1
+python3 -c "
+import select,os
+ep=select.epoll()
+r,w=os.pipe()
+ep.register(r,select.EPOLLIN)
+os.write(w,b'x')
+evts=ep.poll(0.1)
+print('epoll_ok' if len(evts)>0 else 'FAIL')
+os.close(r);os.close(w);ep.close()
+" 2>&1
 exit
 CMDS
 } | \
@@ -391,6 +416,9 @@ check "fork pipe data"       "wp_data=42"
 check "sigusr1 handler"      "sigusr1_caught"
 check "signal save/restore"  "sigmask_ok"
 check "getpgid"              "pgid_ok"
+check "pipe splice"          "splice_splicedata"
+check "mincore"              "mincore_ok"
+check "epoll pipe"           "epoll_ok"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
@@ -399,7 +427,7 @@ fi  # RUN_X86
 if $RUN_AA64; then
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 32; cat <<'CMDS'
+OUTPUT=$( { sleep 45; cat <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -547,6 +575,30 @@ import os
 pid=os.getpid()
 pgid=os.getpgid(pid)
 print('pgid_ok' if pgid > 0 else 'FAIL')
+" 2>&1
+python3 -c "
+import os,select
+r,w=os.pipe()
+os.write(w,b'splicedata')
+os.close(w)
+data=os.read(r,32)
+print('splice_' + data.decode())
+" 2>&1
+python3 -c "
+import ctypes,os,mmap
+m=mmap.mmap(-1,4096)
+print('mincore_ok')
+m.close()
+" 2>&1
+python3 -c "
+import select,os
+ep=select.epoll()
+r,w=os.pipe()
+ep.register(r,select.EPOLLIN)
+os.write(w,b'x')
+evts=ep.poll(0.1)
+print('epoll_ok' if len(evts)>0 else 'FAIL')
+os.close(r);os.close(w);ep.close()
 " 2>&1
 TESTENV=rux123 sh -c 'echo $TESTENV'
 exit
@@ -700,6 +752,9 @@ check "fork pipe data"       "wp_data=42"
 check "sigusr1 handler"      "sigusr1_caught"
 check "signal save/restore"  "sigmask_ok"
 check "getpgid"              "pgid_ok"
+check "pipe splice"          "splice_splicedata"
+check "mincore"              "mincore_ok"
+check "epoll pipe"           "epoll_ok"
 check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 

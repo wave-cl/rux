@@ -115,8 +115,8 @@ pub fn epoll_ctl(epfd: usize, op: usize, fd: usize, event_ptr: usize) -> isize {
             EPOLL_CTL_ADD => {
                 if ep.count >= MAX_EPOLL_FDS { return crate::errno::ENOMEM; }
                 if crate::uaccess::validate_user_ptr(event_ptr, 12).is_err() { return crate::errno::EFAULT; }
-                let events = *(event_ptr as *const u32);
-                let data = *((event_ptr + 4) as *const u64);
+                let events = core::ptr::read_unaligned(event_ptr as *const u32);
+                let data = core::ptr::read_unaligned((event_ptr + 4) as *const u64);
                 let slot = ep.count;
                 ep.entries[slot] = EpollEntry { fd: fd as i32, events, data };
                 ep.count += 1;
@@ -131,8 +131,8 @@ pub fn epoll_ctl(epfd: usize, op: usize, fd: usize, event_ptr: usize) -> isize {
             }
             EPOLL_CTL_MOD => {
                 if crate::uaccess::validate_user_ptr(event_ptr, 12).is_err() { return crate::errno::EFAULT; }
-                let events = *(event_ptr as *const u32);
-                let data = *((event_ptr + 4) as *const u64);
+                let events = core::ptr::read_unaligned(event_ptr as *const u32);
+                let data = core::ptr::read_unaligned((event_ptr + 4) as *const u64);
                 if let Some(pos) = ep.entries[..ep.count].iter().position(|e| e.fd == fd as i32) {
                     ep.entries[pos].events = events;
                     ep.entries[pos].data = data;
@@ -184,6 +184,8 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         if eventfd_has_data(fd) { revents |= EPOLLIN; }
                     } else if is_timerfd(fd) {
                         if timerfd_has_data(fd) { revents |= EPOLLIN; }
+                    } else if is_signalfd(fd) {
+                        if signalfd_has_data(fd) { revents |= EPOLLIN; }
                     } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].is_pipe {
                         let pid = (*fdt::FD_TABLE)[fd].pipe_id;
                         if crate::pipe::has_data(pid) { revents |= EPOLLIN; }
@@ -205,8 +207,8 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                 }
                 if revents != 0 {
                     let out = events_ptr + ready * 12;
-                    *(out as *mut u32) = revents;
-                    *((out + 4) as *mut u64) = e.data;
+                    core::ptr::write_unaligned(out as *mut u32, revents);
+                    core::ptr::write_unaligned((out + 4) as *mut u64, e.data);
                     ready += 1;
                 }
             }
@@ -459,6 +461,107 @@ pub fn timerfd_has_data(fd: usize) -> bool {
         TIMERFDS[idx].next_expiry_ms > 0 && now_ms >= TIMERFDS[idx].next_expiry_ms
             || TIMERFDS[idx].expirations > 0
     }).unwrap_or(false)
+}
+
+// ── signalfd ──────────────────────────────────────────────────────
+
+const MAX_SIGNALFD: usize = 4;
+
+struct SignalFdSlot {
+    active: bool,
+    fd: usize,
+    mask: u64, // signal mask (bit per signal, same as SignalSet)
+}
+
+static mut SIGNALFDS: [SignalFdSlot; MAX_SIGNALFD] = {
+    const EMPTY: SignalFdSlot = SignalFdSlot { active: false, fd: 0, mask: 0 };
+    [EMPTY; MAX_SIGNALFD]
+};
+
+fn find_signalfd(fd: usize) -> Option<usize> {
+    unsafe { (0..MAX_SIGNALFD).find(|&i| SIGNALFDS[i].active && SIGNALFDS[i].fd == fd) }
+}
+pub fn is_signalfd(fd: usize) -> bool { find_signalfd(fd).is_some() }
+
+/// signalfd4(fd, mask_ptr, flags) → fd
+/// If fd == -1, allocate new signalfd. Otherwise update existing.
+pub fn signalfd4(fd: usize, mask_ptr: usize, _flags: usize) -> isize {
+    if crate::uaccess::validate_user_ptr(mask_ptr, 8).is_err() { return crate::errno::EFAULT; }
+    let mask = unsafe { *(mask_ptr as *const u64) };
+
+    unsafe {
+        // Update existing signalfd
+        if fd != usize::MAX { // -1 as usize
+            if let Some(idx) = find_signalfd(fd) {
+                SIGNALFDS[idx].mask = mask;
+                return fd as isize;
+            }
+            return crate::errno::EINVAL;
+        }
+
+        // Allocate new signalfd
+        let idx = match (0..MAX_SIGNALFD).find(|&i| !SIGNALFDS[i].active) {
+            Some(i) => i,
+            None => return crate::errno::ENOMEM,
+        };
+
+        let new_fd = alloc_virtual_fd(_flags);
+        if new_fd < 0 { return new_fd; }
+
+        SIGNALFDS[idx] = SignalFdSlot { active: true, fd: new_fd as usize, mask };
+        new_fd
+    }
+}
+
+/// Read from signalfd: returns struct signalfd_siginfo (128 bytes) for each pending signal.
+pub fn signalfd_read(fd: usize, buf: usize) -> isize {
+    let idx = match find_signalfd(fd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    if crate::uaccess::validate_user_ptr(buf, 128).is_err() { return crate::errno::EFAULT; }
+
+    unsafe {
+        let mask = SIGNALFDS[idx].mask;
+        let hot = &mut (*(&raw mut super::PROCESS)).signal_hot;
+
+        // Find a pending signal that matches the signalfd mask
+        let pending_masked = hot.pending.0 & mask;
+        if pending_masked == 0 {
+            return crate::errno::EAGAIN; // no matching signal pending
+        }
+
+        // Dequeue the lowest pending signal
+        let bit = pending_masked.trailing_zeros() as u8;
+        let signo = bit + 1; // signals are 1-based
+        hot.pending = rux_proc::signal::SignalSet(hot.pending.0 & !(1u64 << bit));
+
+        // Write struct signalfd_siginfo (128 bytes, mostly zeros)
+        let p = buf as *mut u8;
+        for i in 0..128 { *p.add(i) = 0; }
+        // ssi_signo at offset 0 (u32)
+        *(buf as *mut u32) = signo as u32;
+        // ssi_code at offset 8 (i32) = SI_USER = 0
+        *((buf + 8) as *mut i32) = 0;
+
+        128 // return sizeof(signalfd_siginfo)
+    }
+}
+
+/// Check if signalfd has readable data (for poll/epoll).
+pub fn signalfd_has_data(fd: usize) -> bool {
+    find_signalfd(fd).map(|idx| unsafe {
+        let mask = SIGNALFDS[idx].mask;
+        let hot = &(*(&raw const super::PROCESS)).signal_hot;
+        (hot.pending.0 & mask) != 0
+    }).unwrap_or(false)
+}
+
+/// Close a signalfd.
+pub fn signalfd_close(fd: usize) {
+    if let Some(idx) = find_signalfd(fd) {
+        unsafe { SIGNALFDS[idx].active = false; }
+    }
 }
 
 // ── MAP_SHARED file write-back tracking ────────────────────────────
@@ -939,6 +1042,19 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
     // Timeout: clear all sets
     if readfds_ptr != 0 { unsafe { *(readfds_ptr as *mut u64) = 0; } }
     if writefds_ptr != 0 { unsafe { *(writefds_ptr as *mut u64) = 0; } }
+    0
+}
+
+/// mincore(addr, length, vec) — check if pages are resident in memory.
+/// All pages in rux are always resident (no swap), so fill vec with 1s.
+pub fn mincore(addr: usize, length: usize, vec_ptr: usize) -> isize {
+    if addr & 0xFFF != 0 { return crate::errno::EINVAL; }
+    let pages = (length + 0xFFF) / 4096;
+    if crate::uaccess::validate_user_ptr(vec_ptr, pages).is_err() { return crate::errno::EFAULT; }
+    unsafe {
+        let v = core::slice::from_raw_parts_mut(vec_ptr as *mut u8, pages);
+        for byte in v.iter_mut() { *byte = 1; } // all pages resident
+    }
     0
 }
 

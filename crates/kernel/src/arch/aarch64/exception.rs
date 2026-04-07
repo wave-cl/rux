@@ -30,22 +30,14 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             let ec = esr_ec(esr);
             match ec {
                 0b100100 | 0b100101 => {
-                    // Kernel-mode data abort — route by DFSC like the user handler
-                    let dfsc = (esr & 0x3F) as u32;
+                    // Kernel-mode data abort (kernel accessing user address).
+                    // The kernel may write to user pages (e.g., epoll_wait writing
+                    // events, fstat writing struct stat). Allow demand paging for
+                    // all fault types — the demand_page VALID guard prevents
+                    // replacing already-mapped pages.
                     let wnr = esr & (1 << 6) != 0;
-                    let is_translation = dfsc & 0b111100 == 0b000100;
-                    let is_permission  = dfsc & 0b111100 == 0b001100;
-
-                    if is_permission && wnr {
-                        // Permission fault on kernel write → try COW only
-                        if unsafe { crate::cow::handle_cow_fault(far as usize).is_ok() } {
-                            return;
-                        }
-                    } else if is_translation {
-                        // Translation fault → demand paging
-                        if unsafe { crate::demand_paging::handle_user_fault(far, wnr) } {
-                            return;
-                        }
+                    if unsafe { crate::demand_paging::handle_user_fault(far, wnr) } {
+                        return;
                     }
                     dump_user_fault("KERNEL DATA ABORT", far, esr, _frame);
                 }

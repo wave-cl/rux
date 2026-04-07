@@ -262,7 +262,7 @@ pub enum Syscall {
     Madvise, Mincore, Mremap, Msync,
     Mlock, Munlock, Mlockall, Munlockall,
     // Batch 2: signal extensions
-    SigPending, SigTimedwait, SigQueueinfo, TgSigQueueinfo,
+    SigPending, SigTimedwait, SigQueueinfo, TgSigQueueinfo, Signalfd4,
     // Batch 2: splice / zero-copy I/O
     Splice, Vmsplice, Tee,
     // Batch 2: process misc
@@ -695,7 +695,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Batch 2: memory management ─────────────────────────────
         Syscall::Madvise => 0, // hints are advisory — safe to ignore
-        Syscall::Mincore => crate::errno::ENOSYS,
+        Syscall::Mincore => memory::mincore(a0, a1, a2),
         Syscall::Mremap => memory::mremap(a0, a1, a2, a3, a4),
         Syscall::Msync => { unsafe { memory::msync(a0, a1, a2); } 0 }
         Syscall::Mlock | Syscall::Munlock |
@@ -728,9 +728,12 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             crate::errno::EAGAIN
         },
         Syscall::SigQueueinfo | Syscall::TgSigQueueinfo => crate::errno::ENOSYS,
+        Syscall::Signalfd4 => memory::signalfd4(a0, a1, a2),
 
         // ── Batch 2: splice / zero-copy I/O ───────────────────────
-        Syscall::Splice | Syscall::Vmsplice | Syscall::Tee => crate::errno::ENOSYS,
+        Syscall::Splice => linux::splice(a0, a1, a2, a3, a4, 0),
+        Syscall::Tee => linux::tee(a0, a2, a3, 0), // tee(fd_in, fd_out, len, flags)
+        Syscall::Vmsplice => crate::errno::ENOSYS, // userspace→pipe not yet implemented
 
         // ── Batch 2: process misc ─────────────────────────────────
         Syscall::Setsid2 => posix::setsid(), // alias

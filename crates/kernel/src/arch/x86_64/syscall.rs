@@ -532,7 +532,8 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     // Phase 4 server sockets
     t[50] = Syscall::Listen;     t[43] = Syscall::Accept;
     t[288] = Syscall::Accept4;
-    // Phase 5 event/timer fds
+    // Phase 5 event/timer fds + signalfd
+    t[289] = Syscall::Signalfd4;
     t[290] = Syscall::Eventfd2;
     t[283] = Syscall::TimerfdCreate; t[286] = Syscall::TimerfdSettime;
     t[287] = Syscall::TimerfdGettime;

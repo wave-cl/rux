@@ -331,7 +331,8 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 437] = {
     // Phase 4 server sockets
     t[201] = Syscall::Listen;    t[202] = Syscall::Accept;
     t[242] = Syscall::Accept4;
-    // Phase 5 event/timer fds
+    // Phase 5 event/timer fds + signalfd
+    t[74] = Syscall::Signalfd4;
     t[19] = Syscall::Eventfd2;
     t[85] = Syscall::TimerfdCreate; t[86] = Syscall::TimerfdSettime;
     t[87] = Syscall::TimerfdGettime;
