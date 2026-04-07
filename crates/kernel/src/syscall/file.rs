@@ -89,7 +89,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         if len < 128 { return crate::errno::EINVAL; }
         return super::memory::signalfd_read(fd, buf);
     }
-    if fd == 0 && fdt::is_console_fd(0) {
+    if fdt::is_console_fd(fd) {
         unsafe {
             let tty = &mut *(&raw mut crate::tty::TTY);
             let ptr = buf as *mut u8;
@@ -127,7 +127,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         if crate::uaccess::validate_user_ptr(buf, 8).is_err() { return crate::errno::EFAULT; }
         return super::memory::eventfd_write(fd, buf);
     }
-    if fd <= 2 && fdt::is_console_fd(fd) {
+    if fdt::is_console_fd(fd) {
         let write_len = len.min(65536);
         if crate::uaccess::validate_user_ptr(buf, write_len).is_err() { return crate::errno::EFAULT; }
         unsafe {
@@ -244,7 +244,17 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                 if let Err(_) = crate::kstate::fs().check_access(ino, req, &cred) {
                     return crate::errno::EACCES;
                 }
-                fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs())
+                let fd = fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs());
+                // Mark /dev/tty and /dev/console as console fds
+                if fd >= 0 {
+                    let is_dev_console = path == b"/dev/tty" || path == b"/dev/console"
+                        || path == b"/dev/ttyS0" || path == b"/dev/tty0";
+                    if is_dev_console {
+                        (*fdt::FD_TABLE)[fd as usize].is_console = true;
+                        (*fdt::FD_TABLE)[fd as usize].ino = 0; // not a real file inode
+                    }
+                }
+                fd
             }
             Err(_) if o_creat => {
                 let (dir_ino, fname) = match super::resolve_parent_fname(path_ptr) {
