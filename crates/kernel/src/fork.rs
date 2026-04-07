@@ -177,7 +177,7 @@ pub unsafe fn sys_fork() -> isize {
 ///
 /// # Safety
 /// Manipulates page tables, kernel stacks, and scheduler state.
-pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) -> isize {
+pub unsafe fn sys_clone(flags: usize, child_stack: usize, parent_tid_ptr: usize, child_tid_ptr: usize, tls: usize) -> isize {
     let child_idx = match alloc_task_slot() {
         Some(idx) => idx,
         None => return crate::errno::EAGAIN,
@@ -192,6 +192,11 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
         if flags & CLONE_CHILD_CLEARTID != 0 { child_tid_ptr } else { 0 },
     );
 
+    // CLONE_SETTLS: set child's thread-local storage pointer
+    if flags & crate::errno::CLONE_SETTLS != 0 {
+        TASK_TABLE[child_idx].tls = tls as u64;
+    }
+
     // CLONE_THREAD: same thread group
     let parent = &TASK_TABLE[parent_idx];
     TASK_TABLE[child_idx].tgid = if flags & CLONE_THREAD != 0 { parent.tgid } else { child_pid };
@@ -201,12 +206,9 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
     TASK_TABLE[child_idx].asid = parent.asid;
 
     // CLONE_FILES: share fd table with parent (threads see same fds).
-    // Without CLONE_FILES: copy fds (fork semantics).
     if flags & crate::errno::CLONE_FILES != 0 {
-        // Point child at parent's fd array — any fd operation in either
-        // thread is visible to the other. No copy needed.
         let parent_fds_owner = if parent.shared_fds_with != u16::MAX {
-            parent.shared_fds_with as usize // parent already shares — chain to root
+            parent.shared_fds_with as usize
         } else {
             parent_idx
         };
@@ -222,7 +224,12 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, child_tid_ptr: usize) 
 
     enqueue_child(child_idx);
 
-    // Write child tid to user space if CLONE_CHILD_SETTID requested
+    // CLONE_PARENT_SETTID: write child tid to parent's user space
+    if flags & crate::errno::CLONE_PARENT_SETTID != 0 && parent_tid_ptr > 0x1000 {
+        crate::uaccess::put_user(parent_tid_ptr, child_pid as u32);
+    }
+
+    // CLONE_CHILD_SETTID: write child tid to child's user space
     if flags & crate::errno::CLONE_CHILD_SETTID != 0 && child_tid_ptr > 0x1000 {
         crate::uaccess::put_user(child_tid_ptr, child_pid as u32);
     }

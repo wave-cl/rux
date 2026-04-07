@@ -291,12 +291,14 @@ extern "C" {
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
     // Process creation syscalls (handled before generic dispatch)
     match nr {
-        // 56=clone(flags, stack, ptid, ctid, tls), 57=fork, 58=vfork
+        // 56=clone(flags=rdi, stack=rsi, ptid=rdx, ctid=r10, tls=r8)
         56 => {
             let flags = a0 as usize;
             if flags & crate::errno::CLONE_VM != 0 {
                 // Thread: shared address space
-                return unsafe { crate::fork::sys_clone(flags, a1 as usize, a3 as usize) } as i64;
+                return unsafe { crate::fork::sys_clone(
+                    flags, a1 as usize, a2 as usize, a3 as usize, a4 as usize
+                ) } as i64;
             }
             return unsafe { crate::fork::sys_fork() } as i64;
         }

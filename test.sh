@@ -255,6 +255,7 @@ evts=ep.poll(0.1)
 print('epoll_ok' if len(evts)>0 else 'FAIL')
 os.close(r);os.close(w);ep.close()
 " 2>&1
+python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 exit
 CMDS
 } | \
@@ -419,6 +420,7 @@ check "getpgid"              "pgid_ok"
 check "pipe splice"          "splice_splicedata"
 check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
+check "python threading"     "thread_ok"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
@@ -599,6 +601,7 @@ evts=ep.poll(0.1)
 print('epoll_ok' if len(evts)>0 else 'FAIL')
 os.close(r);os.close(w);ep.close()
 " 2>&1
+python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 TESTENV=rux123 sh -c 'echo $TESTENV'
 exit
 CMDS
@@ -754,6 +757,7 @@ check "getpgid"              "pgid_ok"
 check "pipe splice"          "splice_splicedata"
 check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
+check "python threading"     "thread_ok"
 check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 

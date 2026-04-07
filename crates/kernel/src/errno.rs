@@ -56,5 +56,7 @@ pub const CLONE_FILES: usize = 0x400;
 #[allow(dead_code)]
 pub const CLONE_SIGHAND: usize = 0x800;
 pub const CLONE_THREAD: usize = 0x10000;
-pub const CLONE_CHILD_SETTID: usize = 0x01000000;
+pub const CLONE_SETTLS: usize = 0x80000;
+pub const CLONE_PARENT_SETTID: usize = 0x100000;
 pub const CLONE_CHILD_CLEARTID: usize = 0x200000;
+pub const CLONE_CHILD_SETTID: usize = 0x01000000;
