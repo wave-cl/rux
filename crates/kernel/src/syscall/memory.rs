@@ -935,18 +935,20 @@ pub fn mremap(old_addr: usize, old_size: usize, new_size: usize, flags: usize, n
 
 /// futex(uaddr, op, val, ...) — Linux: fast userspace mutex.
 /// Supports FUTEX_WAIT (block if *uaddr == val) and FUTEX_WAKE (wake N waiters).
-pub fn futex(uaddr: usize, op: usize, val: usize) -> isize {
+pub fn futex(uaddr: usize, op: usize, val: usize, timeout_ptr: usize) -> isize {
     const FUTEX_WAIT: usize = 0;
     const FUTEX_WAKE: usize = 1;
+    const FUTEX_WAIT_BITSET: usize = 9;
+    const FUTEX_WAKE_BITSET: usize = 10;
 
     match op & 0x7F { // mask off FUTEX_PRIVATE_FLAG
-        FUTEX_WAIT => futex_wait(uaddr, val as u32),
-        FUTEX_WAKE => futex_wake(uaddr, val),
+        FUTEX_WAIT | FUTEX_WAIT_BITSET => futex_wait(uaddr, val as u32, timeout_ptr),
+        FUTEX_WAKE | FUTEX_WAKE_BITSET => futex_wake(uaddr, val),
         _ => 0, // unsupported ops succeed silently
     }
 }
 
-fn futex_wait(uaddr: usize, expected: u32) -> isize {
+fn futex_wait(uaddr: usize, expected: u32, timeout_ptr: usize) -> isize {
     unsafe {
         use crate::task_table::*;
 
@@ -955,8 +957,7 @@ fn futex_wait(uaddr: usize, expected: u32) -> isize {
             return crate::errno::EAGAIN;
         }
 
-        // Check if the page is mapped before reading. If not, return EAGAIN
-        // (the caller will retry after the page is faulted in).
+        // Check if the page is mapped before reading.
         let upt = crate::syscall::current_user_page_table();
         if upt.translate(rux_klib::VirtAddr::new(uaddr & !0xFFF)).is_err() {
             return crate::errno::EAGAIN;
@@ -970,14 +971,38 @@ fn futex_wait(uaddr: usize, expected: u32) -> isize {
             return crate::errno::EAGAIN;
         }
 
-        // Block until woken by FUTEX_WAKE
+        // Parse timeout if provided
+        let deadline = if timeout_ptr != 0
+            && crate::uaccess::validate_user_ptr(timeout_ptr, 16).is_ok()
+        {
+            use rux_arch::TimerOps;
+            let tv_sec = *(timeout_ptr as *const u64);
+            let tv_nsec = *((timeout_ptr + 8) as *const u64);
+            let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
+            if ms == 0 { return crate::errno::EAGAIN; } // zero timeout = non-blocking
+            crate::arch::Arch::ticks() + ms
+        } else {
+            0 // no timeout — wait indefinitely
+        };
+
+        // Block until woken by FUTEX_WAKE or timeout
         let idx = current_task_idx();
         TASK_TABLE[idx].state = TaskState::WaitingForFutex;
         TASK_TABLE[idx].futex_addr = uaddr;
+        if deadline > 0 { TASK_TABLE[idx].wake_at = deadline; }
         let sched = crate::scheduler::get();
         sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
         sched.dequeue_current();
         sched.schedule();
+
+        // Check if we were woken by timeout (wake_sleepers sets state=Ready
+        // but doesn't clear futex_addr — check if wake_at expired)
+        if deadline > 0 {
+            use rux_arch::TimerOps;
+            if crate::arch::Arch::ticks() >= deadline {
+                return -110; // ETIMEDOUT
+            }
+        }
         0
     }
 }

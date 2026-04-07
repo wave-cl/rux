@@ -473,7 +473,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Stubs: accepted but no-op ─────────────────────────────
         Syscall::Mprotect => posix::mprotect(a0, a1, a2),
         Syscall::Access => posix::faccessat((-100isize) as usize, a0, a1), // AT_FDCWD
-        Syscall::Futex => posix::futex(a0, a1, a2),
+        Syscall::Futex => posix::futex(a0, a1, a2, a3),
         Syscall::Sigaltstack => unsafe {
             // sigaltstack(ss, old_ss) — set/get alternate signal stack
             let cold = &mut (*(&raw mut PROCESS)).signal_cold;

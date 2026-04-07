@@ -262,8 +262,10 @@ pub unsafe fn wake_sleepers() {
     for i in 0..MAX_PROCS {
         let t = &mut TASK_TABLE[i];
         if !t.active { continue; }
-        // Wake sleeping tasks whose deadline has passed
-        if t.state == TaskState::Sleeping && t.wake_at > 0 && now >= t.wake_at {
+        // Wake sleeping tasks whose deadline has passed (nanosleep + futex timeout)
+        if (t.state == TaskState::Sleeping || t.state == TaskState::WaitingForFutex)
+            && t.wake_at > 0 && now >= t.wake_at
+        {
             t.wake_at = 0;
             t.state = TaskState::Ready;
             crate::scheduler::get().wake_task(i);
