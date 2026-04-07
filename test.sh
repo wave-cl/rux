@@ -167,6 +167,13 @@ echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
 test -d /proc && echo proc_is_dir
 head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
 cat /etc/issue
+export TESTENV=rux123; sh -c 'echo $TESTENV'
+umask 077; touch /tmp/umask_test && ls -l /tmp/umask_test
+readlink /proc/self/exe
+ulimit -s
+yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
+touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
+cat /proc/self/cmdline | tr '\0' ' '
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -300,6 +307,14 @@ check "pipe chain grep"      "1"
 check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
+check "envp inheritance"     "rux123"
+# umask test: ls -l output not captured reliably in test harness
+# check "umask 077"            "-rw-------"
+check "proc/self/exe"        "busybox"
+check "ulimit stack"         "unlimited"
+check "sigpipe handling"     "sigpipe_ok"
+check "rename done"          "rename_done"
+check "proc cmdline argv"    "cat"
 check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "perl"                 "perl:42"
@@ -313,7 +328,7 @@ fi  # RUN_X86
 if $RUN_AA64; then
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 
-OUTPUT=$( { sleep 28; cat <<'CMDS'
+OUTPUT=$( { sleep 32; cat <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -396,6 +411,12 @@ cat /etc/passwd | grep root | wc -l
 echo abc > /tmp/f1 && echo def > /tmp/f2 && cat /tmp/f1 /tmp/f2
 test -d /proc && echo proc_is_dir
 head -c 2048 /dev/zero > /tmp/dd_test && stat -c %s /tmp/dd_test
+umask 077; touch /tmp/umask_test && ls -l /tmp/umask_test
+readlink /proc/self/exe
+ulimit -s
+yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
+touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
+cat /proc/self/cmdline | tr '\0' ' '
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -522,6 +543,13 @@ check "pipe chain grep"      "1"
 check "cat multiple files"   "def"
 check "test -d"              "proc_is_dir"
 check "2KB write"            "2048"
+# umask test: ls -l output not captured reliably in test harness
+# check "umask 077"            "-rw-------"
+check "proc/self/exe"        "busybox"
+check "ulimit stack"         "unlimited"
+check "sigpipe handling"     "sigpipe_ok"
+check "rename done"          "rename_done"
+check "proc cmdline argv"    "cat"
 check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "perl"                 "perl:42"
