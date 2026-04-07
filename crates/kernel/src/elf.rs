@@ -163,7 +163,7 @@ pub unsafe fn load_elf_from_inode(
 
     // Set program break and mmap base for brk/mmap syscalls
     crate::syscall::PROCESS.program_brk = max_end as usize;
-    // Randomize mmap_base for basic ASLR (0x10000000 + random 0-1MB offset)
+    // Randomize mmap_base for basic ASLR (0x10000000 + random 0-16MB offset)
     {
         use rux_arch::TimerOps;
         let entropy = crate::arch::Arch::ticks() as usize;
