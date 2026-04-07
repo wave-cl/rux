@@ -192,7 +192,7 @@ CMDS
 echo "$OUTPUT" > /tmp/rux_test_x86_64.log
 
 # Boot
-check "boot banner"             "rux 0.20.0 (x86_64)"
+check "boot banner"             "rux 0.21.1 (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -206,7 +206,7 @@ check "alpine issue"            "Alpine Linux"
 check "apk available"           "apk-tools"
 
 # Core commands
-check "uname"                   "rux rux 0.20.0"
+check "uname"                   "rux rux 0.21.1"
 check "cat /etc/passwd"         "root:"
 check "whoami"                  "root"
 check "hostname"                "rux"
@@ -422,7 +422,7 @@ CMDS
 echo "$OUTPUT" > /tmp/rux_test_aarch64.log
 
 # Boot
-check "boot banner"             "rux 0.20.0 (aarch64)"
+check "boot banner"             "rux 0.21.1 (aarch64)"
 check "MMU enabled"             "MMU enabled"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -435,7 +435,7 @@ check "alpine release"          "3.21"
 check "apk available"           "apk-tools"
 
 # Core commands
-check "uname"                   "rux rux 0.20.0"
+check "uname"                   "rux rux 0.21.1"
 check "cat /etc/passwd"         "root:"
 check "whoami"                  "root"
 check "hostname"                "rux"
