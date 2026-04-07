@@ -14,6 +14,7 @@ unsafe fn alloc_virtual_fd(flags: usize) -> isize {
     };
     fd_table[fd] = fdt::EMPTY_FD;
     fd_table[fd].active = true;
+    fd_table[fd].flags = 2; // O_RDWR — virtual fds are always readable+writable
     if flags & 0x800 != 0 { fd_table[fd].flags |= 0x800; } // O_NONBLOCK / EFD_NONBLOCK / TFD_NONBLOCK
     fd as isize
 }

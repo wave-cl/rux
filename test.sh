@@ -257,9 +257,7 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',7777)); s.listen(1); print('listen_ok'); s.close()" 2>&1
-ruby -e 'puts "ruby:" + (6*7).to_s' 2>&1
-ruby -e 'puts (1..10).reduce(:+)' 2>&1
-ruby -e 'puts RUBY_PLATFORM' 2>&1
+ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
 exit
 CMDS
 } | \
@@ -611,8 +609,7 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 TESTENV=rux123 sh -c 'echo $TESTENV'
-ruby -e 'puts "ruby:" + (6*7).to_s' 2>&1
-ruby -e 'puts (1..10).reduce(:+)' 2>&1
+ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 exit
 CMDS
 } | \

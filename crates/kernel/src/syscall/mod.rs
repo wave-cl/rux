@@ -889,6 +889,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     Some(fd) => {
                         fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
                         fd_table[fd].active = true;
+                        fd_table[fd].flags = 2; // O_RDWR
                         fd as isize
                     }
                     None => crate::errno::ENOMEM,
@@ -940,6 +941,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     Some(fd) => {
                         fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
                         fd_table[fd].active = true;
+                        fd_table[fd].flags = 2; // O_RDWR
                         fd as isize
                     }
                     None => crate::errno::ENOMEM,
