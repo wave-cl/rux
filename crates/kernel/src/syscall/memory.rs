@@ -38,7 +38,7 @@ where F: FnMut() -> Option<u64>
 
 // ── epoll ──────────────────────────────────────────────────────────
 
-const MAX_EPOLL: usize = 4;
+const MAX_EPOLL: usize = 8;
 const MAX_EPOLL_FDS: usize = 64;
 
 #[derive(Clone, Copy)]
@@ -67,10 +67,10 @@ impl EpollInstance {
     }
 }
 
-static mut EPOLL: [EpollInstance; MAX_EPOLL] = [
-    EpollInstance::empty(), EpollInstance::empty(),
-    EpollInstance::empty(), EpollInstance::empty(),
-];
+static mut EPOLL: [EpollInstance; MAX_EPOLL] = {
+    const E: EpollInstance = EpollInstance::empty();
+    [E; MAX_EPOLL]
+};
 
 /// epoll_create1(flags) → fd
 pub fn epoll_create(_flags: usize) -> isize {
@@ -247,7 +247,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
 
 // ── eventfd ────────────────────────────────────────────────────────
 
-const MAX_EVENTFD: usize = 8;
+const MAX_EVENTFD: usize = 16;
 
 struct EventFdSlot {
     active: bool,
@@ -338,7 +338,7 @@ pub fn eventfd_has_data(fd: usize) -> bool {
 
 // ── timerfd ────────────────────────────────────────────────────────
 
-const MAX_TIMERFD: usize = 4;
+const MAX_TIMERFD: usize = 8;
 
 struct TimerFdSlot {
     active: bool,
@@ -490,7 +490,7 @@ pub fn timerfd_has_data(fd: usize) -> bool {
 
 // ── signalfd ──────────────────────────────────────────────────────
 
-const MAX_SIGNALFD: usize = 4;
+const MAX_SIGNALFD: usize = 8;
 
 struct SignalFdSlot {
     active: bool,

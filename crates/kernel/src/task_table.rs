@@ -11,7 +11,7 @@ use rux_fs::fdtable::{OpenFile, EMPTY_FD, MAX_FDS};
 
 /// Maximum number of concurrent processes.
 /// 32 slots allows ~15 concurrent pipe commands before exhaustion.
-pub const MAX_PROCS: usize = 40;
+pub const MAX_PROCS: usize = 64;
 
 /// Process lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

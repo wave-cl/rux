@@ -5,10 +5,10 @@
 /// writes return -EPIPE.
 
 const PIPE_BUF_SIZE: usize = 16384; // 16KB (Linux default is 64KB, but conserve BSS)
-const MAX_PIPES: usize = 32;
+const MAX_PIPES: usize = 64;
 
 /// Maximum concurrent processes (must match kernel's MAX_PROCS).
-const MAX_WAITERS: usize = 32;
+const MAX_WAITERS: usize = 64;
 
 struct PipeBuf {
     buf: [u8; PIPE_BUF_SIZE],

@@ -9,7 +9,7 @@ const SOCK_RAW: u32 = 3;
 const SOCK_NONBLOCK: usize = 0x800;
 const O_NONBLOCK: u32 = 0x800;
 
-const MAX_SOCKETS: usize = 16;
+const MAX_SOCKETS: usize = 32;
 
 #[derive(Clone, Copy)]
 struct SocketSlot {

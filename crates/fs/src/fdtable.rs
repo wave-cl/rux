@@ -8,7 +8,7 @@
 
 use crate::{FileSystem, InodeStat};
 
-pub const MAX_FDS: usize = 64;
+pub const MAX_FDS: usize = 256;
 pub const FD_STDIN: usize = 0;
 pub const FD_STDOUT: usize = 1;
 pub const FD_STDERR: usize = 2;
