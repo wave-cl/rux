@@ -22,6 +22,9 @@ pub unsafe fn init() {
     outb(COM1 + 3, 0x03); // 8 bits, no parity, 1 stop bit (8N1)
     outb(COM1 + 2, 0xC7); // Enable FIFO, clear, 14-byte threshold
     outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
+    // Drain any stale bytes from the FIFO before enabling RX interrupts.
+    // QEMU may have leftover data from initialization or terminal setup.
+    while inb(COM1 + 5) & 0x01 != 0 { let _ = inb(COM1); }
     outb(COM1 + 1, 0x01); // Enable receive data available interrupt (IER bit 0)
 }
 
