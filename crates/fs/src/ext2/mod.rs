@@ -10,7 +10,6 @@ mod dir;
 mod block;
 mod alloc;
 
-use core::cell::UnsafeCell;
 use crate::{FileSystem, FileName, InodeId, InodeStat, InodeType, DirEntry, VfsError};
 
 /// Read-only ext2 filesystem backed by a block device.
@@ -33,14 +32,16 @@ pub struct Ext2Fs {
     pub(crate) inode_count: u32,
     /// Block group descriptor table (first block after superblock).
     pub(crate) bgdt_block: u32,
-    /// Mutable state behind UnsafeCell for interior mutability.
-    inner: UnsafeCell<Ext2Inner>,
 }
 
-struct Ext2Inner {
-    cache: [CacheEntry; 32],
-    cache_idx: usize,
-}
+/// Block cache in BSS (static) — keeps Ext2Fs small (~48 bytes) so it can be
+/// safely returned on the stack without overflowing the 64KB aarch64 boot stack.
+/// Protected by FS_LOCK (single-threaded access).
+static mut BLOCK_CACHE: [CacheEntry; 32] = {
+    const E: CacheEntry = CacheEntry::empty();
+    [E; 32]
+};
+static mut CACHE_IDX: usize = 0;
 
 /// Reentrant filesystem lock — prevents concurrent ext2 metadata corruption.
 /// Uses a depth counter so nested calls (e.g., unlink → truncate) don't deadlock.
@@ -131,6 +132,12 @@ impl Ext2Fs {
 
         let bgdt_block = if sb.block_size == 1024 { 2 } else { 1 };
 
+        // Reset static block cache for this mount
+        for entry in (*(&raw mut BLOCK_CACHE)).iter_mut() {
+            entry.valid = false;
+        }
+        *(&raw mut CACHE_IDX) = 0;
+
         Ok(Self {
             dev,
             block_size: sb.block_size,
@@ -139,26 +146,19 @@ impl Ext2Fs {
             inode_size: sb.inode_size,
             inode_count: sb.inode_count,
             bgdt_block,
-            inner: UnsafeCell::new(Ext2Inner {
-                cache: {
-                    const E: CacheEntry = CacheEntry::empty();
-                    [E; 32]
-                },
-                cache_idx: 0,
-            }),
         })
     }
 
-    /// Read a filesystem block into `buf`. Uses the block cache.
+    /// Read a filesystem block into `buf`. Uses the static block cache.
     pub(crate) unsafe fn read_block(&self, block_no: u64, buf: &mut [u8]) -> Result<(), VfsError> {
         // Bounds check: prevent reading beyond the disk (256K blocks = 256MB max)
         if block_no > 262144 { return Err(VfsError::IoError); }
 
         let bs = self.block_size as usize;
-        let inner = &mut *self.inner.get();
+        let cache = &mut *(&raw mut BLOCK_CACHE);
 
         // Check cache
-        for entry in inner.cache.iter() {
+        for entry in cache.iter() {
             if entry.valid && entry.block_no == block_no {
                 buf[..bs].copy_from_slice(&entry.data[..bs]);
                 return Ok(());
@@ -169,7 +169,6 @@ impl Ext2Fs {
         let sectors_per_block = bs / 512;
         let start_sector = block_no * sectors_per_block as u64;
         let dev = &*self.dev;
-        // Read all sectors for this block
         for i in 0..sectors_per_block {
             let sector = start_sector + i as u64;
             dev.read_block(sector, buf.as_mut_ptr().add(i * 512))
@@ -177,11 +176,11 @@ impl Ext2Fs {
         }
 
         // Insert into cache (round-robin)
-        let idx = inner.cache_idx;
-        inner.cache_idx = (idx + 1) % 32;
-        inner.cache[idx].block_no = block_no;
-        inner.cache[idx].data[..bs].copy_from_slice(&buf[..bs]);
-        inner.cache[idx].valid = true;
+        let idx = *(&raw const CACHE_IDX);
+        *(&raw mut CACHE_IDX) = (idx + 1) % 32;
+        cache[idx].block_no = block_no;
+        cache[idx].data[..bs].copy_from_slice(&buf[..bs]);
+        cache[idx].valid = true;
 
         Ok(())
     }
@@ -200,9 +199,9 @@ impl Ext2Fs {
         }
 
         // Update cache (or insert if not cached) for read-after-write consistency
-        let inner = &mut *self.inner.get();
+        let cache = &mut *(&raw mut BLOCK_CACHE);
         let mut found = false;
-        for entry in inner.cache.iter_mut() {
+        for entry in cache.iter_mut() {
             if entry.valid && entry.block_no == block_no {
                 entry.data[..bs].copy_from_slice(&buf[..bs]);
                 found = true;
@@ -210,11 +209,11 @@ impl Ext2Fs {
             }
         }
         if !found {
-            let idx = inner.cache_idx;
-            inner.cache_idx = (idx + 1) % 32;
-            inner.cache[idx].block_no = block_no;
-            inner.cache[idx].data[..bs].copy_from_slice(&buf[..bs]);
-            inner.cache[idx].valid = true;
+            let idx = *(&raw const CACHE_IDX);
+            *(&raw mut CACHE_IDX) = (idx + 1) % 32;
+            cache[idx].block_no = block_no;
+            cache[idx].data[..bs].copy_from_slice(&buf[..bs]);
+            cache[idx].valid = true;
         }
 
         Ok(())

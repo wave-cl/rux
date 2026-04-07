@@ -124,8 +124,8 @@ pub(crate) unsafe fn free_block(fs: &Ext2Fs, block_num: u32) -> Result<(), VfsEr
     fs.write_block(bgd_block, &bgd_buf)?;
 
     // Invalidate cache entry for the freed block
-    let inner = &mut *fs.inner.get();
-    for entry in inner.cache.iter_mut() {
+    let cache = &mut *(&raw mut super::BLOCK_CACHE);
+    for entry in cache.iter_mut() {
         if entry.valid && entry.block_no == block_num as u64 {
             entry.valid = false;
             break;
