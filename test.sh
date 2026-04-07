@@ -174,6 +174,19 @@ yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
 touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
 cat /proc/self/cmdline | tr '\0' ' '
 timeout 5 top -bn1 -d1 2>&1 | head -3
+awk 'BEGIN{print "awk:" 6*7}'
+echo test_sed | sed 's/sed/SED/'
+echo -e 'cherry\napple\nbanana' | sort | head -1
+sha256sum /etc/hostname | cut -d' ' -f1 | head -c 8
+echo ""
+dd if=/dev/zero of=/tmp/dd_test bs=1024 count=8 2>&1 | grep copied
+find /etc -name 'passwd' -type f 2>/dev/null | head -1
+echo hello | tr a-z A-Z
+echo tee_data | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
+date 2>&1 | head -1
+df / 2>&1 | grep /dev
+du -s /bin 2>&1 | head -1
+uptime 2>&1 | head -1
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -392,6 +405,18 @@ check "sigpipe handling"     "sigpipe_ok"
 check "rename done"          "rename_done"
 check "proc cmdline argv"    "cat"
 check "top batch"            "Mem:"
+check "awk"                  "awk:42"
+check "sed"                  "test_SED"
+check "sort"                 "apple"
+check "sha256sum"            "f2d4e8ff"
+check "dd"                   "copied"
+check "find"                 "/etc/passwd"
+check "tr"                   "HELLO"
+check "tee"                  "tee_data"
+check "date"                 "UTC"
+check "df"                   "/dev/vda"
+check "du"                   "/bin"
+check "uptime"               "load average"
 check "wget http"            "Example Domain"
 check "perl"                 "perl:42"
 check "python3 installed"    "Python 3"
@@ -525,6 +550,19 @@ yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
 touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
 cat /proc/self/cmdline | tr '\0' ' '
 timeout 5 top -bn1 -d1 2>&1 | head -3
+awk 'BEGIN{print "awk:" 6*7}'
+echo test_sed | sed 's/sed/SED/'
+echo -e 'cherry\napple\nbanana' | sort | head -1
+sha256sum /etc/hostname | cut -d' ' -f1 | head -c 8
+echo ""
+dd if=/dev/zero of=/tmp/dd_test bs=1024 count=8 2>&1 | grep copied
+find /etc -name 'passwd' -type f 2>/dev/null | head -1
+echo hello | tr a-z A-Z
+echo tee_data | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
+date 2>&1 | head -1
+df / 2>&1 | grep /dev
+du -s /bin 2>&1 | head -1
+uptime 2>&1 | head -1
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -732,6 +770,18 @@ check "sigpipe handling"     "sigpipe_ok"
 check "rename done"          "rename_done"
 check "proc cmdline argv"    "cat"
 check "top batch"            "Mem:"
+check "awk"                  "awk:42"
+check "sed"                  "test_SED"
+check "sort"                 "apple"
+check "sha256sum"            "f2d4e8ff"
+check "dd"                   "copied"
+check "find"                 "/etc/passwd"
+check "tr"                   "HELLO"
+check "tee"                  "tee_data"
+check "date"                 "UTC"
+check "df"                   "/dev/vda"
+check "du"                   "/bin"
+check "uptime"               "load average"
 check "wget http"            "Example Domain"
 check "perl"                 "perl:42"
 check "python3 version"      "Python 3"
