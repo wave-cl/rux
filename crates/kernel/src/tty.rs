@@ -49,6 +49,18 @@ pub fn serial_has_data() -> bool {
     SERIAL_TAIL.load(Ordering::Relaxed) != SERIAL_HEAD.load(Ordering::Relaxed)
 }
 
+/// Minimal `core::fmt::Write` adapter for serial console output.
+/// Used by strace and kernel debug logging.
+pub struct SerialWriter;
+
+impl core::fmt::Write for SerialWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        use rux_arch::ConsoleOps;
+        crate::arch::Arch::write_bytes(s.as_bytes());
+        Ok(())
+    }
+}
+
 /// Global TTY state (single terminal).
 pub static mut TTY: Tty = Tty::new();
 

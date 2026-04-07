@@ -310,26 +310,82 @@ impl Syscall {
     #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
-            Syscall::Read => "read", Syscall::Write => "write",
+            Syscall::Read => "read", Syscall::Readv => "readv",
+            Syscall::Pread64 => "pread64",
+            Syscall::Write => "write", Syscall::Writev => "writev",
+            Syscall::Pwrite64 => "pwrite64",
             Syscall::Open | Syscall::OpenAt => "open",
-            Syscall::Close => "close", Syscall::Poll => "poll",
-            Syscall::Mmap => "mmap", Syscall::Brk => "brk",
+            Syscall::Close | Syscall::Close2 => "close",
+            Syscall::Lseek => "lseek",
+            Syscall::Poll | Syscall::Ppoll2 => "poll",
+            Syscall::Mmap => "mmap", Syscall::Mprotect => "mprotect",
+            Syscall::Munmap => "munmap", Syscall::Mremap => "mremap",
+            Syscall::Brk => "brk",
             Syscall::Futex => "futex", Syscall::Nanosleep => "nanosleep",
             Syscall::ClockNanosleep => "clock_nanosleep",
+            Syscall::EpollCreate | Syscall::EpollCreate1 => "epoll_create",
+            Syscall::EpollCtl => "epoll_ctl",
             Syscall::EpollPwait | Syscall::EpollWait => "epoll_wait",
             Syscall::Pselect6 => "pselect6",
-            Syscall::Connect => "connect", Syscall::Recvfrom => "recvfrom",
-            Syscall::Sendto => "sendto", Syscall::Socket => "socket",
+            Syscall::Connect => "connect", Syscall::Recvfrom | Syscall::RecvFrom2 => "recvfrom",
+            Syscall::Sendto | Syscall::SendTo2 => "sendto",
+            Syscall::Socket => "socket", Syscall::Bind => "bind",
+            Syscall::Listen => "listen", Syscall::Accept | Syscall::Accept4 => "accept",
+            Syscall::Setsockopt => "setsockopt", Syscall::Getsockopt => "getsockopt",
+            Syscall::Getsockname => "getsockname", Syscall::Getpeername => "getpeername",
+            Syscall::Shutdown => "shutdown", Syscall::Socketpair => "socketpair",
+            Syscall::Sendmsg | Syscall::Sendmmsg => "sendmsg",
+            Syscall::Recvmsg | Syscall::Recvmmsg => "recvmsg",
             Syscall::Clone3 => "clone3", Syscall::Execveat => "execveat",
             Syscall::Exit | Syscall::ExitGroup => "exit",
-            Syscall::Wait4 => "wait4",
+            Syscall::Wait4 => "wait4", Syscall::Waitid => "waitid",
             Syscall::Sigaction => "sigaction", Syscall::Sigprocmask => "sigprocmask",
-            Syscall::Getrandom => "getrandom",
+            Syscall::Sigaltstack => "sigaltstack", Syscall::Sigreturn => "sigreturn",
+            Syscall::Getrandom | Syscall::Getrandom2 => "getrandom",
             Syscall::Ioctl => "ioctl", Syscall::Fcntl => "fcntl",
-            Syscall::Fstat | Syscall::FstatAt | Syscall::Stat => "stat",
+            Syscall::Dup => "dup", Syscall::Dup2 => "dup2", Syscall::Dup3 | Syscall::Dup3_2 => "dup3",
+            Syscall::Pipe | Syscall::Pipe2 => "pipe",
+            Syscall::Fstat | Syscall::FstatAt | Syscall::Stat | Syscall::Lstat => "stat",
             Syscall::Statx => "statx",
             Syscall::Getdents64 => "getdents64",
-            Syscall::Unknown(_) => "unknown",
+            Syscall::Getcwd => "getcwd", Syscall::Chdir => "chdir", Syscall::Fchdir => "fchdir",
+            Syscall::Mkdir | Syscall::Mkdirat => "mkdir",
+            Syscall::Unlink | Syscall::Unlinkat => "unlink",
+            Syscall::Rename | Syscall::Renameat | Syscall::Renameat2 => "rename",
+            Syscall::Symlink | Syscall::Symlinkat => "symlink",
+            Syscall::Readlink | Syscall::Readlinkat => "readlink",
+            Syscall::Creat | Syscall::Mknodat => "creat",
+            Syscall::Faccessat | Syscall::Access => "access",
+            Syscall::Ftruncate | Syscall::Truncate => "truncate",
+            Syscall::Rmdir => "rmdir",
+            Syscall::Getpid => "getpid", Syscall::Getppid => "getppid",
+            Syscall::Gettid => "gettid",
+            Syscall::Getuid => "getuid", Syscall::Geteuid => "geteuid",
+            Syscall::Getgid => "getgid", Syscall::Getegid => "getegid",
+            Syscall::Setpgid => "setpgid", Syscall::Getpgid => "getpgid",
+            Syscall::Setsid | Syscall::Setsid2 | Syscall::SetSid => "setsid",
+            Syscall::Prctl => "prctl",
+            Syscall::SchedYield => "sched_yield",
+            Syscall::SetTidAddress => "set_tid_address",
+            Syscall::SetRobustList => "set_robust_list",
+            Syscall::Getrlimit | Syscall::Getrlimit2 => "getrlimit",
+            Syscall::Prlimit64 => "prlimit64",
+            Syscall::Gettimeofday => "gettimeofday",
+            Syscall::ClockGetres => "clock_getres",
+            Syscall::ClockGettime2 => "clock_gettime",
+            Syscall::Sysinfo => "sysinfo",
+            Syscall::Mount => "mount", Syscall::Umount => "umount",
+            Syscall::Eventfd2 => "eventfd2",
+            Syscall::TimerfdCreate => "timerfd_create",
+            Syscall::Signalfd4 => "signalfd4",
+            Syscall::Splice => "splice", Syscall::Tee => "tee",
+            Syscall::Sendfile => "sendfile",
+            Syscall::Madvise => "madvise", Syscall::Mincore => "mincore",
+            Syscall::MemfdCreate => "memfd_create",
+            Syscall::Inotify => "inotify_init",
+            Syscall::Rseq => "rseq",
+            Syscall::Unknown(n) => { let _ = n; "unknown" },
+            Syscall::ArchSpecific(_) => "arch_specific",
             _ => "other",
         }
     }
@@ -342,12 +398,60 @@ impl Syscall {
 /// SMAP: stac/clac brackets the entire syscall so handlers can access
 /// user memory via raw pointers. Individual uaccess helpers (get_user,
 /// put_user, etc.) are idempotent when SMAP is already enabled.
+/// Syscall tracing flag. When > 0, all syscalls are logged to serial console.
+/// Set to 1 for name+result only, 2 for full args. Toggle via `echo 1 > /proc/sys/kernel/strace`.
+pub static mut STRACE_ENABLED: u8 = 0;
+
 #[inline]
 pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
-    unsafe { crate::uaccess::stac(); }
+    unsafe {
+        if STRACE_ENABLED >= 3 {
+            strace_enter(&sc, a0, a1);
+        }
+        crate::uaccess::stac();
+    }
     let result = dispatch_inner(sc, a0, a1, a2, a3, a4);
-    unsafe { crate::uaccess::clac(); }
+    unsafe {
+        crate::uaccess::clac();
+        if STRACE_ENABLED > 0 && STRACE_ENABLED < 3 {
+            strace_log(&sc, a0, a1, a2, a3, a4, result);
+        }
+    }
     result
+}
+
+/// Log a syscall entry (before dispatch) — used with level >= 3 to find blocking calls.
+fn strace_enter(sc: &Syscall, a0: usize, a1: usize) {
+    use core::fmt::Write;
+    let name = sc.name();
+    let pid = unsafe { crate::task_table::current_pid() };
+    let mut w = crate::tty::SerialWriter;
+    let _ = write!(w, "[strace] pid={} >> {}({:#x}, {:#x})\n", pid, name, a0, a1);
+}
+
+/// Log a syscall invocation to the serial console (strace-lite).
+fn strace_log(sc: &Syscall, a0: usize, a1: usize, _a2: usize, _a3: usize, _a4: usize, result: isize) {
+    use core::fmt::Write;
+    let name = sc.name();
+    let pid = unsafe { crate::task_table::current_pid() };
+    // Quiet the noisy ones unless level >= 2
+    let level = unsafe { STRACE_ENABLED };
+    match sc {
+        Syscall::Read | Syscall::Write | Syscall::Sigprocmask |
+        Syscall::Sigaction | Syscall::ClockGetres | Syscall::Getrlimit |
+        Syscall::Getrlimit2 | Syscall::Brk | Syscall::Mmap |
+        Syscall::Mprotect | Syscall::SetTidAddress | Syscall::SetRobustList
+            if level < 2 => {},
+        _ => {
+            // Use the serial writer directly to avoid lock contention
+            let mut w = crate::tty::SerialWriter;
+            if level >= 2 {
+                let _ = write!(w, "[strace] pid={} {}({:#x}, {:#x}) = {}\n", pid, name, a0, a1, result);
+            } else {
+                let _ = write!(w, "[strace] pid={} {} = {}\n", pid, name, result);
+            }
+        }
+    }
 }
 
 fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
@@ -527,6 +631,18 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Prctl => match a0 {
             3 => 1,  // PR_GET_DUMPABLE → dumpable
             4 => 0,  // PR_SET_DUMPABLE → accept
+            15 => {  // PR_SET_NAME (set thread name) — accept but ignore
+                0
+            }
+            0x5275_5800 => unsafe {
+                // rux custom: PR_SET_STRACE — toggle syscall tracing
+                STRACE_ENABLED = a1 as u8;
+                0
+            }
+            0x5275_5801 => unsafe {
+                // rux custom: PR_GET_STRACE — return current trace level
+                STRACE_ENABLED as isize
+            }
             _ => 0,
         }
         Syscall::Getgroups => {
@@ -787,7 +903,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Reboot => crate::errno::ENOSYS,
         Syscall::Setdomainname | Syscall::Sethostname => 0, // stubs
         Syscall::Pause => {
-            // Suspend until signal — use nanosleep(very long)
+            // Suspend until signal
             unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
             crate::errno::EINTR
         }

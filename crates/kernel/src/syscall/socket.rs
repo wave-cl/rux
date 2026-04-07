@@ -466,8 +466,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                     return new_fd as isize;
                 }
                 if nonblock { return crate::errno::EAGAIN; }
-                use rux_arch::HaltOps;
-                crate::arch::Arch::halt_until_interrupt();
+                super::memory::yield_1ms();
             }
             return crate::errno::EAGAIN;
         }

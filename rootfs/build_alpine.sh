@@ -58,11 +58,12 @@ install_apk() {
         tar xzf "$dest" -C "$ROOT_DIR" 2>/dev/null || true
     }
 
-    # Core packages needed for python3 and perl
+    # Core packages needed for python3, perl, and ruby
     for pkg in libgcc musl libstdc++ libbz2 libffi gdbm \
                mpdecimal readline sqlite-libs xz-libs zlib \
                python3 python3-pycache-pyc0 pyc \
-               perl; do
+               perl \
+               yaml gmp libucontext ruby-libs ruby; do
         local f=$(find_pkg "$pkg")
         if [ -n "$f" ]; then
             fetch_and_extract "$f"

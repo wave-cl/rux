@@ -18,6 +18,37 @@ unsafe fn alloc_virtual_fd(flags: usize) -> isize {
     fd as isize
 }
 
+/// Yield the current task to allow other tasks to run during blocking syscalls.
+///
+/// When multiple tasks are active, uses the scheduler: puts current task to
+/// sleep for 1ms, lets others run, then wakes up to re-poll.
+///
+/// When only one task is active (single-process scenario), falls back to
+/// halt_until_interrupt which is more efficient (wakes on next IRQ, ~1ms).
+pub(crate) unsafe fn yield_1ms() {
+    // Count active non-zombie tasks (skip idle slot 0)
+    let active_count = crate::task_table::TASK_TABLE[1..].iter()
+        .filter(|t| t.active && t.state != crate::task_table::TaskState::Zombie)
+        .count();
+
+    if active_count > 1 {
+        // Multiple tasks: yield via scheduler so they can run
+        let task_idx = crate::task_table::current_task_idx();
+        use rux_arch::TimerOps;
+        let wake_at = crate::arch::Arch::ticks() + 1;
+        crate::task_table::TASK_TABLE[task_idx].state = crate::task_table::TaskState::Sleeping;
+        crate::task_table::TASK_TABLE[task_idx].wake_at = wake_at;
+        let sched = crate::scheduler::get();
+        sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+        sched.dequeue_current();
+        sched.schedule();
+    } else {
+        // Single task: HLT until next interrupt (~1ms timer tick)
+        use rux_arch::HaltOps;
+        crate::arch::Arch::halt_until_interrupt();
+    }
+}
+
 /// Blocking read that returns a u64 value. Polls `check` up to `max_iters`
 /// times, writing the result to `buf` when ready. Respects O_NONBLOCK on fd.
 unsafe fn blocking_read_u64<F>(fd: usize, buf: usize, max_iters: u32, mut check: F) -> isize
@@ -162,7 +193,15 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
         ep.entries[..ep.count].iter().any(|e| e.fd >= 0 && super::socket::is_socket(e.fd as usize))
     };
 
-    for _ in 0..timeout_ms.max(1) {
+    // Compute absolute deadline for scheduler-based sleeping
+    let deadline = if timeout_ms > 0 {
+        use rux_arch::TimerOps;
+        unsafe { crate::arch::Arch::ticks() + timeout_ms as u64 }
+    } else {
+        0
+    };
+
+    loop {
         #[cfg(feature = "net")]
         if has_sockets {
             unsafe { use rux_arch::TimerOps; rux_net::poll(crate::arch::Arch::ticks()); }
@@ -176,6 +215,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
             const EPOLLERR: u32 = 0x008;
             const EPOLLHUP: u32 = 0x010;
             const EPOLLRDHUP: u32 = 0x2000;
+            #[allow(dead_code)]
             const EPOLLET: u32 = 1 << 31;
             const EPOLLONESHOT: u32 = 1 << 30;
 
@@ -240,9 +280,18 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
         }
         if ready > 0 { return ready as isize; }
         if timeout == 0 { return 0; } // non-blocking
-        unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
+
+        // Check deadline
+        if deadline > 0 {
+            use rux_arch::TimerOps;
+            if unsafe { crate::arch::Arch::ticks() } >= deadline {
+                return 0; // timeout expired, no events
+            }
+        }
+
+        // Yield to scheduler: sleep 1ms then re-poll (allows other tasks to run)
+        unsafe { yield_1ms(); }
     }
-    0
 }
 
 // ── eventfd ────────────────────────────────────────────────────────
@@ -1099,6 +1148,7 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
             return ready as isize;
         }
 
+        // Wait for next timer tick
         unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
     }
 
