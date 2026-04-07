@@ -183,6 +183,14 @@ apk add --no-interactive perl python3 2>/dev/null
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
+sh -c 'echo inner1' && sh -c 'echo inner2' && echo sigchain_ok
+python3 -c "import os; s=os.stat('/etc/passwd'); print('st_ok' if s.st_size > 0 else 'FAIL')" 2>&1
+python3 -c "import os; os.fstat(0); os.fstat(1); os.fstat(2); print('fstat_ok')" 2>&1
+python3 -c "import signal; signal.signal(signal.SIGRTMIN, signal.SIG_DFL); print('rtsig_ok')" 2>&1
+python3 -c "import mmap; m=mmap.mmap(-1,4096); m[0:4]=b'test'; print('mmap_ok'); m.close()" 2>&1
+for i in 1 2 3; do sh -c "echo sub$i"; done && echo multisubshell_ok
+sh -c 'sh -c "sh -c \"echo deep3\""' && echo nest3_ok
+head -c 100000 /dev/urandom > /tmp/bigstat && stat -c %s /tmp/bigstat
 exit
 CMDS
 } | \
@@ -319,6 +327,14 @@ check "apk update"           "OK:"
 check "perl"                 "perl:42"
 check "python3 installed"    "Python 3"
 check "python3 print"        "4950"
+check "signal chain"         "sigchain_ok"
+check "stat struct"          "st_ok"
+check "fstat console"        "fstat_ok"
+check "rt signals"           "rtsig_ok"
+check "mmap anon rw"         "mmap_ok"
+check "multi subshell"       "multisubshell_ok"
+check "nested fork 3"        "nest3_ok"
+check "large stat size"      "100000"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
@@ -424,9 +440,17 @@ apk add --no-interactive perl python3 2>/dev/null
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
 python3 -c "print(sum(range(100)))" 2>&1
+python3 -c "import os; s=os.stat('/etc/passwd'); print('st_ok' if s.st_size > 0 else 'FAIL')" 2>&1
+python3 -c "import os; os.fstat(0); os.fstat(1); os.fstat(2); print('fstat_ok')" 2>&1
+python3 -c "import signal; signal.signal(signal.SIGRTMIN, signal.SIG_DFL); print('rtsig_ok')" 2>&1
+python3 -c "import mmap; m=mmap.mmap(-1,4096); m[0:4]=b'test'; print('mmap_ok'); m.close()" 2>&1
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
+sh -c 'echo inner1' && sh -c 'echo inner2' && echo sigchain_ok
+for i in 1 2 3; do sh -c "echo sub$i"; done && echo multisubshell_ok
+sh -c 'sh -c "sh -c \"echo deep3\""' && echo nest3_ok
+head -c 100000 /dev/urandom > /tmp/bigstat && stat -c %s /tmp/bigstat
 TESTENV=rux123 sh -c 'echo $TESTENV'
 exit
 CMDS
@@ -554,8 +578,16 @@ check "apk update"           "OK:"
 check "perl"                 "perl:42"
 check "python3 version"      "Python 3"
 check "python3 print"        "4950"
+check "stat struct"          "st_ok"
+check "fstat console"        "fstat_ok"
+check "rt signals"           "rtsig_ok"
+check "mmap anon rw"         "mmap_ok"
 check "subshell"             "subshell_ok"
 check "fork + pipe"          "2"
+check "signal chain"         "sigchain_ok"
+check "multi subshell"       "multisubshell_ok"
+check "nested fork 3"        "nest3_ok"
+check "large stat size"      "100000"
 check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 
