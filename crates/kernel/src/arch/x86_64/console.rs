@@ -13,19 +13,15 @@ unsafe fn inb(port: u16) -> u8 {
     val
 }
 
-/// Initialize COM1 serial port at 115200 baud, 8N1, with receive interrupts.
+/// Initialize COM1 serial port at 115200 baud, 8N1.
 pub unsafe fn init() {
-    outb(COM1 + 1, 0x00); // Disable interrupts during setup
+    outb(COM1 + 1, 0x00); // Disable interrupts
     outb(COM1 + 3, 0x80); // Enable DLAB (set baud rate divisor)
     outb(COM1 + 0, 0x01); // Divisor low byte: 115200 baud
     outb(COM1 + 1, 0x00); // Divisor high byte
     outb(COM1 + 3, 0x03); // 8 bits, no parity, 1 stop bit (8N1)
     outb(COM1 + 2, 0xC7); // Enable FIFO, clear, 14-byte threshold
     outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
-    // Drain any stale bytes from the FIFO before enabling RX interrupts.
-    // QEMU may have leftover data from initialization or terminal setup.
-    while inb(COM1 + 5) & 0x01 != 0 { let _ = inb(COM1); }
-    outb(COM1 + 1, 0x01); // Enable receive data available interrupt (IER bit 0)
 }
 
 /// Write a single byte, blocking until the transmit buffer is ready.
@@ -54,14 +50,17 @@ pub fn write_str(s: &str) {
     write_bytes(s.as_bytes());
 }
 
-/// Read a single byte from the serial ring buffer, blocking until data arrives.
-/// The ring buffer is filled by the serial IRQ handler (vector 36).
+/// Read a single byte, blocking until data is available.
+/// Uses HLT to sleep the CPU between checks — woken by any interrupt.
 pub fn read_byte() -> u8 {
-    loop {
-        if let Some(b) = crate::tty::serial_pop() {
-            return b;
+    unsafe {
+        loop {
+            if inb(COM1 + 5) & 0x01 != 0 {
+                return inb(COM1);
+            }
+            use rux_arch::HaltOps;
+            super::X86_64::halt_until_interrupt();
         }
-        unsafe { use rux_arch::HaltOps; super::X86_64::halt_until_interrupt(); }
     }
 }
 
@@ -79,6 +78,6 @@ unsafe impl rux_arch::ConsoleOps for super::X86_64 {
     unsafe fn init() { init() }
     fn write_byte(b: u8) { write_byte(b) }
     fn read_byte() -> u8 { read_byte() }
-    fn has_byte() -> bool { crate::tty::serial_has_data() }
+    fn has_byte() -> bool { unsafe { inb(COM1 + 5) & 0x01 != 0 } }
     // write_bytes and write_str use trait defaults (identical to standalone fns)
 }

@@ -1203,21 +1203,8 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
                 if events & 1 != 0 && crate::pipe::has_data(pid) { revents |= 1; } // POLLIN
                 if events & 4 != 0 && f.pipe_write { revents |= 4; } // POLLOUT (write end)
                 if crate::pipe::writers_closed(pid) { revents |= 0x10; } // POLLHUP
-            } else if fd == 0 && fdt::is_console_fd(0) {
-                // Console stdin: POLLIN check depends on architecture.
-                // x86_64: serial IRQ fills ring buffer; check properly.
-                // aarch64: no serial IRQ; always report POLLIN (shell depends on this).
-                if events & 1 != 0 {
-                    if cfg!(target_arch = "x86_64") {
-                        let tty = &*(&raw const crate::tty::TTY);
-                        if tty.has_input() { revents |= 1; }
-                    } else {
-                        revents |= 1; // always ready (no serial IRQ on aarch64)
-                    }
-                }
-                if events & 4 != 0 { revents |= 4; }
             } else if f.active || fd <= 2 {
-                // Console stdout/stderr and regular files: always ready
+                // Console fds and regular file fds are always ready
                 if events & 1 != 0 { revents |= 1; }   // POLLIN
                 if events & 4 != 0 { revents |= 4; }   // POLLOUT
             } else {
