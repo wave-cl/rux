@@ -41,6 +41,14 @@ pub fn has_data(pipe_id: u8) -> bool {
     }
 }
 
+/// Return number of bytes available for reading.
+pub fn available(pipe_id: u8) -> usize {
+    unsafe {
+        let p = &PIPES[pipe_id as usize];
+        if p.active { p.count } else { 0 }
+    }
+}
+
 /// Check if all writers have closed the pipe (EOF condition).
 pub fn writers_closed(pipe_id: u8) -> bool {
     unsafe {

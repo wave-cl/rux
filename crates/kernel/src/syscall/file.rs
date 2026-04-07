@@ -594,6 +594,36 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
             unsafe { crate::tty::TTY.session_id = 0; }
             0
         }
+        0x5421 => {
+            // FIONBIO: set non-blocking mode on fd
+            if arg != 0 && crate::uaccess::validate_user_ptr(arg, 4).is_ok() {
+                let val = unsafe { *(arg as *const i32) };
+                unsafe {
+                    if let Some(f) = fdt::get_fd_mut(_fd) {
+                        if val != 0 {
+                            f.flags |= 0o4000; // O_NONBLOCK
+                        } else {
+                            f.flags &= !0o4000;
+                        }
+                    }
+                }
+            }
+            0
+        }
+        0x541B => {
+            // FIONREAD: return number of bytes available to read
+            if arg != 0 && crate::uaccess::validate_user_ptr(arg, 4).is_ok() {
+                unsafe {
+                    if _fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[_fd].is_pipe {
+                        let pid = (*fdt::FD_TABLE)[_fd].pipe_id;
+                        *(arg as *mut i32) = rux_ipc::pipe::available(pid) as i32;
+                    } else {
+                        *(arg as *mut i32) = 0; // unknown/console: 0 bytes
+                    }
+                }
+            }
+            0
+        }
         _ => -25 // -ENOTTY
     }
 }
