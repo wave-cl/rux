@@ -30,7 +30,7 @@ pub unsafe fn init(hz: u32) {
     outb(0xA1, 2);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
-    outb(0x21, 0xFE);
+    outb(0x21, 0xEE); // unmask IRQ 0 (timer) + IRQ 4 (COM1 serial)
     outb(0xA1, 0xFF);
 }
 

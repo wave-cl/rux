@@ -431,6 +431,11 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             // INT 0x80 — syscall from user space
             super::syscall::handle_syscall(vector, error_code, frame);
         }
+        36 => {
+            // COM1 serial receive interrupt (IRQ 4)
+            unsafe { super::console::serial_irq(); }
+            unsafe { super::pit::ack(); } // EOI to PIC
+        }
         _ => {
             crate::arch::x86_64::console::write_str("INT: vector=");
             let mut buf = [0u8; 10];

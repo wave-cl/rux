@@ -1,5 +1,7 @@
-/// TTY line discipline.
+/// TTY line discipline with serial input ring buffer.
 ///
+/// The serial interrupt handler pushes received bytes into SERIAL_BUF.
+/// read_byte() and poll() check SERIAL_BUF instead of the hardware register.
 /// In canonical (cooked) mode: buffers input until newline, handles
 /// backspace, Ctrl-C (SIGINT), Ctrl-D (EOF), Ctrl-U (kill line).
 /// In raw mode: passes bytes through immediately.
@@ -7,6 +9,45 @@
 use rux_arch::ConsoleOps;
 
 const LINE_BUF_SIZE: usize = 4096;
+
+/// Serial input ring buffer — filled by the UART receive interrupt handler.
+/// Checked by poll() for POLLIN and drained by read_byte().
+///
+/// Uses atomic head/tail indices for safe single-producer (IRQ) single-consumer
+/// (read_byte) access without disabling interrupts.
+const SERIAL_BUF_SIZE: usize = 16384; // 16KB — enough for piped test scripts
+static mut SERIAL_BUF: [u8; SERIAL_BUF_SIZE] = [0; SERIAL_BUF_SIZE];
+static SERIAL_HEAD: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static SERIAL_TAIL: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Push a byte into the serial ring buffer (called from IRQ handler).
+#[inline]
+pub fn serial_push(b: u8) {
+    use core::sync::atomic::Ordering;
+    let head = SERIAL_HEAD.load(Ordering::Relaxed);
+    let next = (head + 1) % SERIAL_BUF_SIZE;
+    if next == SERIAL_TAIL.load(Ordering::Acquire) { return; } // full, drop byte
+    unsafe { SERIAL_BUF[head] = b; }
+    SERIAL_HEAD.store(next, Ordering::Release);
+}
+
+/// Pop a byte from the serial ring buffer (called from read_byte).
+#[inline]
+pub fn serial_pop() -> Option<u8> {
+    use core::sync::atomic::Ordering;
+    let tail = SERIAL_TAIL.load(Ordering::Relaxed);
+    if tail == SERIAL_HEAD.load(Ordering::Acquire) { return None; } // empty
+    let b = unsafe { SERIAL_BUF[tail] };
+    SERIAL_TAIL.store((tail + 1) % SERIAL_BUF_SIZE, Ordering::Release);
+    Some(b)
+}
+
+/// Check if the serial ring buffer has data.
+#[inline]
+pub fn serial_has_data() -> bool {
+    use core::sync::atomic::Ordering;
+    SERIAL_TAIL.load(Ordering::Relaxed) != SERIAL_HEAD.load(Ordering::Relaxed)
+}
 
 /// Global TTY state (single terminal).
 pub static mut TTY: Tty = Tty::new();
@@ -46,12 +87,14 @@ impl Tty {
     }
 
     /// Check if the TTY has input available (non-blocking).
-    /// In cooked mode: true if line buffer has data.
-    /// In raw mode: true if the serial port has a byte ready.
-    pub fn has_input<A: ConsoleOps>(&self) -> bool {
+    /// On x86_64: checks the serial ring buffer (filled by COM1 IRQ).
+    /// On aarch64: checks hardware directly (UART IRQ not yet enabled).
+    pub fn has_input(&self) -> bool {
         if self.line_len > 0 { return true; }
-        // Check hardware (serial port data ready)
-        A::has_byte()
+        if serial_has_data() { return true; }
+        #[cfg(target_arch = "aarch64")]
+        if unsafe { crate::arch::aarch64::console::hw_has_data() } { return true; }
+        false
     }
 
     /// Read from terminal in canonical mode.

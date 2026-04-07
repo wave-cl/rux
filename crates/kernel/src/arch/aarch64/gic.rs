@@ -20,6 +20,8 @@ const GICC_EOIR: usize = GICC_BASE + 0x010;  // End of interrupt
 
 /// Timer PPI interrupt ID (physical timer = PPI 14 = IRQ ID 30).
 pub const TIMER_IRQ: u32 = 30;
+/// PL011 UART SPI interrupt ID (SPI 1 = IRQ ID 33 on QEMU virt).
+pub const UART_IRQ: u32 = 33;
 
 #[inline(always)]
 unsafe fn mmio_write(addr: usize, val: u32) {
@@ -56,6 +58,19 @@ pub unsafe fn init() {
     let tgt_shift = (TIMER_IRQ % 4) * 8;
     let tgt = mmio_read(GICD_ITARGETSR + tgt_reg * 4);
     mmio_write(GICD_ITARGETSR + tgt_reg * 4, tgt | (1 << tgt_shift));
+
+    // Enable UART IRQ (ID 33): set-enable, priority, target
+    let uart_reg = (UART_IRQ / 32) as usize;
+    let uart_bit = 1u32 << (UART_IRQ % 32);
+    mmio_write(GICD_ISENABLER + uart_reg * 4, uart_bit);
+    let uart_pri_reg = (UART_IRQ / 4) as usize;
+    let uart_pri_shift = (UART_IRQ % 4) * 8;
+    let uart_pri = mmio_read(GICD_IPRIORITYR + uart_pri_reg * 4);
+    mmio_write(GICD_IPRIORITYR + uart_pri_reg * 4, uart_pri & !(0xFF << uart_pri_shift));
+    let uart_tgt_reg = (UART_IRQ / 4) as usize;
+    let uart_tgt_shift = (UART_IRQ % 4) * 8;
+    let uart_tgt = mmio_read(GICD_ITARGETSR + uart_tgt_reg * 4);
+    mmio_write(GICD_ITARGETSR + uart_tgt_reg * 4, uart_tgt | (1 << uart_tgt_shift));
 }
 
 /// Initialize the GIC CPU interface for an AP (secondary CPU).
@@ -73,6 +88,8 @@ pub fn handle_irq() {
 
         if irq_id == TIMER_IRQ {
             super::timer::handle_tick();
+        } else if irq_id == UART_IRQ {
+            super::console::serial_irq();
         } else if irq_id < 1020 {
             // Spurious or unhandled
             super::console::write_str("IRQ: ");
