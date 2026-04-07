@@ -46,6 +46,7 @@ struct EpollEntry {
     fd: i32,
     events: u32,
     data: u64,
+    fired: bool, // for EPOLLONESHOT: true after first delivery, suppresses further reports
 }
 
 struct EpollInstance {
@@ -59,7 +60,7 @@ impl EpollInstance {
     const fn empty() -> Self {
         Self {
             active: false,
-            entries: [EpollEntry { fd: -1, events: 0, data: 0 }; MAX_EPOLL_FDS],
+            entries: [EpollEntry { fd: -1, events: 0, data: 0, fired: false }; MAX_EPOLL_FDS],
             count: 0,
             epoll_fd: 0,
         }
@@ -118,7 +119,7 @@ pub fn epoll_ctl(epfd: usize, op: usize, fd: usize, event_ptr: usize) -> isize {
                 let events = core::ptr::read_unaligned(event_ptr as *const u32);
                 let data = core::ptr::read_unaligned((event_ptr + 4) as *const u64);
                 let slot = ep.count;
-                ep.entries[slot] = EpollEntry { fd: fd as i32, events, data };
+                ep.entries[slot] = EpollEntry { fd: fd as i32, events, data, fired: false };
                 ep.count += 1;
                 0
             }
@@ -136,6 +137,7 @@ pub fn epoll_ctl(epfd: usize, op: usize, fd: usize, event_ptr: usize) -> isize {
                 if let Some(pos) = ep.entries[..ep.count].iter().position(|e| e.fd == fd as i32) {
                     ep.entries[pos].events = events;
                     ep.entries[pos].data = data;
+                    ep.entries[pos].fired = false; // re-arm EPOLLONESHOT
                 }
                 0
             }
@@ -168,15 +170,24 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
 
         let mut ready = 0usize;
         unsafe {
-            let ep = &EPOLL[idx];
+            let ep = &mut EPOLL[idx];
+            const EPOLLIN: u32 = 0x001;
+            const EPOLLOUT: u32 = 0x004;
+            const EPOLLERR: u32 = 0x008;
+            const EPOLLHUP: u32 = 0x010;
+            const EPOLLRDHUP: u32 = 0x2000;
+            const EPOLLET: u32 = 1 << 31;
+            const EPOLLONESHOT: u32 = 1 << 30;
+
             for i in 0..ep.count {
                 if ready >= out_count { break; }
                 let e = &ep.entries[i];
                 let fd = e.fd as usize;
+
+                // EPOLLONESHOT: skip if already fired (must EPOLL_CTL_MOD to re-arm)
+                if e.events & EPOLLONESHOT != 0 && e.fired { continue; }
+
                 let mut revents: u32 = 0;
-                const EPOLLIN: u32 = 1;
-                const EPOLLOUT: u32 = 4;
-                const EPOLLHUP: u32 = 0x10;
                 if e.events & EPOLLIN != 0 {
                     if super::socket::is_socket(fd) {
                         if super::socket::socket_has_data(fd) { revents |= EPOLLIN; }
@@ -191,25 +202,39 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         if crate::pipe::has_data(pid) { revents |= EPOLLIN; }
                         if crate::pipe::writers_closed(pid) { revents |= EPOLLHUP; }
                     } else {
-                        revents |= EPOLLIN; // regular files always readable
+                        revents |= EPOLLIN;
                     }
                 }
                 if e.events & EPOLLOUT != 0 {
                     if super::socket::is_socket(fd) {
                         if super::socket::socket_can_write(fd) { revents |= EPOLLOUT; }
                     } else if is_eventfd(fd) {
-                        revents |= EPOLLOUT; // eventfd always writable
+                        revents |= EPOLLOUT;
                     } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].is_pipe && (*fdt::FD_TABLE)[fd].pipe_write {
-                        revents |= EPOLLOUT; // write end of pipe always writable (simplified)
+                        revents |= EPOLLOUT;
                     } else if !is_timerfd(fd) {
-                        revents |= EPOLLOUT; // regular files always writable
+                        revents |= EPOLLOUT;
                     }
+                }
+                // EPOLLRDHUP: peer closed write side (half-close)
+                if e.events & EPOLLRDHUP != 0 && super::socket::is_socket(fd) {
+                    if !super::socket::socket_has_data(fd) && !super::socket::socket_can_write(fd) {
+                        revents |= EPOLLRDHUP;
+                    }
+                }
+                // EPOLLERR: always reported if fd is invalid
+                if fd >= rux_fs::fdtable::MAX_FDS || (!(*fdt::FD_TABLE)[fd].active && !super::socket::is_socket(fd)) {
+                    revents |= EPOLLERR;
                 }
                 if revents != 0 {
                     let out = events_ptr + ready * 12;
                     core::ptr::write_unaligned(out as *mut u32, revents);
                     core::ptr::write_unaligned((out + 4) as *mut u64, e.data);
                     ready += 1;
+                    // EPOLLONESHOT: mark as fired after first delivery
+                    if e.events & EPOLLONESHOT != 0 {
+                        ep.entries[i].fired = true;
+                    }
                 }
             }
         }
