@@ -350,7 +350,7 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                     crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, rip as usize));
                     if !user { crate::arch::Arch::write_str(" KERNEL"); }
                     crate::arch::Arch::write_str("\n");
-                    crate::syscall::posix::exit(139);
+                    crate::syscall::linux::exit_group(139);
                 }
             }
 

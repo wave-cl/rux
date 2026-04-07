@@ -92,7 +92,29 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
 // ── Process extensions (Linux-specific) ─────────────────────────────
 
 /// exit_group(status) — Linux-specific.
+/// Kills all threads in the calling thread's thread group, then exits.
 pub fn exit_group(status: i32) -> ! {
+    unsafe {
+        use crate::task_table::*;
+        let idx = current_task_idx();
+        let my_tgid = TASK_TABLE[idx].tgid;
+
+        // Kill all other threads in our thread group
+        for j in 0..MAX_PROCS {
+            if j != idx && TASK_TABLE[j].active
+                && TASK_TABLE[j].tgid == my_tgid
+                && TASK_TABLE[j].state != TaskState::Zombie
+                && TASK_TABLE[j].state != TaskState::Free
+            {
+                // Mark thread as dead and dequeue from scheduler
+                TASK_TABLE[j].active = false;
+                TASK_TABLE[j].state = TaskState::Free;
+                let sched = crate::scheduler::get();
+                sched.tasks[j].entity.state = rux_sched::TaskState::Dead;
+                sched.tasks[j].active = false;
+            }
+        }
+    }
     super::posix::exit(status)
 }
 

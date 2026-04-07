@@ -102,7 +102,7 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                         write_hex(elr as usize);
                         super::console::write_str("\n");
                     }
-                    crate::syscall::posix::exit(139);
+                    crate::syscall::linux::exit_group(139);
                 }
                 0b100000 | 0b100001 => {
                     // User instruction abort — route by IFSC (ESR bits [5:0])
@@ -119,7 +119,7 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                     super::console::write_str("rux: SIGSEGV (instr) at ");
                     write_hex(far as usize);
                     super::console::write_str("\n");
-                    crate::syscall::posix::exit(139);
+                    crate::syscall::linux::exit_group(139);
                 }
                 _ => {
                     unsafe {
@@ -133,7 +133,7 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                         write_hex(elr as usize);
                         super::console::write_str("\n");
                     }
-                    crate::syscall::posix::exit(139);
+                    crate::syscall::linux::exit_group(139);
                 }
             }
         }
