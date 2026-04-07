@@ -174,6 +174,7 @@ ulimit -s
 yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
 touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
 cat /proc/self/cmdline | tr '\0' ' '
+timeout 2 top -bn1 2>&1 | head -3
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -388,6 +389,7 @@ check "ulimit stack"         "unlimited"
 check "sigpipe handling"     "sigpipe_ok"
 check "rename done"          "rename_done"
 check "proc cmdline argv"    "cat"
+check "top batch"            "Mem:"
 check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "perl"                 "perl:42"
@@ -516,6 +518,7 @@ ulimit -s
 yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
 touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
 cat /proc/self/cmdline | tr '\0' ' '
+timeout 2 top -bn1 2>&1 | head -3
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -722,6 +725,7 @@ check "ulimit stack"         "unlimited"
 check "sigpipe handling"     "sigpipe_ok"
 check "rename done"          "rename_done"
 check "proc cmdline argv"    "cat"
+check "top batch"            "Mem:"
 check "wget http"            "Example Domain"
 check "apk update"           "OK:"
 check "perl"                 "perl:42"

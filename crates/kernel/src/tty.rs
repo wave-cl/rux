@@ -45,6 +45,15 @@ impl Tty {
         }
     }
 
+    /// Check if the TTY has input available (non-blocking).
+    /// In cooked mode: true if line buffer has data.
+    /// In raw mode: true if the serial port has a byte ready.
+    pub fn has_input<A: ConsoleOps>(&self) -> bool {
+        if self.line_len > 0 { return true; }
+        // Check hardware (serial port data ready)
+        A::has_byte()
+    }
+
     /// Read from terminal in canonical mode.
     /// Buffers input, handles editing, returns on newline or Ctrl-D.
     pub unsafe fn read_canonical<A: ConsoleOps>(

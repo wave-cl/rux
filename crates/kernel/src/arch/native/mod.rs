@@ -19,6 +19,7 @@ unsafe impl rux_arch::ConsoleOps for NativeArch {
         let _ = std::io::stderr().lock().write_all(&[b]);
     }
     fn read_byte() -> u8 { 0 }
+    fn has_byte() -> bool { false }
 }
 
 // ── ExitOps ───────────────────────────────────────────────────────────

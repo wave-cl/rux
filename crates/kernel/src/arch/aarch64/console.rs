@@ -68,5 +68,6 @@ unsafe impl rux_arch::ConsoleOps for super::Aarch64 {
     unsafe fn init() { init() }
     fn write_byte(b: u8) { write_byte(b) }
     fn read_byte() -> u8 { read_byte() }
+    fn has_byte() -> bool { unsafe { mmio_read(UARTFR) & UARTFR_RXFE == 0 } }
     // write_bytes and write_str use trait defaults (identical to standalone fns)
 }

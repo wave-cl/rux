@@ -73,6 +73,8 @@ pub unsafe trait ConsoleOps {
     unsafe fn init();
     fn write_byte(b: u8);
     fn read_byte() -> u8;
+    /// Check if a byte is available to read without blocking.
+    fn has_byte() -> bool;
     fn write_bytes(buf: &[u8]) {
         for &b in buf {
             if b == b'\n' { Self::write_byte(b'\r'); }

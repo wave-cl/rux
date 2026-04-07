@@ -1137,12 +1137,15 @@ pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -
 pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     if fds_ptr == 0 || nfds == 0 { return 0; }
 
-    // Check if we have blocking-capable fds (sockets, eventfd, timerfd)
+    // Check if we have blocking-capable fds (sockets, eventfd, timerfd, signalfd, pipes)
     let needs_blocking = unsafe {
         (0..nfds.min(64)).any(|i| {
             let entry = (fds_ptr + i * 8) as *const u8;
             let fd = *(entry as *const i32) as usize;
-            fd < rux_fs::fdtable::MAX_FDS && (super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd))
+            fd < rux_fs::fdtable::MAX_FDS && (
+                super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd)
+                || is_signalfd(fd) || (*fdt::FD_TABLE)[fd].is_pipe
+            )
         })
     };
 
@@ -1153,11 +1156,9 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     for _attempt in 0..max_iters {
         // Poll smoltcp (drains all available frames in one call)
         #[cfg(feature = "net")]
-        if needs_blocking {
-            unsafe {
-                use rux_arch::TimerOps;
-                rux_net::poll(crate::arch::Arch::ticks());
-            }
+        unsafe {
+            use rux_arch::TimerOps;
+            rux_net::poll(crate::arch::Arch::ticks());
         }
 
         unsafe {
