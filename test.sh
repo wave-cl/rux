@@ -270,6 +270,11 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',7777)); s.listen(1); print('listen_ok'); s.close()" 2>&1
+sqlite3 /tmp/t.db "CREATE TABLE t(id INT, name TEXT); INSERT INTO t VALUES(1,'rux'); SELECT * FROM t;" 2>&1
+git --version 2>&1
+git init /tmp/repo 2>&1 | tail -1
+cd /tmp/repo && git config user.email "t@rux" && git config user.name "rux" && echo hello > f.txt && git add f.txt && GIT_PAGER=cat git commit -m "init" 2>&1 | grep -E 'master|create'
+cd /
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
 exit
 CMDS
@@ -449,6 +454,10 @@ check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
 check "tcp listen"           "listen_ok"
+check "sqlite3"              "1|rux"
+check "git version"          "git version"
+check "git init"             "Initialized"
+check "git commit"           "master"
 check "ruby print"           "ruby:42"
 check "ruby reduce"          "55"
 check "ruby platform"        "x86_64-linux"
@@ -647,6 +656,8 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 TESTENV=rux123 sh -c 'echo $TESTENV'
+sqlite3 /tmp/t.db "CREATE TABLE t(id INT, name TEXT); INSERT INTO t VALUES(1,'rux'); SELECT * FROM t;" 2>&1
+git --version 2>&1
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 exit
 CMDS
@@ -815,6 +826,8 @@ check "pipe splice"          "splice_splicedata"
 check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
+check "sqlite3"              "1|rux"
+check "git version"          "git version"
 check "ruby print"           "ruby:42"
 check "ruby reduce"          "55"
 check "all tests done"       "all_tests_done"
