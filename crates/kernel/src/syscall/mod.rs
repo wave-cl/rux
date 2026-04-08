@@ -756,8 +756,36 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Pselect6 => memory::pselect6(a0, a1, a2, a3, a4),
         Syscall::ClockNanosleep => {
             // clock_nanosleep(clockid, flags, request, remain)
-            // flags & 1 = TIMER_ABSTIME: request is absolute time (not supported, return 0)
-            if a1 & 1 != 0 { 0 } else { posix::nanosleep(a2) }
+            if a1 & 1 != 0 {
+                // TIMER_ABSTIME: request is absolute time — compute delta and sleep
+                if a2 == 0 || crate::uaccess::validate_user_ptr(a2, 16).is_err() {
+                    return crate::errno::EFAULT;
+                }
+                unsafe {
+                    use rux_arch::TimerOps;
+                    let abs_sec: u64 = crate::uaccess::get_user(a2);
+                    let abs_nsec: u64 = crate::uaccess::get_user(a2 + 8);
+                    let now_ticks = crate::arch::Arch::ticks();
+                    let (now_sec, now_nsec) = if a0 == 0 {
+                        (1743465600 + now_ticks / 1000, (now_ticks % 1000) * 1_000_000)
+                    } else {
+                        (now_ticks / 1000, (now_ticks % 1000) * 1_000_000)
+                    };
+                    let abs_ns = abs_sec * 1_000_000_000 + abs_nsec;
+                    let now_ns = now_sec * 1_000_000_000 + now_nsec;
+                    if abs_ns <= now_ns { return 0; }
+                    let delta_ms = (abs_ns - now_ns) / 1_000_000;
+                    let deadline = now_ticks + delta_ms;
+                    // HLT loop until deadline
+                    while crate::arch::Arch::ticks() < deadline {
+                        use rux_arch::HaltOps;
+                        crate::arch::Arch::halt_until_interrupt();
+                    }
+                }
+                0
+            } else {
+                posix::nanosleep(a2)
+            }
         }
 
         // ── Phase 1 stubs ─────────────────────────────────────────
