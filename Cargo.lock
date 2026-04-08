@@ -47,25 +47,25 @@ checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
 
 [[package]]
 name = "rux-arch"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-klib",
 ]
 
 [[package]]
 name = "rux-boot"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-klib",
 ]
 
 [[package]]
 name = "rux-drivers"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "rux-elf"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-klib",
  "rux-mm",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "rux-fs"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-drivers",
  "rux-klib",
@@ -82,14 +82,14 @@ dependencies = [
 
 [[package]]
 name = "rux-ipc"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-fs",
 ]
 
 [[package]]
 name = "rux-kernel"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-arch",
  "rux-drivers",
@@ -105,11 +105,11 @@ dependencies = [
 
 [[package]]
 name = "rux-klib"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "rux-mm"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-arch",
  "rux-klib",
@@ -117,14 +117,14 @@ dependencies = [
 
 [[package]]
 name = "rux-net"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "smoltcp",
 ]
 
 [[package]]
 name = "rux-proc"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "rux-arch",
  "rux-klib",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "rux-sched"
-version = "0.38.0"
+version = "0.39.0"
 
 [[package]]
 name = "smoltcp"
