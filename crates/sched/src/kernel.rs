@@ -64,6 +64,8 @@ pub struct Scheduler {
     pub clock_ns: u64,
     /// Whether a reschedule is pending.
     pub need_resched: bool,
+    /// CPU ID this scheduler instance runs on (for per-CPU runqueues).
+    pub cpu_id: u32,
     /// Architecture-specific context switch functions.
     ctx: Option<ContextFns>,
 }
@@ -81,6 +83,7 @@ impl Scheduler {
             current: 0,
             clock_ns: 0,
             need_resched: false,
+            cpu_id: 0,
             ctx: None,
         };
         // Slot 0 is the idle/main task — always active, not on the runqueue.
@@ -120,8 +123,8 @@ impl Scheduler {
         task.saved_sp = (ctx.init_task_stack)(stack_top, entry as usize, 0);
 
         // Enqueue into CFS
-        self.cfs.set_clock(0, self.clock_ns);
-        self.cfs.enqueue(0, &mut task.entity, WF_FORK);
+        self.cfs.set_clock(self.cpu_id, self.clock_ns);
+        self.cfs.enqueue(self.cpu_id, &mut task.entity, WF_FORK);
 
         idx
     }
@@ -130,26 +133,26 @@ impl Scheduler {
     /// and sets `need_resched` if a context switch is needed.
     pub fn tick(&mut self, elapsed_ns: u64) {
         self.clock_ns += elapsed_ns;
-        self.cfs.set_clock(0, self.clock_ns);
+        self.cfs.set_clock(self.cpu_id, self.clock_ns);
 
         let current = self.current;
         // Idle task (slot 0) is never on the CFS runqueue — skip task_tick
         // but check if any tasks became runnable (via wake_task or enqueue)
         if current == 0 {
-            if self.cfs.rqs[0].nr_running > 0 {
+            if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
                 self.need_resched = true;
             }
             return;
         }
         if current < MAX_TASKS && self.tasks[current].active {
             let entity = &mut self.tasks[current].entity;
-            if self.cfs.task_tick(0, entity) {
+            if self.cfs.task_tick(self.cpu_id, entity) {
                 self.need_resched = true;
             }
             // Force reschedule when other tasks are waiting.
             // Without preemptive ISR scheduling, this ensures the
             // post_syscall check catches pending tasks promptly.
-            if self.cfs.rqs[0].nr_running > 0 {
+            if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
                 self.need_resched = true;
             }
         }
@@ -170,8 +173,8 @@ impl Scheduler {
     pub fn wake_task(&mut self, idx: usize) {
         if idx >= MAX_TASKS || !self.tasks[idx].active { return; }
         self.tasks[idx].entity.state = TaskState::Ready;
-        self.cfs.set_clock(0, self.clock_ns);
-        self.cfs.enqueue(0, &mut self.tasks[idx].entity, 0);
+        self.cfs.set_clock(self.cpu_id, self.clock_ns);
+        self.cfs.enqueue(self.cpu_id, &mut self.tasks[idx].entity, 0);
         self.need_resched = true; // trigger reschedule (especially from idle)
     }
 
@@ -194,16 +197,16 @@ impl Scheduler {
             && self.tasks[old_idx].entity.state == TaskState::Running
         {
             let entity = &mut self.tasks[old_idx].entity;
-            self.cfs.put_prev(0, entity);
+            self.cfs.put_prev(self.cpu_id, entity);
         }
 
         // Pick the next task
         let mut dummy = SchedEntity::new(999);
         dummy.state = TaskState::Interruptible;
 
-        let new_idx = if let Some(picked) = self.cfs.pick_next(0, &mut dummy) {
+        let new_idx = if let Some(picked) = self.cfs.pick_next(self.cpu_id, &mut dummy) {
             let idx = (*picked).id as usize;
-            self.cfs.set_next(0, &mut *picked);
+            self.cfs.set_next(self.cpu_id, &mut *picked);
             idx
         } else {
             0 // No runnable tasks — go back to idle/main (slot 0)
@@ -214,7 +217,7 @@ impl Scheduler {
         // If more tasks are queued, set need_resched so the next syscall
         // return (post_syscall) triggers another switch. This ensures rapid
         // interleaving during pipeline startup without ISR preemption.
-        if self.cfs.rqs[0].nr_running > 0 {
+        if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
             self.need_resched = true;
         }
 
