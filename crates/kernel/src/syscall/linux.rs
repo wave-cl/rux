@@ -193,7 +193,8 @@ pub fn sysinfo(info_ptr: usize) -> isize {
         let uptime = ticks / 1000; // seconds since boot
 
         let total_frames = {
-            16384usize // hardcoded, matches init
+            use rux_mm::FrameAllocator;
+            crate::kstate::alloc().total_frames()
         };
         let free_frames = {
             use rux_mm::FrameAllocator;
@@ -221,7 +222,10 @@ pub fn sysinfo(info_ptr: usize) -> isize {
         // sharedram = 0, bufferram = 0
         // totalswap = 0, freeswap = 0
         // procs (unsigned short) — at offset 8*w on 64-bit
-        *((info_ptr + 8 * w) as *mut u16) = 1; // 1 process
+        let procs = crate::task_table::TASK_TABLE.iter()
+            .filter(|t| t.active && t.state != crate::task_table::TaskState::Zombie)
+            .count();
+        *((info_ptr + 8 * w) as *mut u16) = procs as u16;
         // mem_unit (unsigned int) — at offset after totalhigh/freehigh
         // On 64-bit: offset = 10*w + 4 (after procs pad + totalhigh + freehigh)
         // Simpler: mem_unit = 1 (bytes already in byte units)
