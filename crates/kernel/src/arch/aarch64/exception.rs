@@ -141,6 +141,16 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
         3 => {
             // IRQ from EL0 (user mode) — dispatch to GIC handler
             super::gic::handle_irq();
+            // Preemptive scheduling: the full exception frame (x0-x30, ELR, SPSR)
+            // is saved on the current task's kernel stack. context_switch saves SP,
+            // so the frame is preserved. The new task's SP points to its own frame.
+            // exception_return (eret) uses the new frame correctly.
+            unsafe {
+                let sched = crate::scheduler::get();
+                if sched.need_resched {
+                    sched.schedule();
+                }
+            }
         }
         _ => {
             super::console::write_str("rux: unhandled exception type=");

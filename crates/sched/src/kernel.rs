@@ -146,6 +146,12 @@ impl Scheduler {
             if self.cfs.task_tick(0, entity) {
                 self.need_resched = true;
             }
+            // Force reschedule when other tasks are waiting.
+            // Without preemptive ISR scheduling, this ensures the
+            // post_syscall check catches pending tasks promptly.
+            if self.cfs.rqs[0].nr_running > 0 {
+                self.need_resched = true;
+            }
         }
     }
 

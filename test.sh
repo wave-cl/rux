@@ -155,7 +155,7 @@ du -s /bin | cut -f1
 ls /proc/self/fd
 cat /proc/self/maps | head -1
 echo a | cat | cat | cat
-echo p1 | sed 's/p1/Q1/'
+echo p1 | sed 's/p/q/' | tr a-z A-Z
 echo old > /tmp/trunc && echo new > /tmp/trunc && cat /tmp/trunc
 echo line1 >> /tmp/app && echo line2 >> /tmp/app && wc -l /tmp/app
 sh -c 'echo subshell_ok'
@@ -581,7 +581,7 @@ du -s /bin | cut -f1
 ls /proc/self/fd
 cat /proc/self/maps | head -1
 echo a | cat | cat | cat
-echo p1 | sed 's/p1/Q1/'
+echo p1 | sed 's/p/q/' | tr a-z A-Z
 echo old > /tmp/trunc && echo new > /tmp/trunc && cat /tmp/trunc
 echo line1 >> /tmp/app && echo line2 >> /tmp/app && wc -l /tmp/app
 seq 1 100 > /tmp/big; wc -l /tmp/big
