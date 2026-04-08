@@ -114,6 +114,10 @@ cat /proc/1/cmdline
 stat /bin/sh
 df /
 uptime
+cat /proc/sys/kernel/osrelease
+cat /proc/sys/kernel/hostname
+cat /proc/sys/kernel/ostype
+ls /proc/sys
 touch /tmp/tfile && ls /tmp/tfile
 sleep 0 && echo sleepdone
 rm /tmp/tfile && echo rmdone
@@ -356,6 +360,10 @@ check "proc/1/cmdline"          "init"
 check "stat"                    "File:"
 check "df"                      "/dev/vda"
 check "uptime"                  "up"
+check "proc/sys/kernel/osrelease" "0.32.0"
+check "proc/sys/kernel/hostname"  "rux"
+check "proc/sys/kernel/ostype"    "Linux"
+check "proc/sys dir"              "kernel"
 check "touch + ls"              "tfile"
 check "sleep + echo"            "sleepdone"
 check "rm + echo"               "rmdone"
@@ -518,6 +526,10 @@ cat /proc/1/cmdline
 stat /bin/sh
 df /
 uptime
+cat /proc/sys/kernel/osrelease
+cat /proc/sys/kernel/hostname
+cat /proc/sys/kernel/ostype
+ls /proc/sys
 touch /tmp/tfile && ls /tmp/tfile
 sleep 0 && echo sleepdone
 rm /tmp/tfile && echo rmdone
@@ -744,6 +756,10 @@ check "proc/1/cmdline"          "init"
 check "stat"                    "File:"
 check "df"                      "/dev/vda"
 check "uptime"                  "up"
+check "proc/sys/kernel/osrelease" "0.32.0"
+check "proc/sys/kernel/hostname"  "rux"
+check "proc/sys/kernel/ostype"    "Linux"
+check "proc/sys dir"              "kernel"
 check "touch + ls"              "tfile"
 check "sleep + echo"            "sleepdone"
 check "rm + echo"               "rmdone"

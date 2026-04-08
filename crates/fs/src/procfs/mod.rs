@@ -29,8 +29,19 @@ const INO_SELF: InodeId = 6; // symlink "self" → "1"
 const INO_MOUNTS: InodeId = 7;
 const INO_FILESYSTEMS: InodeId = 8;
 const INO_CMDLINE: InodeId = 9;
+// /proc/sys/ hierarchy
+const INO_SYS_DIR: InodeId = 10;         // /proc/sys
+const INO_SYS_KERNEL_DIR: InodeId = 11;  // /proc/sys/kernel
+const INO_SYS_VM_DIR: InodeId = 12;      // /proc/sys/vm
+const INO_SYS_K_OSRELEASE: InodeId = 13; // /proc/sys/kernel/osrelease
+const INO_SYS_K_HOSTNAME: InodeId = 14;  // /proc/sys/kernel/hostname
+const INO_SYS_K_OSTYPE: InodeId = 15;    // /proc/sys/kernel/ostype
+const INO_SYS_K_RANDOM_DIR: InodeId = 16;// /proc/sys/kernel/random
+const INO_SYS_K_RANDOM_UUID: InodeId = 17;// /proc/sys/kernel/random/uuid
+const INO_SYS_VM_OVERCOMMIT: InodeId = 18;// /proc/sys/vm/overcommit_memory
+const INO_NET_DIR: InodeId = 19;          // /proc/net
 
-const NUM_SYS_ENTRIES: usize = 9;
+const NUM_SYS_ENTRIES: usize = 11;
 
 const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"uptime", INO_UPTIME),
@@ -42,6 +53,8 @@ const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"mounts", INO_MOUNTS),
     (b"filesystems", INO_FILESYSTEMS),
     (b"cmdline", INO_CMDLINE),
+    (b"sys", INO_SYS_DIR),
+    (b"net", INO_NET_DIR),
 ];
 
 const PID_DIR_BASE: InodeId = 100;
@@ -150,9 +163,48 @@ impl ProcFs {
                 len
             }
             INO_CMDLINE => {
-                // Kernel command line (empty for now)
                 buf[0] = b'\n';
                 1
+            }
+            INO_SYS_K_OSRELEASE => {
+                let s = concat!(env!("CARGO_PKG_VERSION"), "\n");
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s.as_bytes()[..len]);
+                len
+            }
+            INO_SYS_K_HOSTNAME => {
+                let s = b"rux\n";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                len
+            }
+            INO_SYS_K_OSTYPE => {
+                let s = b"Linux\n";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                len
+            }
+            INO_SYS_K_RANDOM_UUID => {
+                // Generate a pseudo-random UUID (v4 format)
+                let mut pos = 0;
+                let hex = b"0123456789abcdef";
+                let ticks = (self.get_ticks)();
+                let mut x = ticks ^ 0x12345678_9ABCDEF0;
+                for i in 0..36u8 {
+                    if i == 8 || i == 13 || i == 18 || i == 23 {
+                        buf[pos] = b'-'; pos += 1;
+                    } else {
+                        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+                        buf[pos] = hex[(x & 0xF) as usize]; pos += 1;
+                    }
+                }
+                buf[pos] = b'\n'; pos += 1;
+                pos
+            }
+            INO_SYS_VM_OVERCOMMIT => {
+                let s = b"0\n";
+                buf[..s.len()].copy_from_slice(s);
+                s.len()
             }
             _ if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE => {
                 // /proc/[pid]/maps — synthesized memory map
@@ -294,7 +346,23 @@ impl FileSystem for ProcFs {
             return Ok(());
         }
 
-        // Directories: /proc, /proc/[pid], /proc/[pid]/fd
+        // Directories: /proc, /proc/[pid], /proc/[pid]/fd, /proc/sys/*, /proc/net
+        if ino == INO_SYS_DIR || ino == INO_SYS_KERNEL_DIR || ino == INO_SYS_VM_DIR
+            || ino == INO_SYS_K_RANDOM_DIR || ino == INO_NET_DIR
+        {
+            buf.mode = S_IFDIR | 0o555;
+            buf.nlink = 2;
+            return Ok(());
+        }
+        // /proc/sys/kernel/* files
+        if ino >= INO_SYS_K_OSRELEASE && ino <= INO_SYS_VM_OVERCOMMIT
+            && ino != INO_SYS_K_RANDOM_DIR
+        {
+            buf.mode = S_IFREG | 0o444;
+            buf.nlink = 1;
+            buf.size = 32;
+            return Ok(());
+        }
         if ino == INO_ROOT || is_pid_dir(ino) || is_pid_fd_dir(ino) {
             let pid = if is_pid_dir(ino) { pid_from_dir(ino) }
                      else if is_pid_fd_dir(ino) { ino - PID_FD_DIR_BASE }
@@ -331,7 +399,10 @@ impl FileSystem for ProcFs {
     }
 
     fn read(&self, ino: InodeId, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError> {
-        if ino == INO_ROOT || is_pid_dir(ino) {
+        if ino == INO_ROOT || is_pid_dir(ino) || is_pid_fd_dir(ino)
+            || ino == INO_SYS_DIR || ino == INO_SYS_KERNEL_DIR || ino == INO_SYS_VM_DIR
+            || ino == INO_SYS_K_RANDOM_DIR || ino == INO_NET_DIR
+        {
             return Err(VfsError::IsADirectory);
         }
         let mut tmp = [0u8; 512];
@@ -378,12 +449,44 @@ impl FileSystem for ProcFs {
         if is_pid_fd_dir(dir) {
             if let Some(fd_num) = parse_u64(name_bytes) {
                 if fd_num < 64 {
-                    // Use a high inode range for fd symlinks: 10000 + pid*64 + fd
                     let pid = dir - PID_FD_DIR_BASE;
                     return Ok(10000 + pid * 64 + fd_num);
                 }
             }
             return Err(VfsError::NotFound);
+        }
+
+        // /proc/sys
+        if dir == INO_SYS_DIR {
+            return match name_bytes {
+                b"kernel" => Ok(INO_SYS_KERNEL_DIR),
+                b"vm" => Ok(INO_SYS_VM_DIR),
+                _ => Err(VfsError::NotFound),
+            };
+        }
+        // /proc/sys/kernel
+        if dir == INO_SYS_KERNEL_DIR {
+            return match name_bytes {
+                b"osrelease" => Ok(INO_SYS_K_OSRELEASE),
+                b"hostname" => Ok(INO_SYS_K_HOSTNAME),
+                b"ostype" => Ok(INO_SYS_K_OSTYPE),
+                b"random" => Ok(INO_SYS_K_RANDOM_DIR),
+                _ => Err(VfsError::NotFound),
+            };
+        }
+        // /proc/sys/kernel/random
+        if dir == INO_SYS_K_RANDOM_DIR {
+            return match name_bytes {
+                b"uuid" => Ok(INO_SYS_K_RANDOM_UUID),
+                _ => Err(VfsError::NotFound),
+            };
+        }
+        // /proc/sys/vm
+        if dir == INO_SYS_VM_DIR {
+            return match name_bytes {
+                b"overcommit_memory" => Ok(INO_SYS_VM_OVERCOMMIT),
+                _ => Err(VfsError::NotFound),
+            };
         }
 
         Err(VfsError::NotADirectory)
@@ -395,7 +498,9 @@ impl FileSystem for ProcFs {
             if offset < NUM_SYS_ENTRIES {
                 let (name, ino) = SYS_ENTRIES[offset];
                 buf.ino = ino;
-                buf.kind = if ino == INO_SELF { InodeType::Symlink } else { InodeType::File };
+                buf.kind = if ino == INO_SELF { InodeType::Symlink }
+                           else if ino == INO_SYS_DIR || ino == INO_NET_DIR { InodeType::Directory }
+                           else { InodeType::File };
                 buf.name_len = name.len() as u8;
                 buf.name[..name.len()].copy_from_slice(name);
                 return Ok(true);
@@ -453,6 +558,34 @@ impl FileSystem for ProcFs {
                     }
                 }
             }
+            return Ok(false);
+        }
+
+        // /proc/sys
+        if dir == INO_SYS_DIR {
+            let entries: &[(&[u8], InodeId)] = &[(b"kernel", INO_SYS_KERNEL_DIR), (b"vm", INO_SYS_VM_DIR)];
+            return readdir_static(entries, offset, buf, true);
+        }
+        // /proc/sys/kernel
+        if dir == INO_SYS_KERNEL_DIR {
+            let entries: &[(&[u8], InodeId)] = &[
+                (b"osrelease", INO_SYS_K_OSRELEASE), (b"hostname", INO_SYS_K_HOSTNAME),
+                (b"ostype", INO_SYS_K_OSTYPE), (b"random", INO_SYS_K_RANDOM_DIR),
+            ];
+            return readdir_static(entries, offset, buf, false);
+        }
+        // /proc/sys/kernel/random
+        if dir == INO_SYS_K_RANDOM_DIR {
+            let entries: &[(&[u8], InodeId)] = &[(b"uuid", INO_SYS_K_RANDOM_UUID)];
+            return readdir_static(entries, offset, buf, false);
+        }
+        // /proc/sys/vm
+        if dir == INO_SYS_VM_DIR {
+            let entries: &[(&[u8], InodeId)] = &[(b"overcommit_memory", INO_SYS_VM_OVERCOMMIT)];
+            return readdir_static(entries, offset, buf, false);
+        }
+        // /proc/net (empty for now)
+        if dir == INO_NET_DIR {
             return Ok(false);
         }
 
@@ -534,6 +667,17 @@ fn fd_to_str(fd: usize) -> &'static str {
         15 => "15", 16 => "16", 17 => "17", 18 => "18", 19 => "19",
         _ => "??",
     }
+}
+
+/// Helper for readdir on static directory entries.
+fn readdir_static(entries: &[(&[u8], InodeId)], offset: usize, buf: &mut DirEntry, all_dirs: bool) -> Result<bool, VfsError> {
+    if offset >= entries.len() { return Ok(false); }
+    let (name, ino) = entries[offset];
+    buf.ino = ino;
+    buf.kind = if all_dirs || ino == INO_SYS_K_RANDOM_DIR { InodeType::Directory } else { InodeType::File };
+    buf.name_len = name.len() as u8;
+    buf.name[..name.len()].copy_from_slice(name);
+    Ok(true)
 }
 
 fn parse_u64(s: &[u8]) -> Option<u64> {
