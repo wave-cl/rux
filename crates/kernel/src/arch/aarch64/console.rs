@@ -27,6 +27,23 @@ pub unsafe fn init() {
     // not enabled — the IRQ routing needs debugging on some QEMU configs.
 }
 
+/// Spinlock for serializing UART output across CPUs.
+static UART_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn uart_lock() {
+    while UART_LOCK.compare_exchange_weak(
+        false, true,
+        core::sync::atomic::Ordering::Acquire,
+        core::sync::atomic::Ordering::Relaxed,
+    ).is_err() {
+        core::hint::spin_loop();
+    }
+}
+
+fn uart_unlock() {
+    UART_LOCK.store(false, core::sync::atomic::Ordering::Release);
+}
+
 /// Write a single byte, blocking until the transmit FIFO has space.
 pub fn write_byte(b: u8) {
     unsafe {
@@ -38,14 +55,16 @@ pub fn write_byte(b: u8) {
     }
 }
 
-/// Write a byte slice.
+/// Write a byte slice (locked for SMP safety).
 pub fn write_bytes(buf: &[u8]) {
+    uart_lock();
     for &b in buf {
         if b == b'\n' {
             write_byte(b'\r');
         }
         write_byte(b);
     }
+    uart_unlock();
 }
 
 /// Write a string.
