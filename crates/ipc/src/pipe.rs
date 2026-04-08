@@ -21,6 +21,8 @@ struct PipeBuf {
     /// Task indices waiting on this pipe (for targeted wakeup).
     waiters: [u8; MAX_WAITERS],
     waiter_count: u8,
+    /// Per-pipe spinlock for SMP safety.
+    lock: core::sync::atomic::AtomicBool,
 }
 
 static mut PIPES: [PipeBuf; MAX_PIPES] = {
@@ -29,9 +31,33 @@ static mut PIPES: [PipeBuf; MAX_PIPES] = {
         read_pos: 0, write_pos: 0, count: 0,
         readers: 0, writers: 0, active: false,
         waiters: [0; MAX_WAITERS], waiter_count: 0,
+        lock: core::sync::atomic::AtomicBool::new(false),
     };
     [EMPTY; MAX_PIPES]
 };
+
+/// Acquire a per-pipe spinlock.
+#[inline(always)]
+fn pipe_lock(pipe_id: u8) {
+    unsafe {
+        let lock = &PIPES[pipe_id as usize].lock;
+        while lock.compare_exchange_weak(
+            false, true,
+            core::sync::atomic::Ordering::Acquire,
+            core::sync::atomic::Ordering::Relaxed,
+        ).is_err() {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Release a per-pipe spinlock.
+#[inline(always)]
+fn pipe_unlock(pipe_id: u8) {
+    unsafe {
+        PIPES[pipe_id as usize].lock.store(false, core::sync::atomic::Ordering::Release);
+    }
+}
 
 /// Check if a pipe has data available for reading (or EOF).
 pub fn has_data(pipe_id: u8) -> bool {
@@ -72,6 +98,7 @@ pub fn alloc() -> Result<u8, isize> {
             read_pos: 0, write_pos: 0, count: 0,
             readers: 1, writers: 1, active: true,
             waiters: [0; MAX_WAITERS], waiter_count: 0,
+            lock: core::sync::atomic::AtomicBool::new(false),
         };
         Ok(pipe_id)
     }
@@ -80,6 +107,13 @@ pub fn alloc() -> Result<u8, isize> {
 /// Read from a pipe.
 /// Returns bytes read, 0 on EOF (no writers or empty), -11 (EAGAIN) if empty+writers+can_block.
 pub fn read_ex(pipe_id: u8, buf: *mut u8, len: usize, can_block: bool) -> isize {
+    pipe_lock(pipe_id);
+    let result = unsafe { read_ex_inner(pipe_id, buf, len, can_block) };
+    pipe_unlock(pipe_id);
+    result
+}
+
+unsafe fn read_ex_inner(pipe_id: u8, buf: *mut u8, len: usize, can_block: bool) -> isize {
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
         if !p.active { return -9; }
@@ -104,6 +138,13 @@ pub fn read_ex(pipe_id: u8, buf: *mut u8, len: usize, can_block: bool) -> isize 
 /// Write to a pipe.
 /// Returns bytes written, -32 (EPIPE) if no readers, -11 (EAGAIN) if full+readers+can_block.
 pub fn write_ex(pipe_id: u8, buf: *const u8, len: usize, can_block: bool) -> isize {
+    pipe_lock(pipe_id);
+    let result = unsafe { write_ex_inner(pipe_id, buf, len, can_block) };
+    pipe_unlock(pipe_id);
+    result
+}
+
+unsafe fn write_ex_inner(pipe_id: u8, buf: *const u8, len: usize, can_block: bool) -> isize {
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
         if !p.active { return -9; }
@@ -142,18 +183,21 @@ pub fn write(pipe_id: u8, buf: *const u8, len: usize) -> isize {
 
 /// Increment reader/writer count (called when dup/dup2 copies a pipe fd).
 pub fn dup_ref(pipe_id: u8, is_write_end: bool) {
+    pipe_lock(pipe_id);
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
-        if !p.active { return; }
+        if !p.active { pipe_unlock(pipe_id); return; }
         if is_write_end { p.writers += 1; } else { p.readers += 1; }
     }
+    pipe_unlock(pipe_id);
 }
 
 /// Close one end of a pipe.
 pub fn close(pipe_id: u8, is_write_end: bool) {
+    pipe_lock(pipe_id);
     unsafe {
         let p = &mut PIPES[pipe_id as usize];
-        if !p.active { return; }
+        if !p.active { pipe_unlock(pipe_id); return; }
         if is_write_end {
             p.writers = p.writers.saturating_sub(1);
         } else {
@@ -163,6 +207,7 @@ pub fn close(pipe_id: u8, is_write_end: bool) {
             p.active = false;
         }
     }
+    pipe_unlock(pipe_id);
 }
 
 /// Register a task as waiting on a pipe (for targeted wakeup).
@@ -204,6 +249,7 @@ pub fn reset() {
                 read_pos: 0, write_pos: 0, count: 0,
                 readers: 0, writers: 0, active: false,
                 waiters: [0; MAX_WAITERS], waiter_count: 0,
+                lock: core::sync::atomic::AtomicBool::new(false),
             };
         }
     }
@@ -221,6 +267,7 @@ mod tests {
                     read_pos: 0, write_pos: 0, count: 0,
                     readers: 0, writers: 0, active: false,
                     waiters: [0; MAX_WAITERS], waiter_count: 0,
+                    lock: core::sync::atomic::AtomicBool::new(false),
                 };
             }
         }
