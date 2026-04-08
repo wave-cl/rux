@@ -100,6 +100,9 @@ pub struct TaskSlot {
     pub cmdline: [u8; 128],     // null-separated argv
     pub cmdline_len: u8,
 
+    // ── Preemption ────────────────────────────────────────────────────
+    pub preempt_count: u32,     // saved/restored on context switch
+
     // ── FPU/SIMD state ──────────────────────────────────────────────
     pub fpu_state: rux_arch::FpuState,
 }
@@ -128,6 +131,7 @@ impl TaskSlot {
             waiting_pipe_id: 0,
             itimer_real_deadline: 0, itimer_real_interval: 0,
             cmdline: [0; 128], cmdline_len: 0,
+            preempt_count: 0,
             fpu_state: rux_arch::FpuState::new(),
         }
     }
@@ -380,7 +384,9 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
             old.gid = (*proc_ptr).gid; old.egid = (*proc_ptr).egid; old.sgid = (*proc_ptr).sgid;
             crate::arch::Arch::save_task_hw(&mut old.saved_user_sp, &mut old.tls);
             crate::arch::Arch::save_fpu(&mut old.fpu_state as *mut _ as *mut u8);
+            old.preempt_count = crate::percpu::this_cpu().preempt_count;
         }
+        crate::percpu::this_cpu().preempt_count = 0; // idle has no preempt state
         set_current_task_idx(0);
         return;
     }
@@ -405,6 +411,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
         rux_fs::fdtable::set_active_fds(&mut (*tt_ptr)[fds_idx].fds);
         crate::arch::Arch::restore_task_hw(new.saved_user_sp, new.tls, new.kstack_top);
         crate::arch::Arch::restore_fpu(&new.fpu_state as *const _ as *const u8);
+        crate::percpu::this_cpu().preempt_count = new.preempt_count;
         if new.pt_root != 0 {
             crate::arch::Arch::switch_page_table(new.pt_root, new.asid);
         }
@@ -440,6 +447,9 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     // Save FPU/SIMD state
     crate::arch::Arch::save_fpu(&mut old.fpu_state as *mut _ as *mut u8);
 
+    // Save preempt_count (per-task, not per-CPU)
+    old.preempt_count = crate::percpu::this_cpu().preempt_count;
+
     // ── Load new slot → globals ──────────────────────────────────────
     let new = &(*tt_ptr)[new_idx];
     (*proc_ptr).program_brk = new.program_brk;
@@ -471,6 +481,9 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
 
     // Restore FPU/SIMD state
     crate::arch::Arch::restore_fpu(&new.fpu_state as *const _ as *const u8);
+
+    // Restore preempt_count (per-task, not per-CPU)
+    crate::percpu::this_cpu().preempt_count = new.preempt_count;
 
     // Switch page table with ASID/PCID to avoid full TLB flush.
     if new.pt_root != 0 && new.pt_root != old.pt_root {

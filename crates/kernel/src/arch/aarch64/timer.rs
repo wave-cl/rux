@@ -33,10 +33,11 @@ pub fn handle_tick() {
 
         crate::scheduler::locked_tick(1_000_000);
         // aarch64 ISR preemption: DEFERRED.
-        // Calling schedule() from the IRQ handler hangs on aarch64 — the exception
-        // frame (272 bytes on SP_EL1) or SPSR_EL1/ELR_EL1 state is corrupted after
-        // context_switch. Likely needs per-CPU interrupt stacks (separate from task
-        // kernel stacks) to safely preempt from IRQ context.
+        // schedule() from the IRQ handler hangs despite per-task preempt_count.
+        // Root cause is not preempt_count leakage — the exception frame or
+        // SP_EL1 state is corrupted after context_switch inside the IRQ handler.
+        // Needs per-CPU IRQ stacks (Linux call_on_irq_stack approach) to isolate
+        // the handler execution from the task kernel stack.
         // Preemption occurs via post_syscall + idle loop.
     }
 }
