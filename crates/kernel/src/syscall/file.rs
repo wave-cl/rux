@@ -55,11 +55,15 @@ unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
             return r;
         }
         let eof_val = if is_write { crate::errno::EPIPE } else { 0 };
+        // Check EOF before blocking: writer may have already exited
+        if !is_write && rux_ipc::pipe::writers_closed(pipe_id) { return 0; }
         if !can_pipe_block() { return eof_val; }
         pipe_block(pipe_id);
         if fd >= rux_fs::fdtable::MAX_FDS || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
             return eof_val;
         }
+        // Re-check EOF after waking: writer may have closed while we slept
+        if !is_write && rux_ipc::pipe::writers_closed(pipe_id) { return 0; }
     }
 }
 
