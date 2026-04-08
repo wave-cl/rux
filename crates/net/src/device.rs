@@ -15,11 +15,11 @@ pub struct VirtioDevice {
     rx_buf: [u8; 1514],
     rx_len: usize,
     /// Loopback queue: TX frames destined for our own IP get looped back.
-    /// Circular buffer of 4 frames to handle multi-step handshakes.
-    loopback_bufs: [[u8; 1514]; 4],
-    loopback_lens: [usize; 4],
-    loopback_head: usize, // next slot to write
-    loopback_tail: usize, // next slot to read
+    /// Circular buffer of 8 frames to handle multi-step handshakes (TCP 3-way + data).
+    loopback_bufs: [[u8; 1514]; 8],
+    loopback_lens: [usize; 8],
+    pub loopback_head: usize, // next slot to write
+    pub loopback_tail: usize, // next slot to read
     /// Our IP address (for loopback detection).
     pub our_ip: [u8; 4],
 }
@@ -31,8 +31,8 @@ impl VirtioDevice {
             recv: dummy_recv,
             rx_buf: [0u8; 1514],
             rx_len: 0,
-            loopback_bufs: [[0u8; 1514]; 4],
-            loopback_lens: [0; 4],
+            loopback_bufs: [[0u8; 1514]; 8],
+            loopback_lens: [0; 8],
             loopback_head: 0,
             loopback_tail: 0,
             our_ip: [0; 4],
@@ -67,8 +67,8 @@ impl phy::RxToken for VirtioRxToken<'_> {
 /// TX token: holds a reference to the send function and loopback info.
 pub struct VirtioTxToken {
     send: SendFn,
-    loopback_bufs: *mut [[u8; 1514]; 4],
-    loopback_lens: *mut [usize; 4],
+    loopback_bufs: *mut [[u8; 1514]; 8],
+    loopback_lens: *mut [usize; 8],
     loopback_head: *mut usize,
     our_ip: [u8; 4],
 }
@@ -129,19 +129,19 @@ impl phy::TxToken for VirtioTxToken {
                 let head = *self.loopback_head;
                 let bufs = &mut *self.loopback_bufs;
                 let lens = &mut *self.loopback_lens;
-                bufs[head % 4][..len].copy_from_slice(&buf[..len]);
+                bufs[head % 8][..len].copy_from_slice(&buf[..len]);
                 // Swap MAC: dst(0..6) ↔ src(6..12)
                 for i in 0..6 {
-                    let tmp = bufs[head % 4][i];
-                    bufs[head % 4][i] = bufs[head % 4][i + 6];
-                    bufs[head % 4][i + 6] = tmp;
+                    let tmp = bufs[head % 8][i];
+                    bufs[head % 8][i] = bufs[head % 8][i + 6];
+                    bufs[head % 8][i + 6] = tmp;
                 }
                 // If this is an ARP request, convert to ARP reply
-                let ethertype = ((bufs[head % 4][12] as u16) << 8) | bufs[head % 4][13] as u16;
+                let ethertype = ((bufs[head % 8][12] as u16) << 8) | bufs[head % 8][13] as u16;
                 if ethertype == 0x0806 {
-                    arp_request_to_reply(&mut bufs[head % 4]);
+                    arp_request_to_reply(&mut bufs[head % 8]);
                 }
-                lens[head % 4] = len;
+                lens[head % 8] = len;
                 *self.loopback_head = head + 1;
             }
         } else {

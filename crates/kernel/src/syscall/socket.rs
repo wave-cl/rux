@@ -211,10 +211,9 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
             // Blocking: poll until established
             for _ in 0..30_000u32 {
                 rux_net::poll(crate::arch::Arch::ticks());
-                if rux_net::tcp_can_send(handle) { SOCKETS[idx].connected = true; return 0; }
+                if rux_net::tcp_is_established(handle) { SOCKETS[idx].connected = true; return 0; }
                 if !rux_net::tcp_is_active(handle) { return crate::errno::ECONNREFUSED; }
-                use rux_arch::HaltOps;
-                crate::arch::Arch::halt_until_interrupt();
+                super::memory::yield_1ms();
             }
             return crate::errno::ETIMEDOUT;
         }

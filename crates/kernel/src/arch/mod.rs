@@ -50,6 +50,37 @@ pub use native::probe_blk;
 #[cfg(all(feature = "native", feature = "net"))]
 pub use native::probe_and_init_net;
 
+/// Disable hardware interrupts. Returns whether interrupts were previously enabled.
+#[inline(always)]
+pub unsafe fn irq_disable() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let flags: u64;
+        core::arch::asm!("pushfq; pop {}; cli", out(reg) flags, options(preserves_flags));
+        flags & 0x200 != 0
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let daif: u64;
+        core::arch::asm!("mrs {}, daif", out(reg) daif, options(nostack));
+        core::arch::asm!("msr daifset, #2", options(nostack));
+        daif & (1 << 7) == 0 // IRQ bit clear = interrupts were enabled
+    }
+    #[cfg(feature = "native")]
+    { false }
+}
+
+/// Restore hardware interrupts to a previous state.
+#[inline(always)]
+pub unsafe fn irq_restore(was_enabled: bool) {
+    if was_enabled {
+        #[cfg(target_arch = "x86_64")]
+        core::arch::asm!("sti", options(nostack, preserves_flags));
+        #[cfg(target_arch = "aarch64")]
+        core::arch::asm!("msr daifclr, #2", options(nostack));
+    }
+}
+
 /// Fill a Linux struct stat buffer from VFS InodeStat.
 /// Delegates to the `StatLayout::fill_stat` default method in rux-arch.
 pub unsafe fn fill_linux_stat<A: StatLayout>(buf: usize, s: &rux_fs::InodeStat) {

@@ -55,15 +55,23 @@ unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
             return r;
         }
         let eof_val = if is_write { crate::errno::EPIPE } else { 0 };
-        // Check EOF before blocking: writer may have already exited
-        if !is_write && rux_ipc::pipe::writers_closed(pipe_id) { return 0; }
+        // Check EOF before blocking: writer may have already exited.
+        // After writers_closed, drain any remaining data before returning EOF.
+        if !is_write && rux_ipc::pipe::writers_closed(pipe_id) {
+            let last = rux_ipc::pipe::read_ex(pipe_id, buf as *mut u8, len, false);
+            return if last > 0 { last } else { 0 };
+        }
         if !can_pipe_block() { return eof_val; }
         pipe_block(pipe_id);
         if fd >= rux_fs::fdtable::MAX_FDS || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
             return eof_val;
         }
-        // Re-check EOF after waking: writer may have closed while we slept
-        if !is_write && rux_ipc::pipe::writers_closed(pipe_id) { return 0; }
+        // Re-check EOF after waking: writer may have closed while we slept.
+        // Drain any remaining data before returning EOF.
+        if !is_write && rux_ipc::pipe::writers_closed(pipe_id) {
+            let last = rux_ipc::pipe::read_ex(pipe_id, buf as *mut u8, len, false);
+            return if last > 0 { last } else { 0 };
+        }
     }
 }
 
@@ -696,11 +704,16 @@ unsafe fn pipe_block(pipe_id: u8) {
     use crate::task_table::*;
     let idx = current_task_idx();
     rux_ipc::pipe::register_waiter(pipe_id, idx as u8);
+    // Disable interrupts while changing task state + dequeuing to prevent
+    // timer ISR from calling locked_tick → schedule while state is inconsistent.
+    // Cannot use sched_lock because locked_tick (in timer ISR) also acquires it.
+    let was = crate::arch::irq_disable();
     TASK_TABLE[idx].state = TaskState::WaitingForPipe;
     TASK_TABLE[idx].waiting_pipe_id = pipe_id;
     let sched = crate::scheduler::get();
     sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
     sched.dequeue_current();
     sched.need_resched = true;
+    crate::arch::irq_restore(was);
     sched.schedule();
 }

@@ -114,6 +114,13 @@ interrupt_common:
 
     call interrupt_dispatch
 
+    // Check if returning to user mode (CS at RSP+144 != kernel CS 0x08).
+    // If so, check need_resched for deferred preemption.
+    // CS offset: 15 GPRs (120) + vector (8) + error_code (8) + RIP (8) = 144.
+    cmpq $0x08, 144(%rsp)
+    je interrupt_return
+    call isr_check_preempt
+
     // Restore registers — fork_child_return jumps here
     .global interrupt_return
 interrupt_return:
@@ -306,6 +313,18 @@ pub unsafe fn load() {
     core::arch::asm!("lidt [{}]", in(reg) &idt_ptr, options(nostack));
 }
 
+/// Called from interrupt_common when returning to user mode.
+/// If need_resched is set, perform a context switch before iretq.
+/// Safe because we are returning to user mode (not nested in kernel code),
+/// and TSS.rsp0 is updated per-task so each task's ISR frame is on its own stack.
+#[no_mangle]
+pub unsafe extern "C" fn isr_check_preempt() {
+    let sched = crate::scheduler::get();
+    if sched.need_resched {
+        sched.schedule();
+    }
+}
+
 /// Rust dispatch function called from the assembly common handler.
 #[no_mangle]
 pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {
@@ -414,13 +433,12 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
 
                 crate::scheduler::locked_tick(1_000_000);
-                // x86_64 ISR preemption: DISABLED.
-                // context_switch from within the timer ISR corrupts return
-                // addresses on QEMU TCG. The ISR frame should survive but
-                // something in the unwind chain goes wrong, causing SIGSEGV
-                // with bogus RIP values after context_switch returns.
-                // Needs investigation with a debugger (GDB stub on QEMU).
-                // Preemption works cooperatively via post_syscall + idle loop.
+                // x86_64 ISR preemption: DEFERRED.
+                // The timer ISR sets need_resched via locked_tick() but does NOT
+                // call schedule() directly (context_switch inside the ISR corrupts
+                // the ISR frame on QEMU TCG due to shared SYSCALL_STACK).
+                // Preemption occurs at: (1) post_syscall return, (2) idle loop,
+                // (3) ISR return to user mode (isr_check_preempt in interrupt_common).
             }
         }
         48 => {

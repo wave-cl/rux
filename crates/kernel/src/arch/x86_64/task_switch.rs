@@ -46,6 +46,8 @@ unsafe impl rux_arch::TaskSwitchOps for super::X86_64 {
         // Keep legacy globals in sync for compatibility
         super::syscall::SAVED_USER_RSP = saved_user_sp as u64;
         super::syscall::CURRENT_KSTACK_TOP = kstack_top as u64;
+        // Update TSS.rsp0 so interrupts from user mode use this task's kernel stack
+        super::gdt::set_rsp0(kstack_top as u64);
         // Write IA32_FS_BASE (0xC0000100) — user TLS register
         let lo = tls as u32;
         let hi = (tls >> 32) as u32;

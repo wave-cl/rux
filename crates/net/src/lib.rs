@@ -123,7 +123,8 @@ pub unsafe fn poll(timestamp_millis: u64) {
     let iface = (*(&raw mut IFACE)).as_mut().unwrap_unchecked();
     let sockets = (*(&raw mut SOCKETS)).as_mut().unwrap_unchecked();
     let now = Instant::from_millis(timestamp_millis as i64);
-    let _ = iface.poll(now, &mut *(&raw mut DEVICE), sockets);
+    let dev = &mut *(&raw mut DEVICE);
+    let _ = iface.poll(now, dev, sockets);
 }
 
 pub fn is_configured() -> bool {

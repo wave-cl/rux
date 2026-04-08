@@ -32,14 +32,20 @@ pub unsafe fn wake_pipe_waiters(pipe_id: u8) {
     let (count, waiters) = rux_ipc::pipe::get_waiters(pipe_id);
     if count == 0 { return; }
 
+    // Disable interrupts across the entire check-and-wake sequence to prevent
+    // TOCTOU race: without it, a timer ISR between the state check and
+    // wake_task can change task state, leaving the task stuck.
+    // Cannot use sched_lock because locked_tick (in timer ISR) also acquires it.
+    let was = crate::arch::irq_disable();
     for wi in 0..count as usize {
         let i = waiters[wi] as usize;
         if i < MAX_PROCS && TASK_TABLE[i].active
             && TASK_TABLE[i].state == TaskState::WaitingForPipe
         {
             TASK_TABLE[i].state = TaskState::Ready;
-            crate::scheduler::locked_wake_task(i);
+            crate::scheduler::get().wake_task(i);
         }
     }
+    crate::arch::irq_restore(was);
     rux_ipc::pipe::clear_all_waiters(pipe_id);
 }

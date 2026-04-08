@@ -152,6 +152,17 @@ pub unsafe fn init(kernel_stack_top: u64) {
     );
 }
 
+/// Update TSS.rsp0 for the current CPU. Called on context switch so that
+/// interrupts from user mode land on the new task's kernel stack.
+pub unsafe fn set_rsp0(rsp0: u64) {
+    let id = crate::percpu::cpu_id();
+    if id == 0 {
+        TSS.rsp0 = rsp0;
+    } else {
+        TSS_PERCPU[id].rsp0 = rsp0;
+    }
+}
+
 // ── Per-CPU GDT + TSS for AP startup ────────────────────────────────
 
 use crate::percpu::MAX_CPUS;
