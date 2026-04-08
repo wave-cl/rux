@@ -697,5 +697,6 @@ unsafe fn pipe_block(pipe_id: u8) {
     let sched = crate::scheduler::get();
     sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
     sched.dequeue_current();
+    sched.need_resched = true;
     sched.schedule();
 }

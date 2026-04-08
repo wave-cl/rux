@@ -134,8 +134,11 @@ impl Scheduler {
 
         let current = self.current;
         // Idle task (slot 0) is never on the CFS runqueue — skip task_tick
+        // but check if any tasks became runnable (via wake_task or enqueue)
         if current == 0 {
-            // But still check if any tasks were woken (need_resched set by wake_task)
+            if self.cfs.rqs[0].nr_running > 0 {
+                self.need_resched = true;
+            }
             return;
         }
         if current < MAX_TASKS && self.tasks[current].active {

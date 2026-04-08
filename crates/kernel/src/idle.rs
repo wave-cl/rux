@@ -12,6 +12,11 @@ pub extern "C" fn idle_loop() -> ! {
         unsafe {
             use rux_arch::HaltOps;
             crate::arch::Arch::halt_until_interrupt();
+            // After timer IRQ wakes us, check if any task became runnable
+            let sched = crate::scheduler::get();
+            if sched.need_resched {
+                sched.schedule();
+            }
         }
     }
 }

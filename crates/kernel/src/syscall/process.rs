@@ -110,6 +110,7 @@ pub fn exit(status: i32) -> ! {
                 sched.tasks[idx].entity.state = rux_sched::TaskState::Dead;
                 sched.tasks[idx].active = false;
                 sched.dequeue_current();
+                sched.need_resched = true;
                 sched.schedule();
                 // Bug indicator: schedule() should never return for a dead task.
                 use rux_arch::ConsoleOps;
@@ -238,6 +239,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 // Mark Interruptible so schedule() doesn't re-enqueue the parent.
                 sched.tasks[current_task_idx()].entity.state = rux_sched::TaskState::Interruptible;
                 sched.dequeue_current();
+                sched.need_resched = true;
                 sched.schedule(); // returns when woken by child's exit()
             }
         }
