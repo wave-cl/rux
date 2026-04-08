@@ -280,6 +280,25 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',7777)); s.listen(1); print('listen_ok'); s.close()" 2>&1
+python3 -c "
+import socket,os
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(('127.0.0.1',7890))
+s.listen(1)
+pid=os.fork()
+if pid==0:
+    c=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    c.connect(('127.0.0.1',7890))
+    c.sendall(b'loopback_tcp_ok')
+    c.close()
+    os._exit(0)
+conn,_=s.accept()
+data=conn.recv(64)
+conn.close(); s.close()
+os.waitpid(pid,0)
+print(data.decode())
+" 2>&1
 python3 -c "import json; d={'name':'rux'}; print('json_ok' if json.loads(json.dumps(d))['name']=='rux' else 'FAIL')" 2>&1
 python3 -c "import hashlib; print('hash_' + hashlib.sha256(b'hello').hexdigest()[:8])" 2>&1
 python3 -c "import os,tempfile; fd,p=tempfile.mkstemp(); os.write(fd,b'tmp_ok\n'); os.close(fd); print(open(p).read().strip()); os.unlink(p)" 2>&1
@@ -484,6 +503,7 @@ check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
 check "tcp listen"           "listen_ok"
+check "loopback tcp"         "loopback_tcp_ok"
 check "python json"          "json_ok"
 check "python hashlib"       "hash_2cf24dba"
 check "python tempfile"      "tmp_ok"
@@ -702,6 +722,25 @@ print('epoll_ok' if len(evts)>0 else 'FAIL')
 os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
+python3 -c "
+import socket,os
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(('127.0.0.1',7890))
+s.listen(1)
+pid=os.fork()
+if pid==0:
+    c=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    c.connect(('127.0.0.1',7890))
+    c.sendall(b'loopback_tcp_ok')
+    c.close()
+    os._exit(0)
+conn,_=s.accept()
+data=conn.recv(64)
+conn.close(); s.close()
+os.waitpid(pid,0)
+print(data.decode())
+" 2>&1
 TESTENV=rux123 sh -c 'echo $TESTENV'
 python3 -c "import json; d={'name':'rux'}; print('json_ok' if json.loads(json.dumps(d))['name']=='rux' else 'FAIL')" 2>&1
 python3 -c "import hashlib; print('hash_' + hashlib.sha256(b'hello').hexdigest()[:8])" 2>&1
@@ -889,6 +928,7 @@ check "pipe splice"          "splice_splicedata"
 check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
+check "loopback tcp"         "loopback_tcp_ok"
 check "python json"          "json_ok"
 check "python hashlib"       "hash_2cf24dba"
 check "perl sort"            "1,2,3"
