@@ -208,7 +208,7 @@ impl Device for VirtioDevice {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet;
         caps.max_transmission_unit = 1500;
-        caps.max_burst_size = Some(1);
+        caps.max_burst_size = Some(4);
         caps
     }
 }

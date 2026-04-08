@@ -1083,21 +1083,63 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::SendTo2 => socket::sys_sendto(a0, a1, a2, a3, a4, 0),
         Syscall::Socketpair => {
             // socketpair(domain, type, protocol, sv[2])
-            // Implement as two unidirectional pipes.
-            // sv[0] reads from pipe1, writes to pipe2
-            // sv[1] reads from pipe2, writes to pipe1
-            // For simplicity: just create a single pipe (covers most real use cases
-            // where only one direction is used, e.g. signaling, subprocess comms).
+            // Bidirectional: two pipes, two fds.
+            // Pipe A: fd[0] reads, fd[1] writes
+            // Pipe B: fd[1] reads, fd[0] writes
             if a3 == 0 { return crate::errno::EFAULT; }
             if crate::uaccess::validate_user_ptr(a3, 8).is_err() { return crate::errno::EFAULT; }
-            match crate::pipe::create() {
-                Ok((_pid, read_fd, write_fd)) => unsafe {
-                    // sv[0] = read end, sv[1] = write end (like pipe)
-                    crate::uaccess::put_user(a3, read_fd as i32);
-                    crate::uaccess::put_user(a3 + 4, write_fd as i32);
-                    0
-                },
-                Err(e) => e,
+            unsafe {
+                // Allocate two pipes
+                let pipe_a = match rux_ipc::pipe::alloc() {
+                    Ok(id) => id,
+                    Err(e) => return e,
+                };
+                let pipe_b = match rux_ipc::pipe::alloc() {
+                    Ok(id) => id,
+                    Err(_) => { rux_ipc::pipe::close(pipe_a, false); rux_ipc::pipe::close(pipe_a, true); return crate::errno::ENOMEM; }
+                };
+                // Allocate two fds
+                let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                let fd0 = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS).find(|&f| !fd_table[f].active) {
+                    Some(f) => f,
+                    None => { rux_ipc::pipe::close(pipe_a, false); rux_ipc::pipe::close(pipe_a, true);
+                              rux_ipc::pipe::close(pipe_b, false); rux_ipc::pipe::close(pipe_b, true);
+                              return crate::errno::ENOMEM; }
+                };
+                fd_table[fd0] = rux_fs::fdtable::OpenFile {
+                    ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true,
+                    is_console: false, is_pipe: true,
+                    pipe_id: pipe_a, pipe_write: false, // reads from pipe_a
+                    is_socket: false, socket_idx: 0,
+                    pipe_id_write: pipe_b,              // writes to pipe_b
+                };
+                let fd1 = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS).find(|&f| !fd_table[f].active) {
+                    Some(f) => f,
+                    None => { fd_table[fd0].active = false;
+                              rux_ipc::pipe::close(pipe_a, false); rux_ipc::pipe::close(pipe_a, true);
+                              rux_ipc::pipe::close(pipe_b, false); rux_ipc::pipe::close(pipe_b, true);
+                              return crate::errno::ENOMEM; }
+                };
+                fd_table[fd1] = rux_fs::fdtable::OpenFile {
+                    ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true,
+                    is_console: false, is_pipe: true,
+                    pipe_id: pipe_b, pipe_write: false, // reads from pipe_b
+                    is_socket: false, socket_idx: 0,
+                    pipe_id_write: pipe_a,              // writes to pipe_a
+                };
+                // Apply SOCK_CLOEXEC if requested
+                if a1 & 0x80000 != 0 {
+                    fd_table[fd0].fd_flags = rux_fs::fdtable::FD_CLOEXEC;
+                    fd_table[fd1].fd_flags = rux_fs::fdtable::FD_CLOEXEC;
+                }
+                // Apply SOCK_NONBLOCK if requested
+                if a1 & 0x800 != 0 {
+                    fd_table[fd0].flags = 0x800; // O_NONBLOCK
+                    fd_table[fd1].flags = 0x800;
+                }
+                crate::uaccess::put_user(a3, fd0 as i32);
+                crate::uaccess::put_user(a3 + 4, fd1 as i32);
+                0
             }
         },
         Syscall::Gethostname => {

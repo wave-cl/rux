@@ -32,6 +32,10 @@ pub fn handle_tick() {
         if rux_net::is_configured() { rux_net::poll(TICKS.load(core::sync::atomic::Ordering::Relaxed)); }
 
         crate::scheduler::locked_tick(1_000_000);
+        // aarch64 ISR preemption: DEFERRED.
+        // Preemption via post_syscall + idle loop. ISR preemption needs
+        // investigation of aarch64 exception frame preservation across
+        // context_switch (EL1 SP alignment, SPSR_EL1 restore).
     }
 }
 

@@ -19,6 +19,10 @@ unsafe fn copy_fds_with_pipe_refs(src: &[OpenFile; MAX_FDS], dst: &mut [OpenFile
         dst[i] = src[i];
         if dst[i].active && dst[i].is_pipe {
             (crate::pipe::PIPE.dup_ref)(dst[i].pipe_id, dst[i].pipe_write);
+            // Socketpair: also dup the write-direction pipe ref
+            if dst[i].pipe_id_write != 0xFF {
+                (crate::pipe::PIPE.dup_ref)(dst[i].pipe_id_write, true);
+            }
         }
     }
 }

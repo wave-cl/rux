@@ -454,9 +454,17 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
         48 => {
             // AP LAPIC timer tick
             unsafe { super::apic::eoi(); }
-            // AP scheduler tick — uses locked_tick for SMP safety.
             unsafe {
                 crate::scheduler::locked_tick(1_000_000);
+                // ISR preemption for AP cores (same as BSP vector 32).
+                if crate::arch::preemptible() {
+                    let sched = crate::scheduler::get();
+                    if sched.need_resched {
+                        crate::arch::preempt_disable();
+                        sched.schedule();
+                        crate::arch::preempt_enable();
+                    }
+                }
             }
         }
         128 => {

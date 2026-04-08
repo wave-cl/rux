@@ -42,8 +42,13 @@ pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
 }
 
 /// Blocking pipe I/O loop: retries on EAGAIN, wakes waiters on success.
+/// For socketpair fds: reads use pipe_id, writes use pipe_id_write.
 unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
-    let pipe_id = (*fdt::FD_TABLE)[fd].pipe_id;
+    let pipe_id = if is_write && (*fdt::FD_TABLE)[fd].pipe_id_write != 0xFF {
+        (*fdt::FD_TABLE)[fd].pipe_id_write
+    } else {
+        (*fdt::FD_TABLE)[fd].pipe_id
+    };
     loop {
         let r = if is_write {
             rux_ipc::pipe::write_ex(pipe_id, buf as *const u8, len, true)
