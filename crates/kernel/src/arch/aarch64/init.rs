@@ -32,7 +32,9 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
             // After timer interrupt, check if scheduler wants to reschedule
             let sched = crate::scheduler::get();
             if sched.need_resched {
+                crate::arch::preempt_disable();
                 sched.schedule();
+                crate::arch::preempt_enable();
             }
         }
     }

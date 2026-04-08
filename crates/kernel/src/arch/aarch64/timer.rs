@@ -33,9 +33,11 @@ pub fn handle_tick() {
 
         crate::scheduler::locked_tick(1_000_000);
         // aarch64 ISR preemption: DEFERRED.
-        // Preemption via post_syscall + idle loop. ISR preemption needs
-        // investigation of aarch64 exception frame preservation across
-        // context_switch (EL1 SP alignment, SPSR_EL1 restore).
+        // Calling schedule() from the IRQ handler hangs on aarch64 — the exception
+        // frame (272 bytes on SP_EL1) or SPSR_EL1/ELR_EL1 state is corrupted after
+        // context_switch. Likely needs per-CPU interrupt stacks (separate from task
+        // kernel stacks) to safely preempt from IRQ context.
+        // Preemption occurs via post_syscall + idle loop.
     }
 }
 

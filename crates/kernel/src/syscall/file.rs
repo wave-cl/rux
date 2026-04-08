@@ -720,5 +720,7 @@ unsafe fn pipe_block(pipe_id: u8) {
     sched.dequeue_current();
     sched.need_resched = true;
     crate::arch::irq_restore(was);
+    crate::arch::preempt_disable();
     sched.schedule();
+    crate::arch::preempt_enable();
 }

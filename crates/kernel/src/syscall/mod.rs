@@ -1288,7 +1288,11 @@ pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
         result
     };
     let sched = crate::scheduler::get();
-    if sched.need_resched { sched.schedule(); }
+    if sched.need_resched {
+        unsafe { crate::arch::preempt_disable(); }
+        sched.schedule();
+        unsafe { crate::arch::preempt_enable(); }
+    }
     ret
 }
 
