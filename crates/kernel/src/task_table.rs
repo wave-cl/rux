@@ -155,6 +155,13 @@ pub const KSTACK_SIZE: usize = 32768; // 32KB per task
 pub struct KStackArray(pub [[u8; KSTACK_SIZE]; MAX_PROCS]);
 pub static mut KSTACKS: KStackArray = KStackArray([[0; KSTACK_SIZE]; MAX_PROCS]);
 
+/// Per-CPU IRQ stacks. IRQ handlers run on these stacks (aarch64) to avoid
+/// corrupting the task kernel stack during context_switch from IRQ context.
+pub const IRQ_STACK_SIZE: usize = 8192; // 8KB per CPU
+#[repr(C, align(4096))]
+pub struct IrqStackArray(pub [[u8; IRQ_STACK_SIZE]; crate::percpu::MAX_CPUS]);
+pub static mut IRQ_STACKS: IrqStackArray = IrqStackArray([[0; IRQ_STACK_SIZE]; crate::percpu::MAX_CPUS]);
+
 /// Per-task signal handler tables. Raw bytes to avoid linker alignment shifts.
 const SIGNAL_COLD_SIZE: usize = core::mem::size_of::<rux_proc::signal::SignalCold>();
 /// Aligned storage for SignalCold instances. The `#[repr(align(8))]` wrapper

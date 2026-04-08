@@ -32,13 +32,11 @@ pub fn handle_tick() {
         if rux_net::is_configured() { rux_net::poll(TICKS.load(core::sync::atomic::Ordering::Relaxed)); }
 
         crate::scheduler::locked_tick(1_000_000);
-        // aarch64 ISR preemption: DEFERRED.
-        // schedule() from the IRQ handler hangs despite per-task preempt_count.
-        // Root cause is not preempt_count leakage — the exception frame or
-        // SP_EL1 state is corrupted after context_switch inside the IRQ handler.
-        // Needs per-CPU IRQ stacks (Linux call_on_irq_stack approach) to isolate
-        // the handler execution from the task kernel stack.
-        // Preemption occurs via post_syscall + idle loop.
+        // ISR preemption is handled by aarch64_isr_check_preempt() in the
+        // assembly IRQ handlers (irq_el0_handler, irq_el1_handler) AFTER
+        // switching back from the per-CPU IRQ stack to the task stack.
+        // schedule() runs on the task stack where the exception frame is
+        // preserved across context_switch.
     }
 }
 

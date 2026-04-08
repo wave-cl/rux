@@ -15,6 +15,8 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
         pc.online = true;
         pc.idle = true;
         pc.current_task_idx = usize::MAX;
+        pc.irq_stack_top = crate::task_table::IRQ_STACKS.0[cpu_id as usize].as_ptr() as u64
+            + crate::task_table::IRQ_STACK_SIZE as u64;
 
         // Initialize GIC CPU interface for this AP
         super::gic::init_cpu();
@@ -45,6 +47,10 @@ pub fn aarch64_init(dtb_addr: usize) {
     unsafe {
         crate::percpu::init_bsp();
         crate::percpu::init_this_cpu(0); // TPIDR_EL1 → &PERCPU[0]
+        // Set up per-CPU IRQ stack for BSP
+        crate::percpu::this_cpu().irq_stack_top =
+            crate::task_table::IRQ_STACKS.0[0].as_ptr() as u64
+            + crate::task_table::IRQ_STACK_SIZE as u64;
     }
 
     console::write_str("rux: aarch64 running in EL1\n");

@@ -123,11 +123,22 @@ sync_el1_handler:
 
 irq_el1_handler:
     save_context
-    mov     x0, #1                  /* type = IRQ */
+    /* Switch to per-CPU IRQ stack (Linux call_on_irq_stack approach).
+       Exception frame stays on the task stack. Handler runs on IRQ stack.
+       This allows safe context_switch from the handler without corrupting
+       the task's exception frame. */
+    mov     x19, sp                         /* save task stack (callee-saved) */
+    mrs     x20, tpidr_el1                  /* percpu base */
+    ldr     x21, [x20, #56]                 /* percpu.irq_stack_top (offset 56) */
+    mov     sp, x21                         /* switch to IRQ stack */
+    mov     x0, #1                          /* type = IRQ */
     mov     x1, #0
     mov     x2, #0
-    mov     x3, sp
+    mov     x3, x19                         /* frame pointer = task stack SP */
     bl      exception_dispatch
+    mov     sp, x19                         /* restore task stack */
+    /* Check preemption (on task stack, exception frame is below us) */
+    bl      aarch64_isr_check_preempt
     restore_context
     eret
 
@@ -143,11 +154,18 @@ sync_el0_handler:
 
 irq_el0_handler:
     save_context
-    mov     x0, #3                  /* type = IRQ from EL0 (user) */
+    /* Switch to per-CPU IRQ stack (same as irq_el1_handler) */
+    mov     x19, sp
+    mrs     x20, tpidr_el1
+    ldr     x21, [x20, #56]                 /* percpu.irq_stack_top */
+    mov     sp, x21
+    mov     x0, #3                          /* type = IRQ from EL0 (user) */
     mov     x1, #0
     mov     x2, #0
-    mov     x3, sp
+    mov     x3, x19
     bl      exception_dispatch
+    mov     sp, x19                         /* restore task stack */
+    bl      aarch64_isr_check_preempt
     restore_context
     eret
 

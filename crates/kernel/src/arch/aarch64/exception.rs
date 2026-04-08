@@ -20,6 +20,22 @@ fn esr_ec(esr: u64) -> u32 {
 /// Rust exception dispatch. Called from the assembly stubs.
 /// `exc_type`: 0 = synchronous, 1 = IRQ, 99 = unhandled
 /// `esr`: ESR_EL1 value (for synchronous exceptions)
+/// Called from IRQ handlers (irq_el0_handler, irq_el1_handler) after switching
+/// back to the task stack. Checks if preemption is needed (preempt_count == 0
+/// and need_resched set). Safe because the exception frame is below us on the
+/// task stack, preserved across any context_switch.
+#[no_mangle]
+pub unsafe extern "C" fn aarch64_isr_check_preempt() {
+    if crate::arch::preemptible() {
+        let sched = crate::scheduler::get();
+        if sched.need_resched {
+            crate::arch::preempt_disable();
+            sched.schedule();
+            crate::arch::preempt_enable();
+        }
+    }
+}
+
 /// `far`: FAR_EL1 value (fault address)
 /// `frame`: pointer to saved registers on stack
 #[no_mangle]

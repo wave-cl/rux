@@ -39,6 +39,10 @@ pub struct PerCpu {
     /// Preemption nesting count. ISR only calls schedule() when this is 0.
     /// Incremented by irq_disable/sched_lock, decremented by irq_restore/sched_unlock.
     pub preempt_count: u32,         // offset 48
+    _pad2: [u8; 4],                 // offset 52 (align irq_stack_top to 8)
+    /// Top of per-CPU IRQ stack (aarch64). IRQ handlers run on this stack
+    /// to avoid corrupting the task kernel stack's exception frame.
+    pub irq_stack_top: u64,         // offset 56
 }
 
 /// Assembly-accessible offsets into PerCpu (must match #[repr(C)] layout).
@@ -48,6 +52,8 @@ pub const PERCPU_OFFSET_SAVED_USER_RSP: usize = 0;
 pub const PERCPU_OFFSET_SAVED_A5: usize = 8;
 #[allow(dead_code)]
 pub const PERCPU_OFFSET_KSTACK_TOP: usize = 16;
+#[allow(dead_code)]
+pub const PERCPU_OFFSET_IRQ_STACK_TOP: usize = 56;
 
 impl PerCpu {
     pub const fn new() -> Self {
@@ -55,6 +61,7 @@ impl PerCpu {
             saved_user_rsp: 0, saved_syscall_a5: 0, syscall_kstack_top: 0,
             cpu_id: 0, online: false, idle: true, _pad: [0; 2],
             current_task_idx: 0, kstack_top: 0, preempt_count: 0,
+            _pad2: [0; 4], irq_stack_top: 0,
         }
     }
 }
