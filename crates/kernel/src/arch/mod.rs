@@ -50,29 +50,60 @@ pub use native::probe_blk;
 #[cfg(all(feature = "native", feature = "net"))]
 pub use native::probe_and_init_net;
 
+/// Increment preempt_count (prevents ISR from calling schedule).
+#[inline(always)]
+pub unsafe fn preempt_disable() {
+    #[cfg(not(feature = "native"))]
+    { crate::percpu::this_cpu().preempt_count += 1; }
+}
+
+/// Decrement preempt_count.
+#[inline(always)]
+pub unsafe fn preempt_enable() {
+    #[cfg(not(feature = "native"))]
+    {
+        let pc = crate::percpu::this_cpu();
+        if pc.preempt_count > 0 { pc.preempt_count -= 1; }
+    }
+}
+
+/// Check if preemption is allowed (preempt_count == 0).
+#[inline(always)]
+pub unsafe fn preemptible() -> bool {
+    #[cfg(not(feature = "native"))]
+    { crate::percpu::this_cpu().preempt_count == 0 }
+    #[cfg(feature = "native")]
+    { true }
+}
+
 /// Disable hardware interrupts. Returns whether interrupts were previously enabled.
+/// Also increments preempt_count to prevent ISR preemption.
 #[inline(always)]
 pub unsafe fn irq_disable() -> bool {
     #[cfg(target_arch = "x86_64")]
-    {
+    let was = {
         let flags: u64;
-        core::arch::asm!("pushfq; pop {}; cli", out(reg) flags, options(preserves_flags));
+        core::arch::asm!("pushfq; pop {}; cli", out(reg) flags);
         flags & 0x200 != 0
-    }
+    };
     #[cfg(target_arch = "aarch64")]
-    {
+    let was = {
         let daif: u64;
         core::arch::asm!("mrs {}, daif", out(reg) daif, options(nostack));
         core::arch::asm!("msr daifset, #2", options(nostack));
-        daif & (1 << 7) == 0 // IRQ bit clear = interrupts were enabled
-    }
+        daif & (1 << 7) == 0
+    };
     #[cfg(feature = "native")]
-    { false }
+    let was = false;
+    preempt_disable();
+    was
 }
 
 /// Restore hardware interrupts to a previous state.
+/// Decrements preempt_count.
 #[inline(always)]
 pub unsafe fn irq_restore(was_enabled: bool) {
+    preempt_enable();
     if was_enabled {
         #[cfg(target_arch = "x86_64")]
         core::arch::asm!("sti", options(nostack, preserves_flags));

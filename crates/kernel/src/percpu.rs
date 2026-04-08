@@ -36,6 +36,9 @@ pub struct PerCpu {
     pub current_task_idx: usize,    // offset 32
     /// Kernel stack top (legacy, same as syscall_kstack_top).
     pub kstack_top: u64,            // offset 40
+    /// Preemption nesting count. ISR only calls schedule() when this is 0.
+    /// Incremented by irq_disable/sched_lock, decremented by irq_restore/sched_unlock.
+    pub preempt_count: u32,         // offset 48
 }
 
 /// Assembly-accessible offsets into PerCpu (must match #[repr(C)] layout).
@@ -51,7 +54,7 @@ impl PerCpu {
         Self {
             saved_user_rsp: 0, saved_syscall_a5: 0, syscall_kstack_top: 0,
             cpu_id: 0, online: false, idle: true, _pad: [0; 2],
-            current_task_idx: 0, kstack_top: 0,
+            current_task_idx: 0, kstack_top: 0, preempt_count: 0,
         }
     }
 }

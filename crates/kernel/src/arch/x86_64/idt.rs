@@ -319,9 +319,13 @@ pub unsafe fn load() {
 /// and TSS.rsp0 is updated per-task so each task's ISR frame is on its own stack.
 #[no_mangle]
 pub unsafe extern "C" fn isr_check_preempt() {
-    let sched = crate::scheduler::get();
-    if sched.need_resched {
-        sched.schedule();
+    if crate::arch::preemptible() {
+        let sched = crate::scheduler::get();
+        if sched.need_resched {
+            crate::arch::preempt_disable();
+            sched.schedule();
+            crate::arch::preempt_enable();
+        }
     }
 }
 
@@ -433,13 +437,18 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
 
                 crate::scheduler::locked_tick(1_000_000);
-                // ISR preemption: DEFERRED to safe points.
-                // Kernel-mode preemption (schedule() here) causes deadlocks
-                // from re-entrant schedule() when the preempted task was already
-                // inside schedule/pipe_block/syscall. Full kernel preemption
-                // requires a preempt_count mechanism (future work).
-                // Preemption occurs at: (1) post_syscall, (2) idle loop,
-                // (3) ISR return to user mode (isr_check_preempt).
+                // ISR preemption: safe when preempt_count == 0 (task is not
+                // inside schedule/pipe_block/sched_lock). Critical sections
+                // increment preempt_count via irq_disable or sched_lock.
+                // Also preempts on ISR return to user mode (isr_check_preempt).
+                if crate::arch::preemptible() {
+                    let sched = crate::scheduler::get();
+                    if sched.need_resched {
+                        crate::arch::preempt_disable();
+                        sched.schedule();
+                        crate::arch::preempt_enable();
+                    }
+                }
             }
         }
         48 => {

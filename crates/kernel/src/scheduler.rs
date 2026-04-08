@@ -14,9 +14,10 @@ static mut SCHED: Scheduler = Scheduler::new();
 /// access by BSP timer ISR, AP timer ISR, and syscall return paths.
 pub static SCHED_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Acquire the scheduler lock (spinlock).
+/// Acquire the scheduler lock (spinlock). Also disables preemption.
 #[inline(always)]
 pub fn sched_lock() {
+    unsafe { crate::arch::preempt_disable(); }
     while SCHED_LOCK.compare_exchange_weak(
         false, true,
         core::sync::atomic::Ordering::Acquire,
@@ -26,10 +27,11 @@ pub fn sched_lock() {
     }
 }
 
-/// Release the scheduler lock.
+/// Release the scheduler lock. Also re-enables preemption.
 #[inline(always)]
 pub fn sched_unlock() {
     SCHED_LOCK.store(false, core::sync::atomic::Ordering::Release);
+    unsafe { crate::arch::preempt_enable(); }
 }
 
 /// Get a mutable reference to the global scheduler.
