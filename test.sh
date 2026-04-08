@@ -270,6 +270,10 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',7777)); s.listen(1); print('listen_ok'); s.close()" 2>&1
+python3 -c "import json; d={'name':'rux'}; print('json_ok' if json.loads(json.dumps(d))['name']=='rux' else 'FAIL')" 2>&1
+python3 -c "import hashlib; print('hash_' + hashlib.sha256(b'hello').hexdigest()[:8])" 2>&1
+python3 -c "import os,tempfile; fd,p=tempfile.mkstemp(); os.write(fd,b'tmp_ok\n'); os.close(fd); print(open(p).read().strip()); os.unlink(p)" 2>&1
+perl -e 'my @a=sort(3,1,2); print join(",",@a)."\n"' 2>&1
 sqlite3 /tmp/t.db "CREATE TABLE t(id INT, name TEXT); INSERT INTO t VALUES(1,'rux'); SELECT * FROM t;" 2>&1
 lua5.4 -e 'print("lua:" .. 6*7)' 2>&1
 lua5.4 -e 'print(string.format("pi=%.2f", math.pi))' 2>&1
@@ -456,6 +460,10 @@ check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
 check "tcp listen"           "listen_ok"
+check "python json"          "json_ok"
+check "python hashlib"       "hash_2cf24dba"
+check "python tempfile"      "tmp_ok"
+check "perl sort"            "1,2,3"
 check "sqlite3"              "1|rux"
 check "lua print"            "lua:42"
 check "lua math"             "pi=3.14"
@@ -660,6 +668,9 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 TESTENV=rux123 sh -c 'echo $TESTENV'
+python3 -c "import json; d={'name':'rux'}; print('json_ok' if json.loads(json.dumps(d))['name']=='rux' else 'FAIL')" 2>&1
+python3 -c "import hashlib; print('hash_' + hashlib.sha256(b'hello').hexdigest()[:8])" 2>&1
+perl -e 'my @a=sort(3,1,2); print join(",",@a)."\n"' 2>&1
 sqlite3 /tmp/t.db "CREATE TABLE t(id INT, name TEXT); INSERT INTO t VALUES(1,'rux'); SELECT * FROM t;" 2>&1
 lua5.4 -e 'print("lua:" .. 6*7)' 2>&1
 git --version 2>&1
@@ -831,6 +842,9 @@ check "pipe splice"          "splice_splicedata"
 check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
+check "python json"          "json_ok"
+check "python hashlib"       "hash_2cf24dba"
+check "perl sort"            "1,2,3"
 check "sqlite3"              "1|rux"
 check "lua print"            "lua:42"
 check "git version"          "git version"
