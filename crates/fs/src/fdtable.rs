@@ -201,7 +201,12 @@ pub fn sys_close(fd: usize, pipes: Option<&PipeFns>) -> isize {
     unsafe {
         let f = match get_fd(fd) {
             Some(f) => f,
-            None => return -9,
+            None => {
+                // Console fds 0-2: closing an already-closed console fd is harmless.
+                // Programs like git call close(1) then fclose(stdout) which closes again.
+                if fd <= 2 { return 0; }
+                return -9;
+            }
         };
         if f.is_pipe {
             if let Some(p) = pipes {
