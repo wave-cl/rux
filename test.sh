@@ -136,7 +136,6 @@ touch /tmp/ts && stat /tmp/ts | grep Modify
 echo abc | cat
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
-timeout 1 sleep 10 ; echo timeout_exit=$?
 tail -c 8 /etc/passwd
 find /etc -name passwd 2>/dev/null
 sort /etc/passwd | head -1
@@ -179,7 +178,6 @@ ulimit -s
 yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
 touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
 cat /proc/self/cmdline | tr '\0' ' '
-timeout 5 top -bn1 -d1 2>&1 | head -3
 awk 'BEGIN{print "awk:" 6*7}'
 echo test_sed | sed 's/sed/SED/'
 echo -e 'cherry\napple\nbanana' | sort | head -1
@@ -294,6 +292,8 @@ git init /tmp/repo 2>&1 | tail -1
 cd /tmp/repo && git config user.email "t@rux" && git config user.name "rux" && echo hello > f.txt && git add f.txt && GIT_PAGER=cat git commit -m "init" 2>&1 | grep -E 'master|create'
 cd /
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
+timeout 1 sleep 10 ; echo timeout_exit=$?
+timeout 5 top -bn1 -d1 2>&1 | head -3
 exit
 CMDS
 } | \
@@ -572,7 +572,6 @@ echo hello | tr a-z A-Z
 echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
-timeout 1 sleep 10 ; echo timeout_exit=$?
 cat /proc/$$/stat | cut -d" " -f5
 cp /etc/passwd /tmp/cp_test && wc -l /tmp/cp_test
 echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
@@ -600,7 +599,6 @@ ulimit -s
 yes 2>/dev/null | head -c 1 > /dev/null ; echo sigpipe_ok
 touch /tmp/nr1 /tmp/nr2; mv /tmp/nr1 /tmp/nr2 2>&1; echo rename_done
 cat /proc/self/cmdline | tr '\0' ' '
-timeout 5 top -bn1 -d1 2>&1 | head -3
 awk 'BEGIN{print "awk:" 6*7}'
 echo test_sed | sed 's/sed/SED/'
 echo -e 'cherry\napple\nbanana' | sort | head -1
@@ -711,6 +709,7 @@ lua5.4 -e 'function fib(n) if n<2 then return n end; return fib(n-1)+fib(n-2) en
 perl -e 'sub fib{$_[0]<2?$_[0]:fib($_[0]-1)+fib($_[0]-2)}; print "pl_fib=" . fib(20) . "\n"'
 git --version 2>&1
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
+timeout 1 sleep 10 ; echo timeout_exit=$?
 exit
 CMDS
 } | \
