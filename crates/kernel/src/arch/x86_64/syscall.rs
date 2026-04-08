@@ -6,21 +6,10 @@ use super::console;
 
 // ── SYSCALL instruction setup (Linux x86_64 ABI) ───────────────────
 
-/// Kernel stack for syscall entry. For multi-process, each task will have
-/// its own stack in KSTACKS; CURRENT_KSTACK_TOP selects which is active.
-#[repr(C, align(16))]
-struct AlignedStack([u8; 65536]);
-static mut SYSCALL_STACK: AlignedStack = AlignedStack([0; 65536]);
-
 /// Points to the top of the current task's kernel stack.
-/// Used by SignalOps and VforkContext to access the saved register frame.
-/// Updated on context switch (future).
+/// Each task uses KSTACKS[idx]; this global is updated on context switch.
+/// Used by SignalOps, VforkContext, and the RIP-relative syscall entry path.
 pub static mut CURRENT_KSTACK_TOP: u64 = 0;
-
-/// Get the top address of the default SYSCALL_STACK.
-pub fn syscall_stack_top() -> u64 {
-    (&raw const SYSCALL_STACK).cast::<u8>() as u64 + 65536
-}
 
 /// Saved user RSP during syscall (single-process, no swapgs needed).
 #[no_mangle]

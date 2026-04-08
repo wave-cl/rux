@@ -2,7 +2,7 @@
 
 unsafe impl rux_arch::TaskSwitchOps for super::X86_64 {
     unsafe fn pid1_kstack_top() -> usize {
-        super::syscall::syscall_stack_top() as usize
+        crate::task_table::KSTACKS.0[1].as_ptr() as usize + crate::task_table::KSTACK_SIZE
     }
 
     unsafe fn init_pid1_hw(kstack_top: usize) {

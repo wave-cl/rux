@@ -434,9 +434,10 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
 
                 crate::scheduler::locked_tick(1_000_000);
                 // x86_64 ISR preemption: DEFERRED.
-                // The timer ISR sets need_resched via locked_tick() but does NOT
-                // call schedule() directly (context_switch inside the ISR corrupts
-                // the ISR frame on QEMU TCG due to shared SYSCALL_STACK).
+                // Per-task kernel stacks (KSTACKS[idx]) are in place, but full
+                // ISR preemption (schedule() inside the timer handler) causes
+                // corruption on QEMU TCG — likely due to re-entrant interrupt
+                // delivery or stack alignment issues during context_switch.
                 // Preemption occurs at: (1) post_syscall return, (2) idle loop,
                 // (3) ISR return to user mode (isr_check_preempt in interrupt_common).
             }

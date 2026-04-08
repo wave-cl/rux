@@ -340,12 +340,15 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
     }
 }
 
+/// Callback for closing sockets on exec. Takes fd index.
+pub type SocketCloseFn = fn(usize);
+
 /// Close FD_CLOEXEC fds on exec. Non-cloexec fds are inherited.
 /// Linux closes only fds with FD_CLOEXEC set; others pass to the new program.
-/// Must properly close pipe ends (decrement reader/writer count) so that
-/// EOF is delivered to blocked readers when all writers are gone.
+/// Properly closes pipes (decrement reader/writer count) and sockets
+/// (TCP close, socket_free) so resources are not leaked across exec.
 /// Returns list of pipe_ids that were closed (caller should wake waiters).
-pub fn reset_with_pipes(pipes: Option<&PipeFns>) -> [u8; 16] {
+pub fn close_on_exec(pipes: Option<&PipeFns>, sock_close: Option<SocketCloseFn>) -> [u8; 16] {
     let mut closed_pipes = [0xFFu8; 16];
     let mut cp_count = 0;
     unsafe {
@@ -357,12 +360,19 @@ pub fn reset_with_pipes(pipes: Option<&PipeFns>) -> [u8; 16] {
                         (p.close)(pid, (*FD_TABLE)[fd].pipe_write);
                     }
                     if cp_count < 16 { closed_pipes[cp_count] = pid; cp_count += 1; }
+                } else if (*FD_TABLE)[fd].is_socket {
+                    if let Some(sc) = sock_close { sc(fd); }
                 }
                 (*FD_TABLE)[fd].active = false;
             }
         }
     }
     closed_pipes
+}
+
+/// Legacy close_on_exec without socket cleanup.
+pub fn reset_with_pipes(pipes: Option<&PipeFns>) -> [u8; 16] {
+    close_on_exec(pipes, None)
 }
 
 /// Legacy reset (no pipe cleanup). Used by kernel boot path.

@@ -496,6 +496,33 @@ pub fn sys_shutdown(fd: usize, how: usize) -> isize {
     0
 }
 
+/// Close a CLOEXEC socket during exec. Called from close_on_exec callback.
+/// The fd is known to be active and is_socket — skip those checks.
+pub fn close_socket_for_exec(fd: usize) {
+    unsafe {
+        let sock_idx = (*rux_fs::fdtable::FD_TABLE)[fd].socket_idx as usize;
+        // Check if any OTHER fd still references this socket
+        let still_referenced = (0..rux_fs::fdtable::MAX_FDS).any(|f| {
+            f != fd && {
+                let e = &(*rux_fs::fdtable::FD_TABLE)[f];
+                e.active && e.is_socket && e.socket_idx as usize == sock_idx
+                    && e.fd_flags & rux_fs::fdtable::FD_CLOEXEC == 0 // non-CLOEXEC fd survives exec
+            }
+        });
+        if !still_referenced && sock_idx < MAX_SOCKETS {
+            #[cfg(feature = "net")]
+            if SOCKETS[sock_idx].smol_handle_raw >= 0 {
+                let handle = to_handle(SOCKETS[sock_idx].smol_handle_raw);
+                if SOCKETS[sock_idx].sock_type == SOCK_STREAM {
+                    rux_net::tcp_close(handle);
+                }
+                rux_net::socket_free(handle);
+            }
+            SOCKETS[sock_idx].active = false;
+        }
+    }
+}
+
 /// close a socket
 pub fn sys_close_socket(fd: usize) -> isize {
     unsafe {

@@ -171,7 +171,10 @@ pub unsafe fn load_elf_from_inode(
         crate::syscall::process().mmap_base = 0x10000000 + random_offset;
     }
     {
-        let closed = rux_fs::fdtable::reset_with_pipes(Some(&crate::pipe::PIPE));
+        let closed = rux_fs::fdtable::close_on_exec(
+            Some(&crate::pipe::PIPE),
+            Some(crate::syscall::socket::close_socket_for_exec),
+        );
         for &pid in &closed {
             if pid != 0xFF { crate::pipe::wake_pipe_waiters(pid); }
         }
