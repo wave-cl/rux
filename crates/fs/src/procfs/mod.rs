@@ -40,7 +40,9 @@ const INO_SYS_K_RANDOM_DIR: InodeId = 16;// /proc/sys/kernel/random
 const INO_SYS_K_RANDOM_UUID: InodeId = 17;// /proc/sys/kernel/random/uuid
 const INO_SYS_VM_OVERCOMMIT: InodeId = 18;// /proc/sys/vm/overcommit_memory
 const INO_NET_DIR: InodeId = 19;          // /proc/net
-const INO_CPUINFO: InodeId = 20;          // /proc/cpuinfo
+const INO_NET_TCP: InodeId = 20;          // /proc/net/tcp
+const INO_NET_UDP: InodeId = 21;          // /proc/net/udp
+const INO_CPUINFO: InodeId = 22;          // /proc/cpuinfo
 
 const NUM_SYS_ENTRIES: usize = 12;
 
@@ -171,6 +173,18 @@ impl ProcFs {
             }
             INO_CPUINFO => {
                 self.gen_cpuinfo(buf)
+            }
+            INO_NET_TCP => {
+                let s = b"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                len
+            }
+            INO_NET_UDP => {
+                let s = b"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                len
             }
             INO_SYS_K_OSRELEASE => {
                 let s = concat!(env!("CARGO_PKG_VERSION"), "\n");
@@ -525,6 +539,15 @@ impl FileSystem for ProcFs {
             };
         }
 
+        // /proc/net
+        if dir == INO_NET_DIR {
+            return match name_bytes {
+                b"tcp" => Ok(INO_NET_TCP),
+                b"udp" => Ok(INO_NET_UDP),
+                _ => Err(VfsError::NotFound),
+            };
+        }
+
         Err(VfsError::NotADirectory)
     }
 
@@ -620,9 +643,10 @@ impl FileSystem for ProcFs {
             let entries: &[(&[u8], InodeId)] = &[(b"overcommit_memory", INO_SYS_VM_OVERCOMMIT)];
             return readdir_static(entries, offset, buf, false);
         }
-        // /proc/net (empty for now)
+        // /proc/net
         if dir == INO_NET_DIR {
-            return Ok(false);
+            let entries: &[(&[u8], InodeId)] = &[(b"tcp", INO_NET_TCP), (b"udp", INO_NET_UDP)];
+            return readdir_static(entries, offset, buf, false);
         }
 
         Err(VfsError::NotADirectory)
