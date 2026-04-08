@@ -88,6 +88,7 @@ pub unsafe fn init(
     netmask: [u8; 4],
 ) {
     (*(&raw mut DEVICE)).init(send_fn, recv_fn);
+    (*(&raw mut DEVICE)).our_ip = ip;
     *(&raw mut OUR_IP) = ip;
 
     let hw_addr = HardwareAddress::Ethernet(EthernetAddress(mac));
