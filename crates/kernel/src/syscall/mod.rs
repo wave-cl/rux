@@ -775,11 +775,20 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     let now_ns = now_sec * 1_000_000_000 + now_nsec;
                     if abs_ns <= now_ns { return 0; }
                     let delta_ms = (abs_ns - now_ns) / 1_000_000;
+                    if delta_ms == 0 { return 0; }
                     let deadline = now_ticks + delta_ms;
-                    // HLT loop until deadline
-                    while crate::arch::Arch::ticks() < deadline {
-                        use rux_arch::HaltOps;
-                        crate::arch::Arch::halt_until_interrupt();
+                    // Use scheduler sleep — idle task handles HLT
+                    let idx = crate::task_table::current_task_idx();
+                    crate::task_table::TASK_TABLE[idx].wake_at = deadline;
+                    crate::task_table::TASK_TABLE[idx].state =
+                        crate::task_table::TaskState::Sleeping;
+                    let sched = crate::scheduler::get();
+                    sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
+                    sched.dequeue_current();
+                    sched.need_resched = true;
+                    sched.schedule();
+                    if crate::arch::Arch::ticks() < deadline {
+                        return crate::errno::EINTR;
                     }
                 }
                 0
@@ -1136,11 +1145,11 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
         Err(_) => { return crate::errno::ENOENT; }
     };
 
-    // Task slot 0 is the init process. For real fork children (slot > 0),
+    // Task slot 1 is the init process. For real fork children (slot > 1),
     // we must NOT call begin_child because that would free the parent's exec frames.
     // Instead: directly switch CR3 to kernel PT, free the forked PT, skip CHILD_PAGES.
     // Fork children use free_user_address_space in waitpid for cleanup.
-    let is_fork_child = crate::task_table::current_task_idx() != 0;
+    let is_fork_child = crate::task_table::current_task_idx() > 1;
 
     if is_fork_child {
         let idx = crate::task_table::current_task_idx();

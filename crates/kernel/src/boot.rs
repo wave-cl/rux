@@ -94,7 +94,9 @@ pub unsafe fn boot(params: BootParams) -> ! {
 
     // Init kernel state
     crate::kstate::init(vfs_ptr, alloc_ptr);
+    crate::task_table::init_idle();
     crate::task_table::init_pid1();
+    crate::scheduler::init_idle_sched();
     { use rux_mm::FrameAllocator; crate::cow::init((*alloc_ptr).alloc_base()); }
     // Set CWD to VFS root (ext2 root if mounted, otherwise ramfs root)
     {

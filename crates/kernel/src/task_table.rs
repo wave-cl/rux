@@ -290,12 +290,26 @@ pub unsafe fn wake_sleepers() {
     }
 }
 
-/// Initialize task slot 0 as PID 1 (init).
-/// Called from boot.rs after kstate::init().
+/// Initialize task slot 0 as the idle task (PID 0).
+/// The idle task runs when no other tasks are runnable.
+/// Called from boot.rs before init_pid1().
+pub unsafe fn init_idle() {
+    let slot = &mut TASK_TABLE[0];
+    slot.active = true;
+    slot.pid = 0;
+    slot.ppid = 0;
+    slot.pgid = 0;
+    slot.state = TaskState::Running;
+    slot.kstack_top = KSTACKS.0[0].as_ptr() as usize + KSTACK_SIZE;
+    // No FDs, no page table, no user state needed for idle
+}
+
+/// Initialize task slot 1 as PID 1 (init).
+/// Called from boot.rs after init_idle().
 pub unsafe fn init_pid1() {
     use rux_arch::TaskSwitchOps;
 
-    let slot = &mut TASK_TABLE[0];
+    let slot = &mut TASK_TABLE[1];
     slot.active = true;
     slot.pid = 1;
     slot.ppid = 0;
@@ -306,9 +320,9 @@ pub unsafe fn init_pid1() {
     slot.kstack_top = kstack;
     crate::arch::Arch::init_pid1_hw(kstack);
 
-    slot.asid = 1; // PID 1 gets ASID 1
-    slot.tgid = 1; // PID 1's thread group is itself
-    slot.sid = 1;  // PID 1 is session leader
+    slot.asid = 1;
+    slot.tgid = 1;
+    slot.sid = 1;
 
     // Console FDs
     for i in 0..3 {
@@ -318,11 +332,9 @@ pub unsafe fn init_pid1() {
             is_socket: false, socket_idx: 0,
         };
     }
-    set_current_task_idx(0);
+    set_current_task_idx(1);
 
-    // Point FD_TABLE at this task's fd array — all FD accesses go directly
-    // into the slot, eliminating the copy on context switch.
-    rux_fs::fdtable::set_active_fds(&mut TASK_TABLE[0].fds);
+    rux_fs::fdtable::set_active_fds(&mut TASK_TABLE[1].fds);
 }
 
 // ── Context switch process state swap ─────────────────────────────────
@@ -343,6 +355,59 @@ pub unsafe fn init_pid1() {
 /// Must be called with interrupts disabled (during schedule()).
 pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     use rux_arch::TaskSwitchOps;
+
+    // Idle task (slot 0) has no process state — skip save/restore
+    if new_idx == 0 {
+        // Switching TO idle: only save old task's state
+        if old_idx != 0 {
+            let proc_ptr = &raw mut crate::syscall::PROCESS;
+            let tt_ptr = &raw mut TASK_TABLE;
+            let old = &mut (*tt_ptr)[old_idx];
+            old.program_brk = (*proc_ptr).program_brk;
+            old.mmap_base = (*proc_ptr).mmap_base;
+            old.fs_ctx = (*proc_ptr).fs_ctx;
+            old.signal_hot = (*proc_ptr).signal_hot;
+            core::ptr::copy_nonoverlapping(
+                (*proc_ptr).signal_restorer.as_ptr(), old.signal_restorer.as_mut_ptr(), 32,
+            );
+            old.last_child_exit = (*proc_ptr).last_child_exit;
+            old.child_available = (*proc_ptr).child_available;
+            old.uid = (*proc_ptr).uid; old.euid = (*proc_ptr).euid; old.suid = (*proc_ptr).suid;
+            old.gid = (*proc_ptr).gid; old.egid = (*proc_ptr).egid; old.sgid = (*proc_ptr).sgid;
+            crate::arch::Arch::save_task_hw(&mut old.saved_user_sp, &mut old.tls);
+            crate::arch::Arch::save_fpu(&mut old.fpu_state as *mut _ as *mut u8);
+        }
+        set_current_task_idx(0);
+        return;
+    }
+    if old_idx == 0 {
+        // Switching FROM idle: only restore new task's state
+        let proc_ptr = &raw mut crate::syscall::PROCESS;
+        let tt_ptr = &raw mut TASK_TABLE;
+        let new = &(*tt_ptr)[new_idx];
+        (*proc_ptr).program_brk = new.program_brk;
+        (*proc_ptr).mmap_base = new.mmap_base;
+        (*proc_ptr).fs_ctx = new.fs_ctx;
+        (*proc_ptr).signal_hot = new.signal_hot;
+        core::ptr::copy_nonoverlapping(
+            new.signal_restorer.as_ptr(), (*proc_ptr).signal_restorer.as_mut_ptr(), 32,
+        );
+        (*proc_ptr).last_child_exit = new.last_child_exit;
+        (*proc_ptr).child_available = new.child_available;
+        (*proc_ptr).uid = new.uid; (*proc_ptr).euid = new.euid; (*proc_ptr).suid = new.suid;
+        (*proc_ptr).gid = new.gid; (*proc_ptr).egid = new.egid; (*proc_ptr).sgid = new.sgid;
+        let fds_idx = if (*tt_ptr)[new_idx].shared_fds_with != u16::MAX {
+            (*tt_ptr)[new_idx].shared_fds_with as usize } else { new_idx };
+        rux_fs::fdtable::set_active_fds(&mut (*tt_ptr)[fds_idx].fds);
+        crate::arch::Arch::restore_task_hw(new.saved_user_sp, new.tls, new.kstack_top);
+        crate::arch::Arch::restore_fpu(&new.fpu_state as *const _ as *const u8);
+        if new.pt_root != 0 {
+            crate::arch::Arch::switch_page_table(new.pt_root, new.asid);
+        }
+        set_current_task_idx(new_idx);
+        return;
+    }
+
     let proc_ptr = &raw mut crate::syscall::PROCESS;
     let tt_ptr = &raw mut TASK_TABLE;
 

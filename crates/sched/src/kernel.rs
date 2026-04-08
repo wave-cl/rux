@@ -133,6 +133,11 @@ impl Scheduler {
         self.cfs.set_clock(0, self.clock_ns);
 
         let current = self.current;
+        // Idle task (slot 0) is never on the CFS runqueue — skip task_tick
+        if current == 0 {
+            // But still check if any tasks were woken (need_resched set by wake_task)
+            return;
+        }
         if current < MAX_TASKS && self.tasks[current].active {
             let entity = &mut self.tasks[current].entity;
             if self.cfs.task_tick(0, entity) {
@@ -158,6 +163,7 @@ impl Scheduler {
         self.tasks[idx].entity.state = TaskState::Ready;
         self.cfs.set_clock(0, self.clock_ns);
         self.cfs.enqueue(0, &mut self.tasks[idx].entity, 0);
+        self.need_resched = true; // trigger reschedule (especially from idle)
     }
 
     /// Perform a context switch if one is pending.

@@ -337,10 +337,12 @@ pub fn nanosleep(req_ptr: usize) -> isize {
         crate::task_table::TASK_TABLE[idx].wake_at = deadline;
         crate::task_table::TASK_TABLE[idx].state = crate::task_table::TaskState::Sleeping;
 
-        // Yield to scheduler — we'll be woken by the timer tick
-        // handler when wake_at is reached, or by a signal.
+        // Yield to scheduler — dequeue self so schedule() switches to idle.
+        // Timer ISR calls wake_sleepers() which re-enqueues us when deadline passes.
         let sched = crate::scheduler::get();
         sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
+        sched.dequeue_current();
+        sched.need_resched = true;
         sched.schedule();
 
         // Woke up — check why

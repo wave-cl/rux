@@ -204,7 +204,7 @@ unsafe impl rux_arch::PerCpuOps for NativeArch {
 
 unsafe impl rux_arch::TaskSwitchOps for NativeArch {
     unsafe fn pid1_kstack_top() -> usize {
-        crate::task_table::KSTACKS.0[0].as_ptr() as usize + crate::task_table::KSTACK_SIZE
+        crate::task_table::KSTACKS.0[1].as_ptr() as usize + crate::task_table::KSTACK_SIZE
     }
     unsafe fn init_pid1_hw(_kstack_top: usize) {}
     #[inline(always)]

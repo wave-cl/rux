@@ -36,3 +36,26 @@ pub unsafe fn init_context_fns() {
         pre_switch: Some(crate::task_table::swap_process_state),
     });
 }
+
+/// Set up the idle task (slot 0) in the scheduler with a proper stack frame,
+/// and mark PID 1 (slot 1) as the initial running task.
+///
+/// # Safety
+/// Must be called after init_context_fns() and init_idle()/init_pid1().
+pub unsafe fn init_idle_sched() {
+    use rux_arch::ContextOps;
+    let sched = get();
+    let idle_stack_top = crate::task_table::KSTACKS.0[0].as_ptr() as usize
+        + crate::task_table::KSTACK_SIZE;
+    sched.tasks[0].saved_sp = crate::arch::Arch::init_task_stack(
+        idle_stack_top,
+        crate::idle::idle_loop as usize,
+        0, // nice
+    );
+    // Slot 0 is already marked active in Scheduler::new().
+    // PID 1 runs in slot 1 — set it as current and active in the scheduler.
+    sched.tasks[1].active = true;
+    sched.tasks[1].entity = rux_sched::entity::SchedEntity::new(1);
+    sched.tasks[1].entity.state = rux_sched::TaskState::Running;
+    sched.current = 1;
+}

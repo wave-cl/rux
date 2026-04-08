@@ -17,6 +17,7 @@ mod uaccess;
 mod task_table;
 mod percpu;
 mod fork;
+mod idle;
 mod errno;
 
 #[cfg(feature = "native")]
