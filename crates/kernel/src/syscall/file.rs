@@ -161,7 +161,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         };
         // SIGPIPE: set pending signal (post_syscall delivers it)
         if result == crate::errno::EPIPE {
-            super::PROCESS.signal_hot.pending = super::PROCESS.signal_hot.pending.add(13); // SIGPIPE=13
+            super::process().signal_hot.pending = super::process().signal_hot.pending.add(13); // SIGPIPE=13
         }
         // Update mtime on successful file write (skip pipes/console)
         if result > 0 && fd < rux_fs::fdtable::MAX_FDS {
@@ -182,7 +182,7 @@ unsafe fn create_and_open(dir_ino: rux_fs::InodeId, fname: rux_fs::FileName<'_>,
     use rux_fs::FileSystem;
     let cred = super::current_cred();
     let fs = crate::kstate::fs();
-    let umask = super::PROCESS.fs_ctx.umask as u32;
+    let umask = super::process().fs_ctx.umask as u32;
     match fs.checked_create(dir_ino, fname, (mode as u32 & 0o7777 & !umask) | 0o100000, &cred) {
         Ok(ino) => {
             let now = super::current_time_secs();
@@ -205,7 +205,7 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
         let resolve_result = if flags & O_NOFOLLOW != 0 {
             let cred = super::current_cred();
             rux_fs::path::resolve_nofollow_checked(
-                crate::kstate::fs(), super::PROCESS.fs_ctx.cwd, path, &cred,
+                crate::kstate::fs(), super::process().fs_ctx.cwd, path, &cred,
             )
         } else {
             super::resolve_with_cwd(path)

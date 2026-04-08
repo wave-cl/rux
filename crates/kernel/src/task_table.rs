@@ -199,6 +199,8 @@ pub unsafe fn set_current_task_idx(idx: usize) {
     crate::percpu::this_cpu().current_task_idx = idx;
     // Keep global in sync for debugging / boot path
     CURRENT_TASK_IDX = idx;
+    // Update per-CPU FD_TABLE CPU ID
+    rux_fs::fdtable::FD_TABLE_CPU_ID = crate::percpu::this_cpu().cpu_id as usize;
 }
 
 /// Get the current task's PID.
@@ -362,7 +364,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     if new_idx == 0 {
         // Switching TO idle: only save old task's state
         if old_idx != 0 {
-            let proc_ptr = &raw mut crate::syscall::PROCESS;
+            let proc_ptr = crate::syscall::process() as *mut crate::syscall::ProcessState;
             let tt_ptr = &raw mut TASK_TABLE;
             let old = &mut (*tt_ptr)[old_idx];
             old.program_brk = (*proc_ptr).program_brk;
@@ -384,7 +386,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     }
     if old_idx == 0 {
         // Switching FROM idle: only restore new task's state
-        let proc_ptr = &raw mut crate::syscall::PROCESS;
+        let proc_ptr = crate::syscall::process() as *mut crate::syscall::ProcessState;
         let tt_ptr = &raw mut TASK_TABLE;
         let new = &(*tt_ptr)[new_idx];
         (*proc_ptr).program_brk = new.program_brk;
@@ -410,7 +412,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
         return;
     }
 
-    let proc_ptr = &raw mut crate::syscall::PROCESS;
+    let proc_ptr = crate::syscall::process() as *mut crate::syscall::ProcessState;
     let tt_ptr = &raw mut TASK_TABLE;
 
     // ── Save current globals → old slot ──────────────────────────────

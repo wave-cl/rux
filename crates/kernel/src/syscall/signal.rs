@@ -30,7 +30,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     if oldact_ptr != 0 && crate::uaccess::validate_user_ptr(oldact_ptr, 32).is_err() { return crate::errno::EFAULT; }
 
     unsafe {
-        let cold = &mut (*(&raw mut super::PROCESS)).signal_cold;
+        let cold = &mut (*super::process()).signal_cold;
 
         // Write old action to user oldact
         if oldact_ptr != 0 {
@@ -42,7 +42,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
             };
             Arch::write_sigaction(
                 oldact_ptr, handler, old.flags as u32, old.mask.0,
-                super::PROCESS.signal_restorer[signum],
+                super::process().signal_restorer[signum],
             );
         }
 
@@ -67,7 +67,7 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
             // Also write to per-task slot for fork inheritance
             let _ = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx()).set_action(sig, action);
             if Arch::HAS_RESTORER {
-                super::PROCESS.signal_restorer[signum] = restorer;
+                super::process().signal_restorer[signum] = restorer;
             }
         }
     }
@@ -79,7 +79,7 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
     use rux_proc::signal::*;
     if sigsetsize > 8 { return crate::errno::EINVAL; }
     unsafe {
-        let hot = &mut (*(&raw mut super::PROCESS)).signal_hot;
+        let hot = &mut (*super::process()).signal_hot;
 
         // Write old mask
         if oldset_ptr != 0 {
@@ -124,7 +124,7 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
 /// the target's real uid and saved-set-user-ID.
 #[inline]
 unsafe fn check_kill_permission(_target_idx: usize) -> bool {
-    let my_euid = super::PROCESS.euid;
+    let my_euid = super::process().euid;
     if my_euid == 0 { return true; }
     // TODO: when TaskSlot gains uid field, check:
     // my_euid == TASK_TABLE[target_idx].uid || my_euid == TASK_TABLE[target_idx].saved_uid
@@ -213,7 +213,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
     if to_self {
         // Send signal to current process.
         unsafe {
-            let hot = &mut (*(&raw mut super::PROCESS)).signal_hot;
+            let hot = &mut (*super::process()).signal_hot;
             let cold = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx());
             let action = *cold.get_action(sig);
 

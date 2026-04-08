@@ -54,16 +54,28 @@ static mut FD_TABLE_STORAGE: [OpenFile; MAX_FDS] = [EMPTY_FD; MAX_FDS];
 /// Pointer to the current task's FD array. On context switch, this is
 /// reassigned to the new task's `fds` field — no copy needed.
 /// Before init_pid1, points to FD_TABLE_STORAGE.
+/// Per-CPU FD_TABLE pointers for SMP safety.
+/// Each CPU has its own pointer to the current task's fd array.
+pub static mut FD_TABLE_PERCPU: [*mut [OpenFile; MAX_FDS]; 16] = [core::ptr::null_mut(); 16];
+
+/// Current CPU ID for FD_TABLE access (set by kernel on context switch).
+pub static mut FD_TABLE_CPU_ID: usize = 0;
+
+/// Get the current CPU's FD_TABLE pointer.
+#[inline(always)]
+pub unsafe fn fd_table() -> *mut [OpenFile; MAX_FDS] {
+    FD_TABLE_PERCPU[FD_TABLE_CPU_ID]
+}
+
+/// Legacy alias for compatibility.
 pub static mut FD_TABLE: *mut [OpenFile; MAX_FDS] = core::ptr::null_mut();
 
 /// Point FD_TABLE at a task's FD array. Called on context switch and init.
-///
-/// # Safety
-/// `fds` must be a valid pointer to a `[OpenFile; MAX_FDS]` that outlives
-/// all accesses through FD_TABLE (i.e., a TaskSlot.fds field).
+/// Updates both the per-CPU pointer and the legacy global.
 #[inline(always)]
 pub unsafe fn set_active_fds(fds: *mut [OpenFile; MAX_FDS]) {
-    FD_TABLE = fds;
+    FD_TABLE_PERCPU[FD_TABLE_CPU_ID] = fds;
+    FD_TABLE = fds; // legacy compatibility
 }
 
 /// Point FD_TABLE at boot-time storage (used before task table exists).

@@ -166,7 +166,7 @@ pub unsafe fn sys_fork() -> isize {
 
     // Notify parent
     TASK_TABLE[parent_idx].child_available = true;
-    crate::syscall::PROCESS.child_available = true;
+    crate::syscall::process().child_available = true;
 
     child_pid as isize
 }
@@ -260,19 +260,19 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, parent_tid_ptr: usize,
 #[inline]
 pub unsafe fn sync_globals_to_slot(idx: usize) {
     let slot = &mut TASK_TABLE[idx];
-    slot.program_brk = crate::syscall::PROCESS.program_brk;
-    slot.mmap_base = crate::syscall::PROCESS.mmap_base;
-    slot.fs_ctx = crate::syscall::PROCESS.fs_ctx;
-    slot.signal_hot = crate::syscall::PROCESS.signal_hot;
-    slot.signal_restorer = crate::syscall::PROCESS.signal_restorer;
-    slot.last_child_exit = crate::syscall::PROCESS.last_child_exit;
-    slot.child_available = crate::syscall::PROCESS.child_available;
-    slot.uid = crate::syscall::PROCESS.uid;
-    slot.euid = crate::syscall::PROCESS.euid;
-    slot.suid = crate::syscall::PROCESS.suid;
-    slot.gid = crate::syscall::PROCESS.gid;
-    slot.egid = crate::syscall::PROCESS.egid;
-    slot.sgid = crate::syscall::PROCESS.sgid;
+    slot.program_brk = crate::syscall::process().program_brk;
+    slot.mmap_base = crate::syscall::process().mmap_base;
+    slot.fs_ctx = crate::syscall::process().fs_ctx;
+    slot.signal_hot = crate::syscall::process().signal_hot;
+    slot.signal_restorer = crate::syscall::process().signal_restorer;
+    slot.last_child_exit = crate::syscall::process().last_child_exit;
+    slot.child_available = crate::syscall::process().child_available;
+    slot.uid = crate::syscall::process().uid;
+    slot.euid = crate::syscall::process().euid;
+    slot.suid = crate::syscall::process().suid;
+    slot.gid = crate::syscall::process().gid;
+    slot.egid = crate::syscall::process().egid;
+    slot.sgid = crate::syscall::process().sgid;
 
     use rux_arch::ForkOps;
     crate::arch::Arch::snapshot_hw_state(

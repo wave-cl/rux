@@ -162,13 +162,13 @@ pub unsafe fn load_elf_from_inode(
     };
 
     // Set program break and mmap base for brk/mmap syscalls
-    crate::syscall::PROCESS.program_brk = max_end as usize;
+    crate::syscall::process().program_brk = max_end as usize;
     // Randomize mmap_base for basic ASLR (0x10000000 + random 0-16MB offset)
     {
         use rux_arch::TimerOps;
         let entropy = crate::arch::Arch::ticks() as usize;
         let random_offset = (entropy & 0xFFF) << 12;
-        crate::syscall::PROCESS.mmap_base = 0x10000000 + random_offset;
+        crate::syscall::process().mmap_base = 0x10000000 + random_offset;
     }
     {
         let closed = rux_fs::fdtable::reset_with_pipes(Some(&crate::pipe::PIPE));
@@ -303,8 +303,8 @@ unsafe fn load_dynamic_interp(
 
     // Bump mmap_base past the interpreter's end
     let interp_end_aligned = ((interp_end + 0xFFF) & !0xFFF) as usize;
-    if interp_end_aligned > crate::syscall::PROCESS.mmap_base {
-        crate::syscall::PROCESS.mmap_base = interp_end_aligned;
+    if interp_end_aligned > crate::syscall::process().mmap_base {
+        crate::syscall::process().mmap_base = interp_end_aligned;
     }
 
     // 5. Set auxv for ld.so

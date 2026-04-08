@@ -600,7 +600,7 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
 
     unsafe {
         let mask = SIGNALFDS[idx].mask;
-        let hot = &mut (*(&raw mut super::PROCESS)).signal_hot;
+        let hot = &mut (*super::process()).signal_hot;
 
         // Find a pending signal that matches the signalfd mask
         let pending_masked = hot.pending.0 & mask;
@@ -631,7 +631,7 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
         *(buf as *mut u32) = signo as u32;                      // ssi_signo
         *((buf + 8) as *mut i32) = 0;                           // ssi_code = SI_USER
         *((buf + 12) as *mut u32) = crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pid; // ssi_pid
-        *((buf + 16) as *mut u32) = super::PROCESS.uid;         // ssi_uid
+        *((buf + 16) as *mut u32) = super::process().uid;         // ssi_uid
 
         128
     }
@@ -641,7 +641,7 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
 pub fn signalfd_has_data(fd: usize) -> bool {
     find_signalfd(fd).map(|idx| unsafe {
         let mask = SIGNALFDS[idx].mask;
-        let hot = &(*(&raw const super::PROCESS)).signal_hot;
+        let hot = &(*super::process()).signal_hot;
         (hot.pending.0 & mask) != 0
     }).unwrap_or(false)
 }
@@ -767,8 +767,8 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             }
             fixed_addr
         } else {
-            let r = super::PROCESS.mmap_base;
-            super::PROCESS.mmap_base += aligned_len;
+            let r = super::process().mmap_base;
+            super::process().mmap_base += aligned_len;
             r
         };
 
@@ -958,8 +958,8 @@ pub fn mremap(old_addr: usize, old_size: usize, new_size: usize, flags: usize, n
 
     // Allocate new region from mmap base
     unsafe {
-        let new_addr = super::PROCESS.mmap_base;
-        super::PROCESS.mmap_base += new_aligned;
+        let new_addr = super::process().mmap_base;
+        super::process().mmap_base += new_aligned;
 
         // Map new pages
         let pg_flags = rux_mm::MappingFlags::READ

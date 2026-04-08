@@ -68,7 +68,24 @@ impl ProcessState {
     }
 }
 
+/// Per-CPU process state. Each CPU has its own copy, swapped on context switch.
+/// This eliminates the SMP race where two CPUs in different syscalls corrupt
+/// each other's program_brk, mmap_base, fs_ctx, signal state, etc.
+static mut PROCESS_PERCPU: [ProcessState; crate::percpu::MAX_CPUS] = {
+    const EMPTY: ProcessState = ProcessState::new();
+    [EMPTY; crate::percpu::MAX_CPUS]
+};
+
+/// Legacy alias — points to CPU 0's process state.
+/// Used during boot before per-CPU is initialized.
 pub static mut PROCESS: ProcessState = ProcessState::new();
+
+/// Get the current CPU's ProcessState.
+#[inline(always)]
+pub unsafe fn process() -> &'static mut ProcessState {
+    let cpu = crate::percpu::this_cpu().cpu_id as usize;
+    &mut PROCESS_PERCPU[cpu]
+}
 
 // ── Page table helper (arch-dispatched) ─────────────────────────────
 
@@ -109,7 +126,7 @@ pub unsafe fn map_user_pages(
 /// Build credentials from the current process state.
 #[inline(always)]
 pub unsafe fn current_cred() -> rux_fs::Credentials {
-    rux_fs::Credentials { euid: PROCESS.euid, egid: PROCESS.egid }
+    rux_fs::Credentials { euid: process().euid, egid: process().egid }
 }
 
 // ── Path resolution helper (used by both POSIX and Linux) ──────���────
@@ -124,7 +141,7 @@ pub fn current_time_secs() -> u64 {
 pub unsafe fn resolve_with_cwd(path: &[u8]) -> Result<rux_fs::InodeId, isize> {
     let fs = crate::kstate::fs();
     let cred = current_cred();
-    rux_fs::path::resolve_path_at_checked(fs, PROCESS.fs_ctx.cwd, path, &cred)
+    rux_fs::path::resolve_path_at_checked(fs, process().fs_ctx.cwd, path, &cred)
         .map_err(|e| -(e.as_errno() as isize))
 }
 
@@ -176,7 +193,7 @@ pub unsafe fn resolve_parent_and_name(path_ptr: usize) -> Result<(rux_fs::InodeI
     let path = crate::uaccess::read_user_cstr(path_ptr);
     let fs = crate::kstate::fs();
     let cred = current_cred();
-    rux_fs::path::resolve_parent_checked(fs, PROCESS.fs_ctx.cwd, path, &cred)
+    rux_fs::path::resolve_parent_checked(fs, process().fs_ctx.cwd, path, &cred)
 }
 
 /// Resolve a user path to (parent_inode, validated FileName) — combines
@@ -535,10 +552,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Sigprocmask => posix::sigprocmask(a0, a1, a2, a3),
 
         // ── User/group IDs (single user: always root) ─────────────
-        Syscall::Getuid => unsafe { PROCESS.uid as isize },
-        Syscall::Geteuid => unsafe { PROCESS.euid as isize },
-        Syscall::Getgid => unsafe { PROCESS.gid as isize },
-        Syscall::Getegid => unsafe { PROCESS.egid as isize },
+        Syscall::Getuid => unsafe { process().uid as isize },
+        Syscall::Geteuid => unsafe { process().euid as isize },
+        Syscall::Getgid => unsafe { process().gid as isize },
+        Syscall::Getegid => unsafe { process().egid as isize },
         Syscall::Setuid => unsafe { posix::setuid(a0 as u32) },
         Syscall::Setgid => unsafe { posix::setgid(a0 as u32) },
         Syscall::Setreuid => unsafe { posix::setreuid(a0 as u32, a1 as u32) },
@@ -580,7 +597,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Futex => posix::futex(a0, a1, a2, a3),
         Syscall::Sigaltstack => unsafe {
             // sigaltstack(ss, old_ss) — set/get alternate signal stack
-            let cold = &mut (*(&raw mut PROCESS)).signal_cold;
+            let cold = &mut (*process()).signal_cold;
             if a1 != 0 { // old_ss: write current state
                 if crate::uaccess::validate_user_ptr(a1, 24).is_err() { return crate::errno::EFAULT as isize; }
                 crate::uaccess::put_user(a1, cold.alt_stack_base);
@@ -806,8 +823,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             0
         }
         Syscall::Umask => {
-            let old = unsafe { PROCESS.fs_ctx.umask } as isize;
-            unsafe { PROCESS.fs_ctx.umask = (a0 & 0o777) as u16; }
+            let old = unsafe { process().fs_ctx.umask } as isize;
+            unsafe { process().fs_ctx.umask = (a0 & 0o777) as u16; }
             old
         }
         // No-op stubs: safe to accept silently (single-process, no swap, etc.)
@@ -879,7 +896,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             // rt_sigpending(set, sigsetsize) — return pending signals
             if a0 != 0 {
                 if crate::uaccess::validate_user_ptr(a0, 8).is_err() { return crate::errno::EFAULT; }
-                unsafe { *(a0 as *mut u64) = PROCESS.signal_hot.pending.0; }
+                unsafe { *(a0 as *mut u64) = process().signal_hot.pending.0; }
             }
             0
         }
@@ -911,22 +928,22 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 2: process misc ─────────────────────────────────
         Syscall::Setsid2 => posix::setsid(), // alias
         Syscall::Getresuid => unsafe {
-            if a0 != 0 { crate::uaccess::put_user(a0, PROCESS.uid); }
-            if a1 != 0 { crate::uaccess::put_user(a1, PROCESS.euid); }
-            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.suid); }
+            if a0 != 0 { crate::uaccess::put_user(a0, process().uid); }
+            if a1 != 0 { crate::uaccess::put_user(a1, process().euid); }
+            if a2 != 0 { crate::uaccess::put_user(a2, process().suid); }
             0
         }
         Syscall::Getresgid => unsafe {
-            if a0 != 0 { crate::uaccess::put_user(a0, PROCESS.gid); }
-            if a1 != 0 { crate::uaccess::put_user(a1, PROCESS.egid); }
-            if a2 != 0 { crate::uaccess::put_user(a2, PROCESS.sgid); }
+            if a0 != 0 { crate::uaccess::put_user(a0, process().gid); }
+            if a1 != 0 { crate::uaccess::put_user(a1, process().egid); }
+            if a2 != 0 { crate::uaccess::put_user(a2, process().sgid); }
             0
         }
         Syscall::Setresuid => unsafe {
-            PROCESS.uid = a0 as u32; PROCESS.euid = a1 as u32; PROCESS.suid = a2 as u32; 0
+            process().uid = a0 as u32; process().euid = a1 as u32; process().suid = a2 as u32; 0
         }
         Syscall::Setresgid => unsafe {
-            PROCESS.gid = a0 as u32; PROCESS.egid = a1 as u32; PROCESS.sgid = a2 as u32; 0
+            process().gid = a0 as u32; process().egid = a1 as u32; process().sgid = a2 as u32; 0
         }
         Syscall::SchedSetaffinity | Syscall::SchedGetparam | Syscall::SchedSetparam |
         Syscall::SchedGetscheduler | Syscall::SchedSetscheduler => 0, // single-CPU stubs
@@ -1190,10 +1207,10 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     }
 
     // Reset signal state on exec (POSIX: caught signals revert to default)
-    PROCESS.signal_hot = rux_proc::signal::SignalHot::new();
-    PROCESS.signal_cold = rux_proc::signal::SignalCold::new();
+    process().signal_hot = rux_proc::signal::SignalHot::new();
+    process().signal_cold = rux_proc::signal::SignalCold::new();
     *crate::task_table::signal_cold_mut(crate::task_table::current_task_idx()) = rux_proc::signal::SignalCold::new();
-    PROCESS.signal_restorer = [0; 32];
+    process().signal_restorer = [0; 32];
 
     // Note: ITIMER_REAL is preserved across exec (POSIX).
     // busybox timeout sets alarm() then exec's — the timer must survive.
@@ -1210,7 +1227,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 /// Called by both x86_64 and aarch64 syscall return paths.
 #[inline]
 pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
-    let ret = if (*(&raw const PROCESS)).signal_hot.has_deliverable() {
+    let ret = if (*process()).signal_hot.has_deliverable() {
         crate::uaccess::stac();
         let r = generic_deliver_signal::<S>(result);
         crate::uaccess::clac();
@@ -1236,15 +1253,15 @@ pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
 /// Deliver a pending signal to the user-space handler.
 /// Thin wrapper around `rux_proc::signal::deliver_signal` that supplies kernel state.
 pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64) -> i64 {
-    // Signal delivery uses PROCESS.signal_cold (global) rather than the
+    // Signal delivery uses process().signal_cold (global) rather than the
     // per-task SIGNAL_COLD_BYTES slot. Copying >512 bytes on the aarch64
     // syscall return path corrupts state. Since sigaction writes to both
-    // the per-task slot and PROCESS.signal_cold, and exec resets both,
+    // the per-task slot and process().signal_cold, and exec resets both,
     // the global is correct for the current task during delivery.
     rux_proc::signal::deliver_signal_ex::<S>(
-        &mut (*(&raw mut PROCESS)).signal_hot,
-        &mut (*(&raw mut PROCESS)).signal_cold,
-        &(*(&raw const PROCESS)).signal_restorer,
+        &mut (*process()).signal_hot,
+        &mut (*process()).signal_cold,
+        &(*process()).signal_restorer,
         syscall_result,
         |status| posix::exit(status),
         |signum| {
@@ -1266,5 +1283,5 @@ pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64
 /// Restore pre-signal state from the signal frame on the user stack.
 /// Thin wrapper around `rux_proc::signal::sigreturn` that supplies kernel state.
 pub unsafe fn generic_sigreturn<S: rux_arch::SignalOps>() -> i64 {
-    rux_proc::signal::sigreturn::<S>(&mut (*(&raw mut PROCESS)).signal_hot)
+    rux_proc::signal::sigreturn::<S>(&mut (*process()).signal_hot)
 }

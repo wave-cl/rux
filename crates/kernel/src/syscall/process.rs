@@ -21,7 +21,7 @@ unsafe fn close_all_pipes() {
 
 /// _exit(status) — POSIX.1
 pub fn exit(status: i32) -> ! {
-    unsafe { super::PROCESS.last_child_exit = status; }
+    unsafe { super::process().last_child_exit = status; }
 
     unsafe {
         // Close pipe FDs, mark zombie/free, wake parent, schedule.
@@ -243,10 +243,10 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
             if !has_children {
                 // Also handle the legacy single-process fast path:
                 // PID 1 calls waitpid and there are no multi-process children.
-                if super::PROCESS.child_available {
-                    super::PROCESS.child_available = false;
+                if super::process().child_available {
+                    super::process().child_available = false;
                     if wstatus_ptr != 0 {
-                        let status = (super::PROCESS.last_child_exit as u32) << 8;
+                        let status = (super::process().last_child_exit as u32) << 8;
                         crate::uaccess::put_user(wstatus_ptr, status as u32);
                     }
                     return 42; // fake child PID for vfork path
@@ -271,13 +271,13 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
 /// getcwd(buf, size) — POSIX.1
 pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
-        let len = super::PROCESS.fs_ctx.cwd_path_len;
+        let len = super::process().fs_ctx.cwd_path_len;
         if crate::uaccess::validate_user_ptr(buf, size.max(1)).is_err() { return crate::errno::EFAULT; }
         if size < len + 1 { return crate::errno::ERANGE; }
         // dispatch() provides stac/clac wrapping — no inner pair needed
         let ptr = buf as *mut u8;
         for i in 0..len {
-            *ptr.add(i) = super::PROCESS.fs_ctx.cwd_path[i];
+            *ptr.add(i) = super::process().fs_ctx.cwd_path[i];
         }
         *ptr.add(len) = 0;
     }
@@ -439,18 +439,18 @@ pub fn prlimit64(_pid: usize, resource: usize, _new_limit: usize, old_limit: usi
 /// `u32::MAX` means "don't change" (returns true).
 #[inline]
 unsafe fn can_set_id(new: u32, real: u32, effective: u32, saved: u32) -> bool {
-    new == u32::MAX || super::PROCESS.euid == 0 || new == real || new == effective || new == saved
+    new == u32::MAX || super::process().euid == 0 || new == real || new == effective || new == saved
 }
 
 /// setuid(uid) — POSIX.1
 /// Root: sets real, effective, and saved. Non-root: sets effective only.
 pub unsafe fn setuid(uid: u32) -> isize {
-    if super::PROCESS.euid == 0 {
-        super::PROCESS.uid = uid;
-        super::PROCESS.euid = uid;
-        super::PROCESS.suid = uid;
-    } else if can_set_id(uid, super::PROCESS.uid, super::PROCESS.euid, super::PROCESS.suid) {
-        super::PROCESS.euid = uid;
+    if super::process().euid == 0 {
+        super::process().uid = uid;
+        super::process().euid = uid;
+        super::process().suid = uid;
+    } else if can_set_id(uid, super::process().uid, super::process().euid, super::process().suid) {
+        super::process().euid = uid;
     } else {
         return crate::errno::EPERM;
     }
@@ -460,12 +460,12 @@ pub unsafe fn setuid(uid: u32) -> isize {
 /// setgid(gid) — POSIX.1
 /// Root: sets real, effective, and saved. Non-root: sets effective only.
 pub unsafe fn setgid(gid: u32) -> isize {
-    if super::PROCESS.euid == 0 {
-        super::PROCESS.gid = gid;
-        super::PROCESS.egid = gid;
-        super::PROCESS.sgid = gid;
-    } else if can_set_id(gid, super::PROCESS.gid, super::PROCESS.egid, super::PROCESS.sgid) {
-        super::PROCESS.egid = gid;
+    if super::process().euid == 0 {
+        super::process().gid = gid;
+        super::process().egid = gid;
+        super::process().sgid = gid;
+    } else if can_set_id(gid, super::process().gid, super::process().egid, super::process().sgid) {
+        super::process().egid = gid;
     } else {
         return crate::errno::EPERM;
     }
@@ -475,22 +475,22 @@ pub unsafe fn setgid(gid: u32) -> isize {
 /// setreuid(ruid, euid) — POSIX.1
 /// If either real or effective changes, saved is set to new effective.
 pub unsafe fn setreuid(ruid: u32, euid: u32) -> isize {
-    if !can_set_id(ruid, super::PROCESS.uid, super::PROCESS.euid, super::PROCESS.suid) { return crate::errno::EPERM; }
-    if !can_set_id(euid, super::PROCESS.uid, super::PROCESS.euid, super::PROCESS.suid) { return crate::errno::EPERM; }
-    if ruid != u32::MAX { super::PROCESS.uid = ruid; }
-    if euid != u32::MAX { super::PROCESS.euid = euid; }
+    if !can_set_id(ruid, super::process().uid, super::process().euid, super::process().suid) { return crate::errno::EPERM; }
+    if !can_set_id(euid, super::process().uid, super::process().euid, super::process().suid) { return crate::errno::EPERM; }
+    if ruid != u32::MAX { super::process().uid = ruid; }
+    if euid != u32::MAX { super::process().euid = euid; }
     // POSIX: if either was changed, saved = new effective
-    if ruid != u32::MAX || euid != u32::MAX { super::PROCESS.suid = super::PROCESS.euid; }
+    if ruid != u32::MAX || euid != u32::MAX { super::process().suid = super::process().euid; }
     0
 }
 
 /// setregid(rgid, egid) — POSIX.1
 pub unsafe fn setregid(rgid: u32, egid: u32) -> isize {
-    if !can_set_id(rgid, super::PROCESS.gid, super::PROCESS.egid, super::PROCESS.sgid) { return crate::errno::EPERM; }
-    if !can_set_id(egid, super::PROCESS.gid, super::PROCESS.egid, super::PROCESS.sgid) { return crate::errno::EPERM; }
-    if rgid != u32::MAX { super::PROCESS.gid = rgid; }
-    if egid != u32::MAX { super::PROCESS.egid = egid; }
-    if rgid != u32::MAX || egid != u32::MAX { super::PROCESS.sgid = super::PROCESS.egid; }
+    if !can_set_id(rgid, super::process().gid, super::process().egid, super::process().sgid) { return crate::errno::EPERM; }
+    if !can_set_id(egid, super::process().gid, super::process().egid, super::process().sgid) { return crate::errno::EPERM; }
+    if rgid != u32::MAX { super::process().gid = rgid; }
+    if egid != u32::MAX { super::process().egid = egid; }
+    if rgid != u32::MAX || egid != u32::MAX { super::process().sgid = super::process().egid; }
     0
 }
 

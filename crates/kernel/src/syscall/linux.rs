@@ -37,9 +37,9 @@ pub fn pipe2(pipefd_ptr: usize, flags: usize) -> isize {
 /// Grows or shrinks the process heap. Returns the actual break on success.
 pub fn brk(addr: usize) -> isize {
     unsafe {
-        if super::PROCESS.program_brk == 0 { super::PROCESS.program_brk = 0x800000; }
-        if addr == 0 { return super::PROCESS.program_brk as isize; }
-        let old_brk = super::PROCESS.program_brk;
+        if super::process().program_brk == 0 { super::process().program_brk = 0x800000; }
+        if addr == 0 { return super::process().program_brk as isize; }
+        let old_brk = super::process().program_brk;
         if addr > old_brk {
             // Growing: map new pages
             let old_page = (old_brk + 0xFFF) & !0xFFF;
@@ -50,10 +50,10 @@ pub fn brk(addr: usize) -> isize {
                     .or(rux_mm::MappingFlags::USER);
                 if !super::map_user_pages(old_page, new_page, flags) {
                     // OOM: return current brk unchanged (Linux behavior)
-                    return super::PROCESS.program_brk as isize;
+                    return super::process().program_brk as isize;
                 }
             }
-            super::PROCESS.program_brk = addr;
+            super::process().program_brk = addr;
         } else if addr < old_brk {
             // Shrinking: unmap freed pages
             let old_page = (old_brk + 0xFFF) & !0xFFF;
@@ -61,9 +61,9 @@ pub fn brk(addr: usize) -> isize {
             if new_page < old_page {
                 super::posix::munmap(new_page, old_page - new_page);
             }
-            super::PROCESS.program_brk = addr;
+            super::process().program_brk = addr;
         }
-        super::PROCESS.program_brk as isize
+        super::process().program_brk as isize
     }
 }
 

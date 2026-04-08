@@ -84,7 +84,7 @@ pub fn fstatat(dirfd: usize, pathname: usize, buf: usize, flags: usize) -> isize
         }
 
         let ino = if flags & AT_SYMLINK_NOFOLLOW != 0 {
-            match rux_fs::path::resolve_nofollow(fs, super::PROCESS.fs_ctx.cwd, path) {
+            match rux_fs::path::resolve_nofollow(fs, super::process().fs_ctx.cwd, path) {
                 Ok(ino) => ino,
                 Err(e) => return e,
             }
@@ -119,7 +119,7 @@ pub fn statx(dirfd: usize, pathname: usize, flags: usize, _mask: usize, buf: usi
                 None => return crate::errno::EBADF,
             }
         } else if flags & AT_SYMLINK_NOFOLLOW != 0 {
-            match rux_fs::path::resolve_nofollow(fs, super::PROCESS.fs_ctx.cwd, path) {
+            match rux_fs::path::resolve_nofollow(fs, super::process().fs_ctx.cwd, path) {
                 Ok(ino) => ino,
                 Err(e) => return e,
             }
@@ -182,7 +182,7 @@ pub fn fchdir(fd: usize) -> isize {
     unsafe {
         if fd >= rux_fs::fdtable::MAX_FDS { return crate::errno::EBADF; }
         match rux_fs::fdtable::get_fd_inode(fd) {
-            Some(ino) => { super::PROCESS.fs_ctx.cwd = ino; 0 }
+            Some(ino) => { super::process().fs_ctx.cwd = ino; 0 }
             None => crate::errno::EBADF,
         }
     }
@@ -206,25 +206,25 @@ pub fn chdir(path_ptr: usize) -> isize {
             return crate::errno::ENOTDIR;
         }
 
-        super::PROCESS.fs_ctx.cwd = ino;
+        super::process().fs_ctx.cwd = ino;
 
         if path[0] == b'/' {
             let len = path.len().min(255);
-            super::PROCESS.fs_ctx.cwd_path[..len].copy_from_slice(&path[..len]);
-            super::PROCESS.fs_ctx.cwd_path[len] = 0;
-            super::PROCESS.fs_ctx.cwd_path_len = len;
+            super::process().fs_ctx.cwd_path[..len].copy_from_slice(&path[..len]);
+            super::process().fs_ctx.cwd_path[len] = 0;
+            super::process().fs_ctx.cwd_path_len = len;
         } else {
-            let cur_len = super::PROCESS.fs_ctx.cwd_path_len;
-            let need_slash = cur_len > 0 && super::PROCESS.fs_ctx.cwd_path[cur_len - 1] != b'/';
+            let cur_len = super::process().fs_ctx.cwd_path_len;
+            let need_slash = cur_len > 0 && super::process().fs_ctx.cwd_path[cur_len - 1] != b'/';
             let mut pos = cur_len;
-            if need_slash && pos < 255 { super::PROCESS.fs_ctx.cwd_path[pos] = b'/'; pos += 1; }
+            if need_slash && pos < 255 { super::process().fs_ctx.cwd_path[pos] = b'/'; pos += 1; }
             for &b in path {
                 if pos >= 255 { break; }
-                super::PROCESS.fs_ctx.cwd_path[pos] = b;
+                super::process().fs_ctx.cwd_path[pos] = b;
                 pos += 1;
             }
-            super::PROCESS.fs_ctx.cwd_path[pos] = 0;
-            super::PROCESS.fs_ctx.cwd_path_len = pos;
+            super::process().fs_ctx.cwd_path[pos] = 0;
+            super::process().fs_ctx.cwd_path_len = pos;
         }
         0
     }
@@ -268,7 +268,7 @@ pub fn mkdir_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
         };
         let cred = super::current_cred();
         let fs = crate::kstate::fs();
-        let umask = super::PROCESS.fs_ctx.umask as u32;
+        let umask = super::process().fs_ctx.umask as u32;
         match fs.checked_mkdir(dir_ino, fname, mode as u32 & 0o7777 & !umask, &cred) {
             Ok(ino) => {
                 let _ = fs.utimes(ino, super::current_time_secs(), super::current_time_secs());
