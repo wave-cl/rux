@@ -1066,12 +1066,12 @@ pub trait SyscallTranslate {
 /// # Safety
 /// Replaces the current process image.
 #[cfg(feature = "native")]
-pub unsafe fn generic_exec<V: rux_arch::VforkContext>(_path_ptr: usize, _argv_ptr: usize) -> ! {
+pub unsafe fn generic_exec<V: rux_arch::VforkContext>(_path_ptr: usize, _argv_ptr: usize) -> isize {
     panic!("exec not supported in native mode")
 }
 
 #[cfg(not(feature = "native"))]
-pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize, envp_ptr: usize) -> ! {
+pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize, envp_ptr: usize) -> isize {
     use rux_arch::ConsoleOps;
 
     let fs = crate::kstate::fs();
@@ -1085,7 +1085,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 
     let ino = match rux_fs::path::resolve_path(fs, path) {
         Ok(ino) => ino,
-        Err(_) => { crate::arch::Arch::write_str("rux: exec: not found\n"); loop {} }
+        Err(_) => { return crate::errno::ENOENT; }
     };
 
     // Task slot 0 is the init process. For real fork children (slot > 0),
