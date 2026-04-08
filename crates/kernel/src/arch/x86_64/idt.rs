@@ -433,13 +433,13 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
 
                 crate::scheduler::locked_tick(1_000_000);
-                // x86_64 ISR preemption: DEFERRED.
-                // Per-task kernel stacks (KSTACKS[idx]) are in place, but full
-                // ISR preemption (schedule() inside the timer handler) causes
-                // corruption on QEMU TCG — likely due to re-entrant interrupt
-                // delivery or stack alignment issues during context_switch.
-                // Preemption occurs at: (1) post_syscall return, (2) idle loop,
-                // (3) ISR return to user mode (isr_check_preempt in interrupt_common).
+                // ISR preemption: DEFERRED to safe points.
+                // Kernel-mode preemption (schedule() here) causes deadlocks
+                // from re-entrant schedule() when the preempted task was already
+                // inside schedule/pipe_block/syscall. Full kernel preemption
+                // requires a preempt_count mechanism (future work).
+                // Preemption occurs at: (1) post_syscall, (2) idle loop,
+                // (3) ISR return to user mode (isr_check_preempt).
             }
         }
         48 => {
