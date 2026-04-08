@@ -184,6 +184,46 @@ exec /bin/sh
 INITSCRIPT
     chmod 755 "$STAGING/sbin/rux-init"
 
+    # Test scripts for QEMU integration tests
+    mkdir -p "$STAGING/usr/share/rux-tests"
+    cat > "$STAGING/usr/share/rux-tests/tcp_loopback.py" << 'PYTEST'
+import socket,os,time
+s=socket.socket()
+s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("10.0.2.15",7777))
+s.listen(1)
+pid=os.fork()
+if pid==0:
+    time.sleep(0.5)
+    c=socket.socket()
+    c.connect(("10.0.2.15",7777))
+    c.send(b"ping")
+    c.close()
+    os._exit(0)
+conn,_=s.accept()
+d=conn.recv(16)
+conn.close()
+s.close()
+os.waitpid(pid,0)
+print("tcp_"+d.decode())
+PYTEST
+    cat > "$STAGING/usr/share/rux-tests/http_server.py" << 'PYTEST'
+import http.server,threading,time
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"hello_from_rux")
+    def log_message(self,*a):pass
+s=http.server.HTTPServer(("0.0.0.0",8080),H)
+threading.Thread(target=s.serve_forever,daemon=True).start()
+time.sleep(1)
+import urllib.request
+r=urllib.request.urlopen("http://10.0.2.15:8080/")
+print("http_ok="+r.read().decode())
+s.shutdown()
+PYTEST
+
     # Create ext2 image
     rm -f "$OUTPUT"
     dd if=/dev/zero of="$OUTPUT" bs=1M count=$IMG_SIZE_MB 2>/dev/null
