@@ -70,6 +70,28 @@ pub fn exit(status: i32) -> ! {
                 }
             }
 
+            // Reparent children to init (PID 1). Linux does this so orphaned
+            // children can be reaped by init instead of becoming unreachable zombies.
+            for j in 0..MAX_PROCS {
+                if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].ppid == my_pid {
+                    TASK_TABLE[j].ppid = 1;
+                    // Auto-reap if already zombie (init won't explicitly wait)
+                    if TASK_TABLE[j].state == TaskState::Zombie {
+                        let child_pt_root = TASK_TABLE[j].pt_root;
+                        if child_pt_root != 0 {
+                            let alloc = crate::kstate::alloc();
+                            let child_pt = crate::arch::PageTable::from_root(
+                                rux_klib::PhysAddr::new(child_pt_root as usize)
+                            );
+                            child_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
+                        }
+                        TASK_TABLE[j].active = false;
+                        TASK_TABLE[j].state = TaskState::Free;
+                        TASK_TABLE[j].pt_root = 0;
+                    }
+                }
+            }
+
             // CLONE_THREAD: thread exit — write 0 to clear_child_tid, skip zombie.
             let is_thread = TASK_TABLE[idx].clone_flags as usize & crate::errno::CLONE_THREAD != 0;
             if is_thread {

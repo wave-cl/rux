@@ -181,7 +181,7 @@ cat /proc/self/cmdline | tr '\0' ' '
 awk 'BEGIN{print "awk:" 6*7}'
 echo test_sed | sed 's/sed/SED/'
 echo -e 'cherry\napple\nbanana' | sort | head -1
-sha256sum /etc/hostname | cut -d' ' -f1 | head -c 8
+sha256sum /etc/hostname | head -c 8
 echo ""
 dd if=/dev/zero of=/tmp/dd_test bs=1024 count=8 2>&1 | grep copied
 find /etc -name 'passwd' -type f 2>/dev/null | head -1
@@ -602,7 +602,7 @@ cat /proc/self/cmdline | tr '\0' ' '
 awk 'BEGIN{print "awk:" 6*7}'
 echo test_sed | sed 's/sed/SED/'
 echo -e 'cherry\napple\nbanana' | sort | head -1
-sha256sum /etc/hostname | cut -d' ' -f1 | head -c 8
+sha256sum /etc/hostname | head -c 8
 echo ""
 dd if=/dev/zero of=/tmp/dd_test bs=1024 count=8 2>&1 | grep copied
 find /etc -name 'passwd' -type f 2>/dev/null | head -1
