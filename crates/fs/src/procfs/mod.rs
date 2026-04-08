@@ -40,8 +40,9 @@ const INO_SYS_K_RANDOM_DIR: InodeId = 16;// /proc/sys/kernel/random
 const INO_SYS_K_RANDOM_UUID: InodeId = 17;// /proc/sys/kernel/random/uuid
 const INO_SYS_VM_OVERCOMMIT: InodeId = 18;// /proc/sys/vm/overcommit_memory
 const INO_NET_DIR: InodeId = 19;          // /proc/net
+const INO_CPUINFO: InodeId = 20;          // /proc/cpuinfo
 
-const NUM_SYS_ENTRIES: usize = 11;
+const NUM_SYS_ENTRIES: usize = 12;
 
 const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"uptime", INO_UPTIME),
@@ -55,6 +56,7 @@ const SYS_ENTRIES: [(&[u8], InodeId); NUM_SYS_ENTRIES] = [
     (b"cmdline", INO_CMDLINE),
     (b"sys", INO_SYS_DIR),
     (b"net", INO_NET_DIR),
+    (b"cpuinfo", INO_CPUINFO),
 ];
 
 const PID_DIR_BASE: InodeId = 100;
@@ -98,6 +100,7 @@ pub struct ProcFs {
     pub get_active_pids: fn(&mut [u32]) -> usize,
     pub get_current_pid: fn() -> u32,
     pub get_task_cmdline: fn(u32, &mut [u8]) -> usize,
+    pub num_cpus: u32,
 }
 
 impl ProcFs {
@@ -109,7 +112,7 @@ impl ProcFs {
         get_current_pid: fn() -> u32,
         get_task_cmdline: fn(u32, &mut [u8]) -> usize,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, num_cpus: 1 }
     }
 
     /// Check if a PID exists by querying the kernel task table.
@@ -165,6 +168,9 @@ impl ProcFs {
             INO_CMDLINE => {
                 buf[0] = b'\n';
                 1
+            }
+            INO_CPUINFO => {
+                self.gen_cpuinfo(buf)
             }
             INO_SYS_K_OSRELEASE => {
                 let s = concat!(env!("CARGO_PKG_VERSION"), "\n");
@@ -305,6 +311,34 @@ impl ProcFs {
         pos
     }
 
+    /// Generate /proc/cpuinfo — one entry per CPU.
+    fn gen_cpuinfo(&self, buf: &mut [u8]) -> usize {
+        let mut pos = 0;
+        for cpu in 0..self.num_cpus {
+            pos += copy_str(&mut buf[pos..], b"processor\t: ");
+            pos += fmt_u64(&mut buf[pos..], cpu as u64);
+            pos += copy_str(&mut buf[pos..], b"\n");
+            #[cfg(target_arch = "x86_64")]
+            {
+                pos += copy_str(&mut buf[pos..], b"vendor_id\t: GenuineIntel\n");
+                pos += copy_str(&mut buf[pos..], b"model name\t: QEMU Virtual CPU\n");
+                pos += copy_str(&mut buf[pos..], b"cpu MHz\t\t: 2000.000\n");
+                pos += copy_str(&mut buf[pos..], b"cache size\t: 4096 KB\n");
+                pos += copy_str(&mut buf[pos..], b"bogomips\t: 4000.00\n");
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                pos += copy_str(&mut buf[pos..], b"BogoMIPS\t: 48.00\n");
+                pos += copy_str(&mut buf[pos..], b"Features\t: fp asimd\n");
+                pos += copy_str(&mut buf[pos..], b"CPU implementer\t: 0x41\n");
+                pos += copy_str(&mut buf[pos..], b"CPU architecture: 8\n");
+            }
+            pos += copy_str(&mut buf[pos..], b"\n");
+            if pos + 200 > buf.len() { break; } // prevent overflow
+        }
+        pos
+    }
+
     /// Generate /proc/[pid]/maps — synthesized memory map.
     /// Without VMA tracking, we emit the standard regions that Alpine programs expect.
     fn gen_pid_maps(&self, buf: &mut [u8]) -> usize {
@@ -384,13 +418,15 @@ impl FileSystem for ProcFs {
         }
 
         // System files or PID files
-        if (ino >= INO_UPTIME && ino <= INO_CMDLINE && ino != INO_SELF) || is_pid_file(ino) {
+        if (ino >= INO_UPTIME && ino <= INO_CPUINFO && ino != INO_SELF
+            && !matches!(ino, INO_SYS_DIR | INO_SYS_KERNEL_DIR | INO_SYS_VM_DIR | INO_SYS_K_RANDOM_DIR | INO_NET_DIR))
+            || is_pid_file(ino) {
             if is_pid_file(ino) && !self.pid_exists(pid_from_file(ino)) {
                 return Err(VfsError::NotFound);
             }
             buf.mode = S_IFREG | 0o444;
             buf.nlink = 1;
-            let mut tmp = [0u8; 512];
+            let mut tmp = [0u8; 1024];
             buf.size = self.generate(ino, &mut tmp) as u64;
             return Ok(());
         }
@@ -405,7 +441,7 @@ impl FileSystem for ProcFs {
         {
             return Err(VfsError::IsADirectory);
         }
-        let mut tmp = [0u8; 512];
+        let mut tmp = [0u8; 1024];
         let total = self.generate(ino, &mut tmp);
         if total == 0 { return Err(VfsError::NotFound); }
         let off = offset as usize;

@@ -275,7 +275,10 @@ pub fn aarch64_init(dtb_addr: usize) {
             alloc_ptr,
             ramfs_ptr: ramfs_start as *mut rux_fs::ramfs::RamFs,
             initrd,
-            procfs: &mut *(&raw mut PROCFS),
+            procfs: {
+                (&raw mut PROCFS).as_mut().unwrap().num_cpus = crate::percpu::online_cpus() as u32;
+                &mut *(&raw mut PROCFS)
+            },
             log: console::write_str,
             cmdline: b"",      // TODO: parse DTB bootargs
             virtio_mmio_base: 0x0a000000, // QEMU virt machine virtio-mmio base

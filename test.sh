@@ -118,6 +118,8 @@ cat /proc/sys/kernel/osrelease
 cat /proc/sys/kernel/hostname
 cat /proc/sys/kernel/ostype
 ls /proc/sys
+cat /proc/cpuinfo | grep -c processor
+nproc
 touch /tmp/tfile && ls /tmp/tfile
 sleep 0 && echo sleepdone
 rm /tmp/tfile && echo rmdone
@@ -367,6 +369,8 @@ check "proc/sys/kernel/osrelease" "0.34.0"
 check "proc/sys/kernel/hostname"  "rux"
 check "proc/sys/kernel/ostype"    "Linux"
 check "proc/sys dir"              "kernel"
+check "cpuinfo count"             "2"
+check "nproc"                     "2"
 check "touch + ls"              "tfile"
 check "sleep + echo"            "sleepdone"
 check "rm + echo"               "rmdone"
@@ -536,6 +540,8 @@ cat /proc/sys/kernel/osrelease
 cat /proc/sys/kernel/hostname
 cat /proc/sys/kernel/ostype
 ls /proc/sys
+cat /proc/cpuinfo | grep -c processor
+nproc
 touch /tmp/tfile && ls /tmp/tfile
 sleep 0 && echo sleepdone
 rm /tmp/tfile && echo rmdone
@@ -769,6 +775,8 @@ check "proc/sys/kernel/osrelease" "0.34.0"
 check "proc/sys/kernel/hostname"  "rux"
 check "proc/sys/kernel/ostype"    "Linux"
 check "proc/sys dir"              "kernel"
+check "cpuinfo count"             "2"
+check "nproc"                     "2"
 check "touch + ls"              "tfile"
 check "sleep + echo"            "sleepdone"
 check "rm + echo"               "rmdone"

@@ -570,6 +570,7 @@ pub fn x86_64_init(multiboot_info: usize) {
                 0
             },
         );
+        (&raw mut PROCFS).as_mut().unwrap().num_cpus = crate::percpu::online_cpus() as u32;
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr: alloc_addr as *mut rux_mm::frame::BuddyAllocator,
             ramfs_ptr: ramfs_addr as *mut rux_fs::ramfs::RamFs,
