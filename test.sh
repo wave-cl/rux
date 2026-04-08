@@ -203,6 +203,9 @@ python3 -c "import os; s=os.stat('/etc/passwd'); print('st_ok' if s.st_size > 0 
 python3 -c "import os; os.fstat(0); os.fstat(1); os.fstat(2); print('fstat_ok')" 2>&1
 python3 -c "import signal; signal.signal(signal.SIGRTMIN, signal.SIG_DFL); print('rtsig_ok')" 2>&1
 python3 -c "import mmap; m=mmap.mmap(-1,4096); m[0:4]=b'test'; print('mmap_ok'); m.close()" 2>&1
+python3 -c "import struct; print('struct_ok' if struct.pack('>I',42)==b'\x00\x00\x00*' else 'FAIL')" 2>&1
+python3 -c "import re; print('regex_ok' if re.match(r'\d+','42') else 'FAIL')" 2>&1
+python3 -c "import time; print('time_ok' if time.time()>1000000 else 'FAIL')" 2>&1
 for i in 1 2 3; do sh -c "echo sub$i"; done && echo multisubshell_ok
 sh -c 'sh -c "sh -c \"echo deep3\""' && echo nest3_ok
 head -c 100000 /dev/urandom > /tmp/bigstat && stat -c %s /tmp/bigstat
@@ -445,6 +448,9 @@ check "stat struct"          "st_ok"
 check "fstat console"        "fstat_ok"
 check "rt signals"           "rtsig_ok"
 check "mmap anon rw"         "mmap_ok"
+check "python struct"        "struct_ok"
+check "python regex"         "regex_ok"
+check "python time"          "time_ok"
 check "multi subshell"       "multisubshell_ok"
 check "nested fork 3"        "nest3_ok"
 check "large stat size"      "100000"
@@ -606,6 +612,9 @@ python3 -c "import os; s=os.stat('/etc/passwd'); print('st_ok' if s.st_size > 0 
 python3 -c "import os; os.fstat(0); os.fstat(1); os.fstat(2); print('fstat_ok')" 2>&1
 python3 -c "import signal; signal.signal(signal.SIGRTMIN, signal.SIG_DFL); print('rtsig_ok')" 2>&1
 python3 -c "import mmap; m=mmap.mmap(-1,4096); m[0:4]=b'test'; print('mmap_ok'); m.close()" 2>&1
+python3 -c "import struct; print('struct_ok' if struct.pack('>I',42)==b'\x00\x00\x00*' else 'FAIL')" 2>&1
+python3 -c "import re; print('regex_ok' if re.match(r'\d+','42') else 'FAIL')" 2>&1
+python3 -c "import time; print('time_ok' if time.time()>1000000 else 'FAIL')" 2>&1
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
