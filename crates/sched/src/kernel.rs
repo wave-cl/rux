@@ -211,6 +211,13 @@ impl Scheduler {
 
         self.current = new_idx;
 
+        // If more tasks are queued, set need_resched so the next syscall
+        // return (post_syscall) triggers another switch. This ensures rapid
+        // interleaving during pipeline startup without ISR preemption.
+        if self.cfs.rqs[0].nr_running > 0 {
+            self.need_resched = true;
+        }
+
         // Keep timer always running — slot 0 is the init/shell process which
         // uses timer interrupts to poll UART input; stopping the timer would
         // cause console reads to hang forever.
