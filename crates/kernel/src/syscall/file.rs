@@ -510,7 +510,8 @@ pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
 }
 
 /// ioctl(fd, request, arg) — POSIX.1 (terminal operations)
-pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
+pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
+    let _fd = fd; // backward compat for FIONBIO/FIONREAD sections
     const TCGETS: usize = 0x5401;
     const TIOCGWINSZ: usize = 0x5413;
     const TIOCSPGRP: usize = 0x5410;
@@ -518,8 +519,11 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
     const TIOCSCTTY: usize = 0x540E;
     const TIOCNOTTY: usize = 0x5422;
 
+    let is_tty = fdt::is_console_fd(fd);
+
     match request {
         TIOCGWINSZ => {
+            if !is_tty { return crate::errno::ENOTTY; }
             if arg != 0 {
                 if crate::uaccess::validate_user_ptr(arg, 8).is_err() { return crate::errno::EFAULT; }
                 unsafe { *(arg as *mut [u16; 4]) = [24, 80, 0, 0]; }
@@ -527,6 +531,7 @@ pub fn ioctl(_fd: usize, request: usize, arg: usize) -> isize {
             0
         }
         TCGETS => {
+            if !is_tty { return crate::errno::ENOTTY; }
             if arg != 0 {
                 if crate::uaccess::validate_user_ptr(arg, 60).is_err() { return crate::errno::EFAULT; }
                 unsafe {
