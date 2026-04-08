@@ -1,6 +1,6 @@
 [package]
 name = "rux-boot-image"
-version = "0.34.0"
+version = "0.35.0"
 edition = "2021"
 
 # This is a HOST tool, not a kernel crate. It runs on the build machine
