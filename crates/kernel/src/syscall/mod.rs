@@ -596,7 +596,27 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             0
         },
         Syscall::SchedYield |
-        Syscall::SetRobustList | Syscall::SchedGetaffinity => 0,
+        Syscall::SetRobustList => 0,
+        Syscall::SchedGetaffinity => {
+            // sched_getaffinity(pid, cpusetsize, mask)
+            // Fill mask with bits set for each online CPU
+            let size = a1;
+            if a2 != 0 && size > 0 {
+                if crate::uaccess::validate_user_ptr(a2, size.min(128)).is_err() { return crate::errno::EFAULT; }
+                unsafe {
+                    let mask = a2 as *mut u8;
+                    let bytes = size.min(128);
+                    for i in 0..bytes { *mask.add(i) = 0; }
+                    let ncpus = crate::percpu::online_cpus() as u32;
+                    for cpu in 0..ncpus.min((bytes * 8) as u32) {
+                        *mask.add(cpu as usize / 8) |= 1 << (cpu % 8);
+                    }
+                }
+            }
+            // Return the size of the cpu set (bytes needed)
+            let ncpus = crate::percpu::online_cpus();
+            ((ncpus + 7) / 8).max(1) as isize
+        }
         Syscall::Alarm => unsafe {
             // alarm(seconds): set one-shot ITIMER_REAL, return previous remaining seconds
             use rux_arch::TimerOps;
