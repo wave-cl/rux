@@ -9,17 +9,52 @@ pub use rux_sched::kernel::{Scheduler, ContextFns};
 /// Accessed from the timer ISR and from kernel_main.
 static mut SCHED: Scheduler = Scheduler::new();
 
-/// Scheduler lock for SMP (unused until AP timer is enabled).
-#[allow(dead_code)]
+/// Scheduler spinlock for SMP safety.
+/// Protects SCHED state (CFS tree, current task, clock) from concurrent
+/// access by BSP timer ISR, AP timer ISR, and syscall return paths.
 pub static SCHED_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Acquire the scheduler lock (spinlock).
+#[inline(always)]
+pub fn sched_lock() {
+    while SCHED_LOCK.compare_exchange_weak(
+        false, true,
+        core::sync::atomic::Ordering::Acquire,
+        core::sync::atomic::Ordering::Relaxed,
+    ).is_err() {
+        core::hint::spin_loop();
+    }
+}
+
+/// Release the scheduler lock.
+#[inline(always)]
+pub fn sched_unlock() {
+    SCHED_LOCK.store(false, core::sync::atomic::Ordering::Release);
+}
 
 /// Get a mutable reference to the global scheduler.
 ///
 /// # Safety
-/// Must be called with interrupts disabled or from a single-CPU context.
+/// Caller must hold SCHED_LOCK or be in a single-CPU context (boot, ISR with IF=0).
 #[inline(always)]
 pub unsafe fn get() -> &'static mut Scheduler {
     &mut *(&raw mut SCHED)
+}
+
+/// Lock-protected tick: acquire lock, call tick, release.
+#[inline(always)]
+pub unsafe fn locked_tick(elapsed_ns: u64) {
+    sched_lock();
+    get().tick(elapsed_ns);
+    sched_unlock();
+}
+
+/// Lock-protected wake_task: acquire lock, wake, release.
+#[inline(always)]
+pub unsafe fn locked_wake_task(idx: usize) {
+    sched_lock();
+    get().wake_task(idx);
+    sched_unlock();
 }
 
 /// Initialize the scheduler's context switch functions for the current arch.

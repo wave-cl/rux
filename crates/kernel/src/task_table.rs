@@ -190,12 +190,14 @@ static mut NEXT_PID: u32 = 2; // PID 1 is init
 /// via GS-base (x86_64) or TPIDR_EL1 (aarch64).
 #[inline(always)]
 pub unsafe fn current_task_idx() -> usize {
-    CURRENT_TASK_IDX
+    crate::percpu::this_cpu().current_task_idx
 }
 
-/// Set the current task index (global + percpu for future SMP).
+/// Set the current task index (per-CPU for SMP safety).
 #[inline(always)]
 pub unsafe fn set_current_task_idx(idx: usize) {
+    crate::percpu::this_cpu().current_task_idx = idx;
+    // Keep global in sync for debugging / boot path
     CURRENT_TASK_IDX = idx;
 }
 
@@ -268,7 +270,7 @@ pub unsafe fn wake_sleepers() {
         {
             t.wake_at = 0;
             t.state = TaskState::Ready;
-            crate::scheduler::get().wake_task(i);
+            crate::scheduler::locked_wake_task(i);
         }
         // Check ITIMER_REAL expiry → set pending SIGALRM (signal 14)
         if t.itimer_real_deadline > 0 && now >= t.itimer_real_deadline {

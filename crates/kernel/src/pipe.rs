@@ -32,14 +32,13 @@ pub unsafe fn wake_pipe_waiters(pipe_id: u8) {
     let (count, waiters) = rux_ipc::pipe::get_waiters(pipe_id);
     if count == 0 { return; }
 
-    let sched = crate::scheduler::get();
     for wi in 0..count as usize {
         let i = waiters[wi] as usize;
         if i < MAX_PROCS && TASK_TABLE[i].active
             && TASK_TABLE[i].state == TaskState::WaitingForPipe
         {
             TASK_TABLE[i].state = TaskState::Ready;
-            sched.wake_task(i);
+            crate::scheduler::locked_wake_task(i);
         }
     }
     rux_ipc::pipe::clear_all_waiters(pipe_id);

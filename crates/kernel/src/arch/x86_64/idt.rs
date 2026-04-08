@@ -409,31 +409,18 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                     rux_net::poll(crate::arch::Arch::ticks());
                 }
 
-                let sched = crate::scheduler::get();
-                sched.tick(1_000_000);
-                // Preemptive scheduling: only from user mode (ring 3) and only
-                // on single-CPU configs. With SMP, the shared scheduler has no
-                // lock, so ISR preemption races with AP's syscall-return schedule.
-                if crate::percpu::online_cpus() == 1 {
-                    let saved_cs = *(frame as *const u64).add(18);
-                    if sched.need_resched && (saved_cs & 3) == 3 {
-                        sched.schedule();
-                    }
-                }
+                crate::scheduler::locked_tick(1_000_000);
+                // ISR preemption disabled on x86_64: context_switch from ISR
+                // context corrupts return addresses. need_resched is checked
+                // on syscall return (post_syscall) and in the idle loop.
             }
         }
         48 => {
             // AP LAPIC timer tick
             unsafe { super::apic::eoi(); }
-            // Run scheduler tick on AP — both CPUs share the global scheduler.
-            // No lock needed because: BSP ISR runs with IF=0 on BSP, AP ISR
-            // runs with IF=0 on AP. The CFS data structures are touched by
-            // both, but tick() only reads/writes task[current] and clock_ns.
-            // The pick_next/schedule path is only called from the syscall
-            // return path (not from the ISR), so no concurrent schedule().
+            // AP scheduler tick — uses locked_tick for SMP safety.
             unsafe {
-                let sched = crate::scheduler::get();
-                sched.tick(1_000_000);
+                crate::scheduler::locked_tick(1_000_000);
             }
         }
         128 => {

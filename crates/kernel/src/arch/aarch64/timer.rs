@@ -31,8 +31,7 @@ pub fn handle_tick() {
         #[cfg(feature = "net")]
         if rux_net::is_configured() { rux_net::poll(TICKS.load(core::sync::atomic::Ordering::Relaxed)); }
 
-        let sched = crate::scheduler::get();
-        sched.tick(1_000_000);
+        crate::scheduler::locked_tick(1_000_000);
     }
 }
 
