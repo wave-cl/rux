@@ -62,7 +62,8 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
             }
         }
         1 => {
-            // IRQ from EL1 — dispatch to GIC handler
+            // IRQ from EL1 (kernel mode) — dispatch to GIC handler.
+            // No preemption: we're in kernel context (syscall, pipe_block, etc.)
             super::gic::handle_irq();
         }
         2 => {
@@ -140,6 +141,8 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
         3 => {
             // IRQ from EL0 — same GIC handler
             super::gic::handle_irq();
+            // Note: preemption from ISR not safe (context_switch swaps SP,
+            // breaking the exception frame). need_resched checked on syscall return.
         }
         _ => {
             super::console::write_str("rux: unhandled exception type=");
