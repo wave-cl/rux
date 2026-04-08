@@ -410,9 +410,10 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
 
                 crate::scheduler::locked_tick(1_000_000);
-                // ISR preemption disabled on x86_64: context_switch from ISR
-                // context corrupts return addresses. need_resched is checked
-                // on syscall return (post_syscall) and in the idle loop.
+                // x86_64 ISR preemption disabled: context_switch from ISR
+                // triggers SIGSEGV on QEMU TCG despite correct stack layout.
+                // Root cause unknown (possibly TCG emulation artifact).
+                // Cooperative preemption via post_syscall + idle loop works.
             }
         }
         48 => {
