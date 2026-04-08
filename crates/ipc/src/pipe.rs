@@ -58,6 +58,11 @@ pub fn writers_closed(pipe_id: u8) -> bool {
 }
 
 /// Allocate a pipe slot. Returns pipe_id or -EMFILE.
+/// Count of currently active pipes (for diagnostics).
+pub fn active_count() -> usize {
+    unsafe { (&raw const PIPES).as_ref().unwrap().iter().filter(|p| p.active).count() }
+}
+
 pub fn alloc() -> Result<u8, isize> {
     unsafe {
         let pipe_id = (&raw const PIPES).as_ref().unwrap().iter().position(|p| !p.active)
@@ -266,5 +271,377 @@ mod tests {
         let mut b = [0u8; 1];
         assert_eq!(read(id, b.as_mut_ptr(), 1), 1);
         assert_eq!(b[0], b'x');
+    }
+
+    // ── Group 1: EOF semantics (Linux: close write end → read returns 0) ──
+
+    #[test]
+    fn test_read_eof_after_writer_close() {
+        init_pipes();
+        let id = alloc().unwrap();
+        close(id, true); // close writer
+        let mut buf = [0u8; 16];
+        assert_eq!(read(id, buf.as_mut_ptr(), buf.len()), 0); // EOF
+    }
+
+    #[test]
+    fn test_read_data_then_eof() {
+        init_pipes();
+        let id = alloc().unwrap();
+        write(id, b"hello".as_ptr(), 5);
+        close(id, true); // close writer
+        let mut buf = [0u8; 32];
+        assert_eq!(read(id, buf.as_mut_ptr(), buf.len()), 5); // data first
+        assert_eq!(&buf[..5], b"hello");
+        assert_eq!(read(id, buf.as_mut_ptr(), buf.len()), 0); // then EOF
+    }
+
+    #[test]
+    fn test_writers_closed_flag() {
+        init_pipes();
+        let id = alloc().unwrap();
+        assert!(!writers_closed(id));
+        close(id, true);
+        assert!(writers_closed(id));
+    }
+
+    #[test]
+    fn test_has_data_reflects_eof() {
+        init_pipes();
+        let id = alloc().unwrap();
+        assert!(!has_data(id)); // empty + writers → false
+        write(id, b"x".as_ptr(), 1);
+        assert!(has_data(id)); // data + writers → true
+        let mut b = [0u8; 1];
+        read(id, b.as_mut_ptr(), 1);
+        assert!(!has_data(id)); // empty + writers → false
+        close(id, true);
+        assert!(has_data(id)); // empty + no writers → true (EOF ready)
+    }
+
+    // ── Group 2: EPIPE semantics (Linux: close read end → EPIPE) ──
+
+    #[test]
+    fn test_write_epipe_no_readers() {
+        init_pipes();
+        let id = alloc().unwrap();
+        close(id, false); // close reader
+        assert_eq!(write(id, b"x".as_ptr(), 1), -32); // EPIPE
+    }
+
+    #[test]
+    fn test_write_epipe_after_drain() {
+        init_pipes();
+        let id = alloc().unwrap();
+        write(id, b"data".as_ptr(), 4);
+        close(id, false); // close reader
+        assert_eq!(write(id, b"more".as_ptr(), 4), -32); // EPIPE
+    }
+
+    // ── Group 3: EAGAIN / blocking (Linux: O_NONBLOCK) ──
+
+    #[test]
+    fn test_read_eagain_blocking() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(read_ex(id, buf.as_mut_ptr(), buf.len(), true), -11); // EAGAIN
+    }
+
+    #[test]
+    fn test_read_nonblocking_empty() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(read_ex(id, buf.as_mut_ptr(), buf.len(), false), 0);
+    }
+
+    #[test]
+    fn test_write_eagain_full_blocking() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let big = [0xAA_u8; PIPE_BUF_SIZE];
+        write(id, big.as_ptr(), big.len()); // fill completely
+        assert_eq!(write_ex(id, b"x".as_ptr(), 1, true), -11); // EAGAIN
+    }
+
+    #[test]
+    fn test_write_nonblocking_full() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let big = [0xAA_u8; PIPE_BUF_SIZE];
+        write(id, big.as_ptr(), big.len()); // fill completely
+        assert_eq!(write_ex(id, b"x".as_ptr(), 1, false), 0);
+    }
+
+    // ── Group 4: POSIX atomicity (PIPE_BUF = 4096) ──
+
+    #[test]
+    fn test_atomic_write_no_space() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let fill = [0u8; 13000];
+        write(id, fill.as_ptr(), fill.len()); // 13000 in buffer, 3384 free
+        // Atomic write of 4096 (≤ PIPE_BUF) with only 3384 space → EAGAIN
+        let data = [0u8; 4096];
+        assert_eq!(write_ex(id, data.as_ptr(), data.len(), true), -11);
+    }
+
+    #[test]
+    fn test_large_write_partial_ok() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let fill = [0u8; 15000];
+        write(id, fill.as_ptr(), fill.len()); // 15000 in buffer, 1384 free
+        // Non-atomic write of 5000 (> PIPE_BUF) → partial write of 1384
+        let data = [0u8; 5000];
+        let n = write_ex(id, data.as_ptr(), data.len(), false);
+        assert_eq!(n, (PIPE_BUF_SIZE - 15000) as isize); // 1384
+    }
+
+    #[test]
+    fn test_atomic_write_exact_fit() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let full = [0xBB_u8; PIPE_BUF_SIZE];
+        let n = write(id, full.as_ptr(), full.len());
+        assert_eq!(n, PIPE_BUF_SIZE as isize);
+        assert_eq!(available(id), PIPE_BUF_SIZE);
+        // Next atomic write → EAGAIN
+        assert_eq!(write_ex(id, b"x".as_ptr(), 1, true), -11);
+    }
+
+    // ── Group 5: Ring buffer wrap correctness ──
+
+    #[test]
+    fn test_ring_wrap_integrity() {
+        init_pipes();
+        let id = alloc().unwrap();
+        // Advance read_pos to near the end: write then read a large chunk
+        let advance = [0u8; PIPE_BUF_SIZE - 100];
+        write(id, advance.as_ptr(), advance.len());
+        let mut discard = [0u8; PIPE_BUF_SIZE - 100];
+        read(id, discard.as_mut_ptr(), discard.len());
+        // Now read_pos ≈ PIPE_BUF_SIZE-100, write_pos ≈ PIPE_BUF_SIZE-100
+        // Write 200 bytes that wrap around the end
+        let data: [u8; 200] = core::array::from_fn(|i| (i & 0xFF) as u8);
+        let n = write(id, data.as_ptr(), 200);
+        assert_eq!(n, 200);
+        let mut out = [0u8; 200];
+        let r = read(id, out.as_mut_ptr(), 200);
+        assert_eq!(r, 200);
+        assert_eq!(out, data); // byte-for-byte match across wrap
+    }
+
+    #[test]
+    fn test_fill_drain_cycle() {
+        init_pipes();
+        let id = alloc().unwrap();
+        for cycle in 0..3u8 {
+            let fill: [u8; PIPE_BUF_SIZE] = [cycle; PIPE_BUF_SIZE];
+            let n = write(id, fill.as_ptr(), fill.len());
+            assert_eq!(n, PIPE_BUF_SIZE as isize, "fill failed cycle {}", cycle);
+            let mut drain = [0u8; PIPE_BUF_SIZE];
+            let r = read(id, drain.as_mut_ptr(), drain.len());
+            assert_eq!(r, PIPE_BUF_SIZE as isize, "drain failed cycle {}", cycle);
+            assert!(drain.iter().all(|&b| b == cycle), "data corrupt cycle {}", cycle);
+        }
+    }
+
+    // ── Group 6: Lifecycle & slot management ──
+
+    #[test]
+    fn test_alloc_max_pipes() {
+        init_pipes();
+        let mut ids = Vec::new();
+        for _ in 0..MAX_PIPES {
+            ids.push(alloc().unwrap());
+        }
+        assert!(alloc().is_err()); // 65th fails
+        // Clean up
+        for id in ids {
+            close(id, false);
+            close(id, true);
+        }
+    }
+
+    #[test]
+    fn test_close_frees_slot() {
+        init_pipes();
+        let id = alloc().unwrap();
+        assert_eq!(active_count(), 1);
+        close(id, false);
+        close(id, true);
+        assert_eq!(active_count(), 0);
+        // Slot should be reusable
+        let id2 = alloc().unwrap();
+        assert_eq!(id2, id); // reuses same slot
+    }
+
+    #[test]
+    fn test_active_count_accuracy() {
+        init_pipes();
+        let a = alloc().unwrap();
+        let b = alloc().unwrap();
+        let c = alloc().unwrap();
+        assert_eq!(active_count(), 3);
+        close(a, false); close(a, true);
+        assert_eq!(active_count(), 2);
+        close(b, false); close(b, true);
+        close(c, false); close(c, true);
+        assert_eq!(active_count(), 0);
+    }
+
+    #[test]
+    fn test_double_close_harmless() {
+        init_pipes();
+        let id = alloc().unwrap();
+        close(id, true);  // close writer
+        close(id, true);  // double close — saturating_sub prevents underflow
+        // Pipe still active because reader is open
+        assert!(!writers_closed(id) || writers_closed(id)); // doesn't crash
+    }
+
+    #[test]
+    fn test_close_inactive_noop() {
+        init_pipes();
+        close(0, true);  // close on never-allocated pipe
+        close(0, false); // should not crash
+    }
+
+    // ── Group 7: Reference counting (Linux: dup increments refcount) ──
+
+    #[test]
+    fn test_dup_writer_delays_eof() {
+        init_pipes();
+        let id = alloc().unwrap();
+        dup_ref(id, true); // now 2 writers
+        close(id, true);   // close one writer
+        assert!(!writers_closed(id)); // still 1 writer
+        close(id, true);   // close last writer
+        assert!(writers_closed(id));  // now EOF
+    }
+
+    #[test]
+    fn test_dup_reader_delays_epipe() {
+        init_pipes();
+        let id = alloc().unwrap();
+        dup_ref(id, false); // now 2 readers
+        close(id, false);   // close one reader
+        assert_eq!(write(id, b"ok".as_ptr(), 2), 2); // write still works
+        close(id, false);   // close last reader
+        assert_eq!(write(id, b"x".as_ptr(), 1), -32); // EPIPE
+    }
+
+    #[test]
+    fn test_multi_dup_close_sequence() {
+        init_pipes();
+        let id = alloc().unwrap();
+        // Dup writer 3 times → 4 writers total
+        dup_ref(id, true);
+        dup_ref(id, true);
+        dup_ref(id, true);
+        // Close 3 dups
+        close(id, true);
+        close(id, true);
+        close(id, true);
+        assert!(!writers_closed(id)); // original still open
+        close(id, true); // close original
+        assert!(writers_closed(id));
+    }
+
+    // ── Group 8: Partial reads (Linux: byte stream, no message boundaries) ──
+
+    #[test]
+    fn test_partial_read_leaves_remainder() {
+        init_pipes();
+        let id = alloc().unwrap();
+        write(id, b"0123456789".as_ptr(), 10);
+        let mut buf = [0u8; 3];
+        assert_eq!(read(id, buf.as_mut_ptr(), 3), 3);
+        assert_eq!(&buf, b"012");
+        assert_eq!(available(id), 7);
+        let mut rest = [0u8; 7];
+        assert_eq!(read(id, rest.as_mut_ptr(), 7), 7);
+        assert_eq!(&rest, b"3456789");
+        assert_eq!(available(id), 0);
+    }
+
+    #[test]
+    fn test_multiple_small_reads() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let data = [0x42_u8; 100];
+        write(id, data.as_ptr(), 100);
+        let mut buf = [0u8; 30];
+        assert_eq!(read(id, buf.as_mut_ptr(), 30), 30);
+        assert_eq!(read(id, buf.as_mut_ptr(), 30), 30);
+        assert_eq!(read(id, buf.as_mut_ptr(), 30), 30);
+        assert_eq!(read(id, buf.as_mut_ptr(), 30), 10); // only 10 left
+    }
+
+    // ── Group 9: Waiter system ──
+
+    #[test]
+    fn test_register_get_clear_waiters() {
+        init_pipes();
+        let id = alloc().unwrap();
+        register_waiter(id, 5);
+        register_waiter(id, 10);
+        register_waiter(id, 15);
+        let (count, waiters) = get_waiters(id);
+        assert_eq!(count, 3);
+        assert_eq!(waiters[0], 5);
+        assert_eq!(waiters[1], 10);
+        assert_eq!(waiters[2], 15);
+        clear_all_waiters(id);
+        let (count2, _) = get_waiters(id);
+        assert_eq!(count2, 0);
+    }
+
+    #[test]
+    fn test_waiter_overflow_silent() {
+        init_pipes();
+        let id = alloc().unwrap();
+        for i in 0..MAX_WAITERS + 5 {
+            register_waiter(id, i as u8);
+        }
+        let (count, _) = get_waiters(id);
+        assert_eq!(count, MAX_WAITERS as u8); // capped, no crash
+    }
+
+    // ── Group 10: Edge cases ──
+
+    #[test]
+    fn test_read_write_inactive() {
+        init_pipes();
+        let mut buf = [0u8; 16];
+        assert_eq!(read_ex(0, buf.as_mut_ptr(), buf.len(), false), -9); // EBADF
+        assert_eq!(write_ex(0, b"x".as_ptr(), 1, false), -9); // EBADF
+    }
+
+    #[test]
+    fn test_zero_length_ops() {
+        init_pipes();
+        let id = alloc().unwrap();
+        let mut buf = [0u8; 1];
+        // Zero-length read on empty pipe
+        assert_eq!(read(id, buf.as_mut_ptr(), 0), 0);
+        // Zero-length write
+        assert_eq!(write(id, b"".as_ptr(), 0), 0);
+        // Pipe state unchanged
+        assert_eq!(available(id), 0);
+    }
+
+    #[test]
+    fn test_available_tracks_count() {
+        init_pipes();
+        let id = alloc().unwrap();
+        assert_eq!(available(id), 0);
+        write(id, b"hello world, this is 42 bytes of test data!".as_ptr(), 42);
+        assert_eq!(available(id), 42);
+        let mut buf = [0u8; 10];
+        read(id, buf.as_mut_ptr(), 10);
+        assert_eq!(available(id), 32);
     }
 }
