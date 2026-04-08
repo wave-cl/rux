@@ -223,6 +223,46 @@ r=urllib.request.urlopen("http://10.0.2.15:8080/")
 print("http_ok="+r.read().decode())
 s.shutdown()
 PYTEST
+    cat > "$STAGING/usr/share/rux-tests/socketpair.py" << 'PYTEST'
+import os,ctypes
+libc=ctypes.CDLL(None)
+sv=(ctypes.c_int*2)()
+ret=libc.socketpair(1,1,0,sv)
+if ret==0:
+    a,b=sv[0],sv[1]
+    os.write(a,b'hello_sp')
+    data=os.read(b,32)
+    os.write(b,b'reply_sp')
+    data2=os.read(a,32)
+    os.close(a);os.close(b)
+    print('sp_'+data.decode()+'_'+data2.decode())
+else: print('sp_err')
+PYTEST
+    cat > "$STAGING/usr/share/rux-tests/pipestress.py" << 'PYTEST'
+import os
+ok=0
+for i in range(20):
+    r,w=os.pipe()
+    pid=os.fork()
+    if pid==0:
+        os.close(r);os.write(w,str(i).encode()+b'\n');os._exit(0)
+    os.close(w);d=os.read(r,32).decode().strip();os.close(r)
+    os.waitpid(pid,0)
+    if d==str(i):ok+=1
+print('pipestress_'+str(ok))
+PYTEST
+    cat > "$STAGING/usr/share/rux-tests/forkbomb.py" << 'PYTEST'
+import os
+pids=[]
+for i in range(30):
+    pid=os.fork()
+    if pid==0:os._exit(0)
+    pids.append(pid)
+for p in pids:
+    try:os.waitpid(p,0)
+    except ChildProcessError:pass
+print('forkbomb_ok')
+PYTEST
 
     # Create ext2 image
     rm -f "$OUTPUT"

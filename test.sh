@@ -196,6 +196,9 @@ echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
 curl -s http://example.com 2>&1 | head -1
+python3 /usr/share/rux-tests/socketpair.py 2>&1
+python3 /usr/share/rux-tests/pipestress.py 2>&1
+python3 /usr/share/rux-tests/forkbomb.py 2>&1
 echo all_tests_done
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
@@ -519,6 +522,9 @@ check "git commit"           "master"
 check "ruby print"           "ruby:42"
 check "ruby reduce"          "55"
 check "ruby platform"        "x86_64-linux"
+check "socketpair"           "sp_hello_sp_reply_sp"
+check "pipe stress 20"       "pipestress_20"
+check "fork bomb 30"         "forkbomb_ok"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
@@ -649,6 +655,9 @@ python3 -c "import struct; print('struct_ok' if struct.pack('>I',42)==b'\x00\x00
 python3 -c "import re; print('regex_ok' if re.match(r'\d+','42') else 'FAIL')" 2>&1
 python3 -c "import time; print('time_ok' if time.time()>1000000 else 'FAIL')" 2>&1
 python3 -c "import time;a=time.monotonic();time.sleep(0.1);d=time.monotonic()-a;print('sleep_ok' if d>0.05 else 'sleep_bad')" 2>&1
+python3 /usr/share/rux-tests/socketpair.py 2>&1
+python3 /usr/share/rux-tests/pipestress.py 2>&1
+python3 /usr/share/rux-tests/forkbomb.py 2>&1
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
@@ -939,6 +948,9 @@ check "perl fibonacci"       "pl_fib=6765"
 check "git version"          "git version"
 check "ruby print"           "ruby:42"
 check "ruby reduce"          "55"
+check "socketpair"           "sp_hello_sp_reply_sp"
+check "pipe stress 20"       "pipestress_20"
+check "fork bomb 30"         "forkbomb_ok"
 check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 
