@@ -195,6 +195,7 @@ uptime 2>&1 | head -1
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
+curl -s http://example.com 2>&1 | head -1
 echo all_tests_done
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
@@ -447,6 +448,7 @@ check "df"                   "/dev/vda"
 check "du"                   "/bin"
 check "uptime"               "load average"
 check "wget http"            "Example Domain"
+check "curl http"            "Example Domain"
 check "perl"                 "perl:42"
 check "python3 installed"    "Python 3"
 check "python3 print"        "4950"

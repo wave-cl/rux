@@ -220,6 +220,15 @@ pub unsafe fn load_elf_from_inode(
         slot.cmdline[..len].copy_from_slice(&cmdline[..len]);
         slot.cmdline_len = len as u8;
     }
+    // Check for pending reschedule before entering userspace.
+    // After exec, other pipeline processes may be waiting to run.
+    // Without this, the post_syscall check is skipped (exec doesn't return).
+    unsafe {
+        let sched = crate::scheduler::get();
+        if sched.need_resched {
+            sched.schedule();
+        }
+    }
     {
         use rux_arch::UserModeOps;
         crate::arch::Arch::enter_user_mode(entry_point, user_sp);
