@@ -104,6 +104,10 @@ unsafe fn enqueue_child(child_idx: usize) {
     task.entity.nice = 0;
     sched.cfs.set_clock(0, sched.clock_ns);
     sched.cfs.enqueue(0, &mut task.entity, rux_sched::fair::constants::WF_FORK);
+    // Trigger reschedule so the new child can run promptly.
+    // Without this, the parent continues until the next timer tick,
+    // which delays pipeline startup (child needs to exec before siblings).
+    sched.need_resched = true;
 }
 
 // ── fork() ───────────────────────────────────────────────────────────

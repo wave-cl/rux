@@ -411,9 +411,6 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
 
                 let sched = crate::scheduler::get();
                 sched.tick(1_000_000);
-                // Note: preemption from ISR is not safe (context_switch swaps RSP,
-                // breaking the ISR frame). Instead, need_resched is checked on
-                // syscall return (post_syscall) and in the idle loop.
             }
         }
         48 => {
