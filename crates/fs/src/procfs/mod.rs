@@ -69,8 +69,13 @@ const PID_STATUS_BASE: InodeId = 4000;
 const PID_EXE_BASE: InodeId = 5000;    // /proc/[pid]/exe symlink
 const PID_MAPS_BASE: InodeId = 6000;   // /proc/[pid]/maps
 const PID_FD_DIR_BASE: InodeId = 7000; // /proc/[pid]/fd directory
+const PID_COMM_BASE: InodeId = 8000;  // /proc/[pid]/comm
+const PID_ENVIRON_BASE: InodeId = 8100; // /proc/[pid]/environ
+const PID_CGROUP_BASE: InodeId = 8200;  // /proc/[pid]/cgroup
+const PID_MOUNTINFO_BASE: InodeId = 8300; // /proc/[pid]/mountinfo
+const PID_OOM_BASE: InodeId = 8400;   // /proc/[pid]/oom_score
 
-const PID_SUBENTRIES: [(&[u8], InodeId); 7] = [
+const PID_SUBENTRIES: [(&[u8], InodeId); 12] = [
     (b"stat", PID_STAT_BASE),
     (b"cmdline", PID_CMDLINE_BASE),
     (b"statm", PID_STATM_BASE),
@@ -78,6 +83,11 @@ const PID_SUBENTRIES: [(&[u8], InodeId); 7] = [
     (b"exe", PID_EXE_BASE),
     (b"maps", PID_MAPS_BASE),
     (b"fd", PID_FD_DIR_BASE),
+    (b"comm", PID_COMM_BASE),
+    (b"environ", PID_ENVIRON_BASE),
+    (b"cgroup", PID_CGROUP_BASE),
+    (b"mountinfo", PID_MOUNTINFO_BASE),
+    (b"oom_score", PID_OOM_BASE),
 ];
 
 fn is_pid_dir(ino: InodeId) -> bool { ino >= PID_DIR_BASE && ino < PID_STAT_BASE }
@@ -86,7 +96,12 @@ fn is_pid_exe(ino: InodeId) -> bool { ino >= PID_EXE_BASE && ino < PID_MAPS_BASE
 fn is_pid_file(ino: InodeId) -> bool { ino >= PID_STAT_BASE && !is_pid_fd_dir(ino) }
 fn pid_from_dir(ino: InodeId) -> u64 { ino - PID_DIR_BASE }
 fn pid_from_file(ino: InodeId) -> u64 {
-    if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE { ino - PID_MAPS_BASE }
+    if ino >= PID_OOM_BASE { ino - PID_OOM_BASE }
+    else if ino >= PID_MOUNTINFO_BASE { ino - PID_MOUNTINFO_BASE }
+    else if ino >= PID_CGROUP_BASE { ino - PID_CGROUP_BASE }
+    else if ino >= PID_ENVIRON_BASE { ino - PID_ENVIRON_BASE }
+    else if ino >= PID_COMM_BASE { ino - PID_COMM_BASE }
+    else if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE { ino - PID_MAPS_BASE }
     else if ino >= PID_EXE_BASE { ino - PID_EXE_BASE }
     else if ino >= PID_STATUS_BASE { ino - PID_STATUS_BASE }
     else if ino >= PID_STATM_BASE { ino - PID_STATM_BASE }
@@ -234,11 +249,40 @@ impl ProcFs {
             _ if is_pid_file(ino) => {
                 let pid = pid_from_file(ino);
                 if !self.pid_exists(pid) { return 0; }
-                if ino >= PID_STATUS_BASE && ino < PID_EXE_BASE {
+                if ino >= PID_OOM_BASE {
+                    // /proc/[pid]/oom_score — always 0
+                    let s = b"0\n";
+                    buf[..s.len()].copy_from_slice(s);
+                    s.len()
+                } else if ino >= PID_MOUNTINFO_BASE {
+                    // /proc/[pid]/mountinfo
+                    let s = b"1 1 254:0 / / rw,relatime - ext2 /dev/vda rw\n";
+                    let len = s.len().min(buf.len());
+                    buf[..len].copy_from_slice(&s[..len]);
+                    len
+                } else if ino >= PID_CGROUP_BASE {
+                    // /proc/[pid]/cgroup — empty (no cgroup)
+                    let s = b"0::/\n";
+                    let len = s.len().min(buf.len());
+                    buf[..len].copy_from_slice(&s[..len]);
+                    len
+                } else if ino >= PID_ENVIRON_BASE {
+                    // /proc/[pid]/environ — simplified
+                    let s = b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0HOME=/root\0";
+                    let len = s.len().min(buf.len());
+                    buf[..len].copy_from_slice(&s[..len]);
+                    len
+                } else if ino >= PID_COMM_BASE {
+                    // /proc/[pid]/comm — process name
+                    let s = b"sh\n";
+                    let len = s.len().min(buf.len());
+                    buf[..len].copy_from_slice(&s[..len]);
+                    len
+                } else if ino >= PID_STATUS_BASE && ino < PID_EXE_BASE {
                     self.gen_pid_status(pid, buf)
-                } else if ino >= PID_STATM_BASE {
+                } else if ino >= PID_STATM_BASE && ino < PID_STATUS_BASE {
                     self.gen_pid_statm(buf)
-                } else if ino >= PID_CMDLINE_BASE {
+                } else if ino >= PID_CMDLINE_BASE && ino < PID_STATM_BASE {
                     self.gen_pid_cmdline(pid, buf)
                 } else {
                     self.gen_pid_stat(pid, buf)
