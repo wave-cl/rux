@@ -388,13 +388,19 @@ pub fn dup3(oldfd: usize, newfd: usize, flags: usize) -> isize {
     result
 }
 
-pub fn prlimit64(_pid: usize, _resource: usize, _new_limit: usize, old_limit: usize) -> isize {
-    // Return RLIM_INFINITY for all resources
+pub fn prlimit64(_pid: usize, resource: usize, _new_limit: usize, old_limit: usize) -> isize {
     if old_limit != 0 {
+        if crate::uaccess::validate_user_ptr(old_limit, 16).is_err() { return crate::errno::EFAULT; }
         unsafe {
             let rlim_infinity: u64 = !0;
-            crate::uaccess::put_user(old_limit, rlim_infinity);
-            crate::uaccess::put_user(old_limit + 8, rlim_infinity);
+            // Return sensible defaults per resource
+            let (cur, max) = match resource {
+                7 => (256u64, 256),   // RLIMIT_NOFILE — matches MAX_FDS
+                3 => (8 * 1024 * 1024, rlim_infinity), // RLIMIT_STACK — 8MB default
+                _ => (rlim_infinity, rlim_infinity),
+            };
+            crate::uaccess::put_user(old_limit, cur);
+            crate::uaccess::put_user(old_limit + 8, max);
         }
     }
     0
