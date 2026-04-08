@@ -411,6 +411,15 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
 
                 let sched = crate::scheduler::get();
                 sched.tick(1_000_000);
+                // Preemptive scheduling: only from user mode (ring 3) and only
+                // on single-CPU configs. With SMP, the shared scheduler has no
+                // lock, so ISR preemption races with AP's syscall-return schedule.
+                if crate::percpu::online_cpus() == 1 {
+                    let saved_cs = *(frame as *const u64).add(18);
+                    if sched.need_resched && (saved_cs & 3) == 3 {
+                        sched.schedule();
+                    }
+                }
             }
         }
         48 => {
