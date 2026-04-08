@@ -160,8 +160,8 @@ echo old > /tmp/trunc && echo new > /tmp/trunc && cat /tmp/trunc
 echo line1 >> /tmp/app && echo line2 >> /tmp/app && wc -l /tmp/app
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
-seq 1 100 > /tmp/big && wc -l /tmp/big
-rm /tmp/big && ls /tmp/big 2>&1
+seq 1 100 > /tmp/big; wc -l /tmp/big
+rm /tmp/big; ls /tmp/big 2>&1
 ln -s /etc/passwd /tmp/sl && cat /tmp/sl | head -1
 echo dup_test > /tmp/dup && cat /tmp/dup
 md5sum /etc/passwd | cut -d' ' -f1
@@ -582,8 +582,8 @@ echo a | cat | cat | cat
 echo p1 | sed 's/p/q/' | tr a-z A-Z
 echo old > /tmp/trunc && echo new > /tmp/trunc && cat /tmp/trunc
 echo line1 >> /tmp/app && echo line2 >> /tmp/app && wc -l /tmp/app
-seq 1 100 > /tmp/big && wc -l /tmp/big
-rm /tmp/big && ls /tmp/big 2>&1
+seq 1 100 > /tmp/big; wc -l /tmp/big
+rm /tmp/big; ls /tmp/big 2>&1
 ln -s /etc/passwd /tmp/sl && cat /tmp/sl | head -1
 echo dup_test > /tmp/dup && cat /tmp/dup
 md5sum /etc/passwd | cut -d' ' -f1
