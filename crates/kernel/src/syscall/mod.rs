@@ -802,7 +802,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     let sched = crate::scheduler::get();
                     sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
                     sched.dequeue_current();
-                    sched.need_resched = true;
+                    sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
                     sched.schedule();
                     if crate::arch::Arch::ticks() < deadline {
                         return crate::errno::EINTR;
@@ -1288,7 +1288,7 @@ pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
         result
     };
     let sched = crate::scheduler::get();
-    if sched.need_resched {
+    if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
         unsafe { crate::arch::preempt_disable(); }
         sched.schedule();
         unsafe { crate::arch::preempt_enable(); }

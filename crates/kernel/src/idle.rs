@@ -14,7 +14,7 @@ pub extern "C" fn idle_loop() -> ! {
             crate::arch::Arch::halt_until_interrupt();
             // After timer IRQ wakes us, check if any task became runnable
             let sched = crate::scheduler::get();
-            if sched.need_resched {
+            if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
                 crate::arch::preempt_disable();
                 sched.schedule();
                 crate::arch::preempt_enable();

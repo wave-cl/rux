@@ -718,7 +718,7 @@ unsafe fn pipe_block(pipe_id: u8) {
     let sched = crate::scheduler::get();
     sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
     sched.dequeue_current();
-    sched.need_resched = true;
+    sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
     crate::arch::irq_restore(was);
     crate::arch::preempt_disable();
     sched.schedule();

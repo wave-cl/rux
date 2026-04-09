@@ -43,6 +43,9 @@ pub struct PerCpu {
     /// Top of per-CPU IRQ stack (aarch64). IRQ handlers run on this stack
     /// to avoid corrupting the task kernel stack's exception frame.
     pub irq_stack_top: u64,         // offset 56
+    /// Per-CPU reschedule flag. Set by wake_task_on, checked by schedule.
+    /// Replaces the global need_resched for proper SMP task migration.
+    pub need_resched: bool,         // offset 64
 }
 
 /// Assembly-accessible offsets into PerCpu (must match #[repr(C)] layout).
@@ -61,7 +64,7 @@ impl PerCpu {
             saved_user_rsp: 0, saved_syscall_a5: 0, syscall_kstack_top: 0,
             cpu_id: 0, online: false, idle: true, _pad: [0; 2],
             current_task_idx: 0, kstack_top: 0, preempt_count: 0,
-            _pad2: [0; 4], irq_stack_top: 0,
+            _pad2: [0; 4], irq_stack_top: 0, need_resched: false,
         }
     }
 }

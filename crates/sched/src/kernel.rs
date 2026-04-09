@@ -62,9 +62,10 @@ pub struct Scheduler {
     pub current: usize,
     /// Clock in nanoseconds (advanced by timer ISR).
     pub clock_ns: u64,
-    /// Whether a reschedule is pending.
-    pub need_resched: bool,
-    /// CPU ID this scheduler instance runs on (for per-CPU runqueues).
+    /// Per-CPU reschedule bitmask. Bit N set = CPU N needs to reschedule.
+    /// Replaces the global `need_resched: bool` for proper SMP support.
+    pub need_resched: u64,
+    /// CPU ID this scheduler instance runs on (updated by set_running_cpu).
     pub cpu_id: u32,
     /// Architecture-specific context switch functions.
     ctx: Option<ContextFns>,
@@ -82,7 +83,7 @@ impl Scheduler {
             tasks: [EMPTY_TASK; MAX_TASKS],
             current: 0,
             clock_ns: 0,
-            need_resched: false,
+            need_resched: 0,
             cpu_id: 0,
             ctx: None,
         };
@@ -140,20 +141,20 @@ impl Scheduler {
         // but check if any tasks became runnable (via wake_task or enqueue)
         if current == 0 {
             if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
-                self.need_resched = true;
+                self.need_resched |= 1u64 << self.cpu_id;
             }
             return;
         }
         if current < MAX_TASKS && self.tasks[current].active {
             let entity = &mut self.tasks[current].entity;
             if self.cfs.task_tick(self.cpu_id, entity) {
-                self.need_resched = true;
+                self.need_resched |= 1u64 << self.cpu_id;
             }
             // Force reschedule when other tasks are waiting.
             // Without preemptive ISR scheduling, this ensures the
             // post_syscall check catches pending tasks promptly.
             if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
-                self.need_resched = true;
+                self.need_resched |= 1u64 << self.cpu_id;
             }
         }
     }
@@ -161,7 +162,7 @@ impl Scheduler {
     /// Remove the current task from the runqueue (it's going to sleep/wait/exit).
     /// Sets need_resched so the next schedule() call picks another task.
     pub fn dequeue_current(&mut self) {
-        self.need_resched = true;
+        self.need_resched |= 1u64 << self.cpu_id;
         // Task won't be put_prev'd in schedule() because we mark it non-active
         // by setting its state to Interruptible. Actually, schedule() only
         // put_prev's if the task is active. We need to ensure it's not
@@ -185,7 +186,7 @@ impl Scheduler {
         self.tasks[idx].entity.cpu = target_cpu;
         self.cfs.set_clock(target_cpu, self.clock_ns);
         self.cfs.enqueue(target_cpu, &mut self.tasks[idx].entity, 0);
-        self.need_resched = true;
+        self.need_resched |= 1u64 << target_cpu;
         target_cpu
     }
 
@@ -207,10 +208,11 @@ impl Scheduler {
     /// Schedule on a specific CPU's runqueue.
     /// Called with the actual running CPU's ID (may differ from self.cpu_id on APs).
     pub unsafe fn schedule_on(&mut self, cpu: u32) {
-        if !self.need_resched {
+        let cpu_bit = 1u64 << cpu;
+        if self.need_resched & cpu_bit == 0 {
             return;
         }
-        self.need_resched = false;
+        self.need_resched &= !cpu_bit;
 
         let old_idx = self.current;
 
@@ -240,8 +242,8 @@ impl Scheduler {
         // If more tasks are queued, set need_resched so the next syscall
         // return (post_syscall) triggers another switch. This ensures rapid
         // interleaving during pipeline startup without ISR preemption.
-        if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
-            self.need_resched = true;
+        if self.cfs.rqs[cpu as usize].nr_running > 0 {
+            self.need_resched |= 1u64 << cpu;
         }
 
         // Keep timer always running — slot 0 is the init/shell process which

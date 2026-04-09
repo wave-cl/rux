@@ -33,7 +33,7 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
             core::arch::asm!("wfi", options(nostack, nomem));
             // After timer interrupt, check if scheduler wants to reschedule
             let sched = crate::scheduler::get();
-            if sched.need_resched {
+            if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
                 crate::arch::preempt_disable();
                 sched.schedule();
                 crate::arch::preempt_enable();

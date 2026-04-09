@@ -42,7 +42,7 @@ pub(crate) unsafe fn yield_1ms() {
         let sched = crate::scheduler::get();
         sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
         sched.dequeue_current();
-        sched.need_resched = true;
+        sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
         sched.schedule();
     } else {
         // Single task: HLT until next interrupt (~1ms timer tick)
@@ -1044,7 +1044,7 @@ fn futex_wait(uaddr: usize, expected: u32, timeout_ptr: usize) -> isize {
         let sched = crate::scheduler::get();
         sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
         sched.dequeue_current();
-        sched.need_resched = true;
+        sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
         sched.schedule();
 
         // Check if we were woken by timeout (wake_sleepers sets state=Ready

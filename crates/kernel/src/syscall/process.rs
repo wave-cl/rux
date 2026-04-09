@@ -132,7 +132,7 @@ pub fn exit(status: i32) -> ! {
                 sched.tasks[idx].entity.state = rux_sched::TaskState::Dead;
                 sched.tasks[idx].active = false;
                 sched.dequeue_current();
-                sched.need_resched = true;
+                sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
                 sched.schedule();
                 // Bug indicator: schedule() should never return for a dead task.
                 use rux_arch::ConsoleOps;
@@ -261,7 +261,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 // Mark Interruptible so schedule() doesn't re-enqueue the parent.
                 sched.tasks[current_task_idx()].entity.state = rux_sched::TaskState::Interruptible;
                 sched.dequeue_current();
-                sched.need_resched = true;
+                sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
                 sched.schedule(); // returns when woken by child's exit()
             }
         }
@@ -366,7 +366,7 @@ pub fn nanosleep(req_ptr: usize) -> isize {
         let sched = crate::scheduler::get();
         sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
         sched.dequeue_current();
-        sched.need_resched = true;
+        sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
         sched.schedule();
 
         // Woke up — check why

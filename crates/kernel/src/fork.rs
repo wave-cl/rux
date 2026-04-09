@@ -111,7 +111,7 @@ unsafe fn enqueue_child(child_idx: usize) {
     // Trigger reschedule so the new child can run promptly.
     // Without this, the parent continues until the next timer tick,
     // which delays pipeline startup (child needs to exec before siblings).
-    sched.need_resched = true;
+    sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
 }
 
 // ── fork() ───────────────────────────────────────────────────────────

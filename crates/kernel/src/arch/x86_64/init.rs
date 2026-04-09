@@ -44,7 +44,7 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
             core::arch::asm!("hlt", options(nostack, nomem));
             // After waking from hlt (timer fired), check reschedule
             let sched = crate::scheduler::get();
-            if sched.need_resched {
+            if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
                 crate::arch::preempt_disable();
                 sched.schedule();
                 crate::arch::preempt_enable();

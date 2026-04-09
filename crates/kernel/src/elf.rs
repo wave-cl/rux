@@ -228,7 +228,7 @@ pub unsafe fn load_elf_from_inode(
     // Without this, the post_syscall check is skipped (exec doesn't return).
     unsafe {
         let sched = crate::scheduler::get();
-        if sched.need_resched {
+        if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
             sched.schedule();
         }
     }
