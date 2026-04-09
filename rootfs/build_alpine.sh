@@ -68,7 +68,10 @@ install_apk() {
                c-ares nghttp2-libs brotli-libs libidn2 libunistring libpsl zstd-libs libcurl curl ca-certificates \
                pcre2 git \
                lua5.4 lua5.4-libs \
-               htop; do
+               htop \
+               openssh-server openssh-keygen openssh-sftp-server \
+               libedit \
+               dropbear dropbear-dbclient dropbear-scp; do
         local f=$(find_pkg "$pkg")
         if [ -n "$f" ]; then
             fetch_and_extract "$f"
@@ -110,11 +113,8 @@ build_alpine() {
     # Configure for rux
     # Console on serial
     cat > "$STAGING/etc/inittab" << 'CONF'
-::sysinit:/sbin/openrc sysinit
-::sysinit:/sbin/openrc boot
-::wait:/sbin/openrc default
+::sysinit:/sbin/rux-init
 ::respawn:/sbin/getty 0 console
-::shutdown:/sbin/openrc shutdown
 CONF
 
     # Hostname
@@ -174,14 +174,59 @@ CONF
         rm -f "$STAGING/etc/runlevels/default/$svc" 2>/dev/null
     done
 
-    # Simple /sbin/init fallback: just spawn a shell
+    # Enable sshd in default runlevel (OpenRC)
+    mkdir -p "$STAGING/etc/runlevels/default"
+    ln -sf /etc/init.d/sshd "$STAGING/etc/runlevels/default/sshd" 2>/dev/null || true
+
+    # ── SSH server setup ─────────────────────────────────────────────
+    mkdir -p "$STAGING/etc/ssh"
+    mkdir -p "$STAGING/root/.ssh"
+    chmod 700 "$STAGING/root/.ssh"
+
+    # Pre-generate host keys (avoids slow keygen at boot)
+    ssh-keygen -t ed25519 -f "$STAGING/etc/ssh/ssh_host_ed25519_key" -N "" -q
+    ssh-keygen -t rsa -b 2048 -f "$STAGING/etc/ssh/ssh_host_rsa_key" -N "" -q
+
+    # sshd_config: allow root login with key auth
+    cat > "$STAGING/etc/ssh/sshd_config" << 'SSHCONF'
+Port 22
+PermitRootLogin yes
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication yes
+PermitEmptyPasswords yes
+Subsystem sftp /usr/lib/ssh/sftp-server
+UseDNS no
+SSHCONF
+
+    # Authorize the host user's public key
+    if [ -f "$HOME/.ssh/id_ed25519.pub" ]; then
+        cat "$HOME/.ssh/id_ed25519.pub" > "$STAGING/root/.ssh/authorized_keys"
+    elif [ -f "$HOME/.ssh/id_rsa.pub" ]; then
+        cat "$HOME/.ssh/id_rsa.pub" > "$STAGING/root/.ssh/authorized_keys"
+    fi
+    chmod 600 "$STAGING/root/.ssh/authorized_keys" 2>/dev/null || true
+
+    # Dropbear host key dir (keys generated at first boot with -R flag)
+    mkdir -p "$STAGING/etc/dropbear"
+
+    # rux-init: mount filesystems and start dropbear SSH
     cat > "$STAGING/sbin/rux-init" << 'INITSCRIPT'
 #!/bin/sh
 mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sys /sys 2>/dev/null
 mount -t devtmpfs dev /dev 2>/dev/null
-echo "Alpine Linux on rux"
-exec /bin/sh
+
+# Start dropbear SSH server (single-process, no fork for key exchange)
+if [ -x /usr/sbin/dropbear ]; then
+    /usr/sbin/dropbear -F -E -R -B 2>&1 &
+    echo "rux: dropbear sshd started (pid $!)"
+elif [ -x /usr/sbin/sshd ]; then
+    /usr/sbin/sshd -D -e &
+    echo "rux: openssh sshd started (pid $!)"
+fi
+
+echo "Alpine Linux on rux — ssh root@localhost -p 2222"
 INITSCRIPT
     chmod 755 "$STAGING/sbin/rux-init"
 

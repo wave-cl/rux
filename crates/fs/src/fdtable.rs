@@ -67,6 +67,10 @@ pub static mut FD_TABLE_CPU_ID: usize = 0;
 /// Callback to get the current CPU ID (set by kernel at scheduler init).
 pub static mut GET_CPU_FN: Option<fn() -> usize> = None;
 
+/// Socket refcount callbacks (set by kernel at init).
+pub static mut SOCKET_DUP_REF: Option<unsafe fn(u8)> = None;
+pub static mut SOCKET_CLOSE_REF: Option<unsafe fn(u8)> = None;
+
 /// Get the current CPU ID via callback or legacy global.
 #[inline(always)]
 unsafe fn current_cpu() -> usize {
@@ -191,12 +195,15 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
         if oldfd > 2 && !(*fd_table())[oldfd].active { return -9; }
         // POSIX: if oldfd == newfd, return newfd without closing/reopening
         if oldfd == newfd { return newfd as isize; }
-        // Close newfd if it's currently open (including pipe cleanup)
+        // Close newfd if it's currently open (including pipe/socket cleanup)
         if (*fd_table())[newfd].active {
             if (*fd_table())[newfd].is_pipe {
                 if let Some(p) = pipes {
                     (p.close)((*fd_table())[newfd].pipe_id, (*fd_table())[newfd].pipe_write);
                 }
+            }
+            if (*fd_table())[newfd].is_socket {
+                if let Some(f) = SOCKET_CLOSE_REF { f((*fd_table())[newfd].socket_idx); }
             }
             (*fd_table())[newfd].active = false;
         }
@@ -220,6 +227,9 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
                         (p.dup_ref)((*fd_table())[newfd].pipe_id_write, true);
                     }
                 }
+            }
+            if (*fd_table())[newfd].is_socket {
+                if let Some(f) = SOCKET_DUP_REF { f((*fd_table())[newfd].socket_idx); }
             }
         }
     }

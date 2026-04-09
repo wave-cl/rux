@@ -446,6 +446,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     t[73] = Syscall::Flock;
     t[38] = Syscall::SetItimer;
     t[270] = Syscall::Pselect6;
+    t[271] = Syscall::Ppoll2;       // ppoll
     t[230] = Syscall::ClockNanosleep;
     t[23] = Syscall::Pselect6;  // select() — same handler works
     t[81] = Syscall::Fchdir;

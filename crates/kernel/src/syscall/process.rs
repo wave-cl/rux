@@ -19,6 +19,19 @@ unsafe fn close_all_pipes() {
     }
 }
 
+unsafe fn close_all_sockets() {
+    for i in 0..rux_fs::fdtable::MAX_FDS {
+        if let Some(f) = rux_fs::fdtable::get_fd(i) {
+            if f.is_socket {
+                let sock_idx = f.socket_idx;
+                (*rux_fs::fdtable::fd_table())[i].active = false;
+                (*rux_fs::fdtable::fd_table())[i].is_socket = false;
+                super::socket::close_socket_ref(sock_idx);
+            }
+        }
+    }
+}
+
 /// _exit(status) — POSIX.1
 pub fn exit(status: i32) -> ! {
     unsafe { super::process().last_child_exit = status; }
@@ -28,8 +41,9 @@ pub fn exit(status: i32) -> ! {
         use crate::task_table::*;
         let idx = current_task_idx();
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
-            // Close all pipe FDs so reader/writer counts drop correctly.
+            // Close all pipe and socket FDs so refcounts drop correctly.
             close_all_pipes();
+            close_all_sockets();
 
             // Restore fd 0-2 as console if they were corrupted by the child.
             // The global FD_TABLE is shared, so a child that dup2'd a file onto

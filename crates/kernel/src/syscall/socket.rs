@@ -14,6 +14,9 @@ const MAX_SOCKETS: usize = 32;
 #[derive(Clone, Copy)]
 struct SocketSlot {
     active: bool,
+    /// Reference count — number of fd references across all processes.
+    /// Incremented on fork/dup, decremented on close. Socket freed at 0.
+    ref_count: u8,
     sock_type: u32,
     bound_port: u16,
     /// smoltcp SocketHandle raw index. -1 = no handle.
@@ -29,7 +32,7 @@ struct SocketSlot {
 impl SocketSlot {
     const fn empty() -> Self {
         Self {
-            active: false, sock_type: 0, bound_port: 0,
+            active: false, ref_count: 0, sock_type: 0, bound_port: 0,
             smol_handle_raw: -1,
             connected_ip: [0; 4], connected_port: 0, connected: false,
             reuse_addr: false,
@@ -119,6 +122,7 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
 
         SOCKETS[sock_idx] = SocketSlot::empty();
         SOCKETS[sock_idx].active = true;
+        SOCKETS[sock_idx].ref_count = 1;
         SOCKETS[sock_idx].sock_type = st;
         SOCKETS[sock_idx].smol_handle_raw = handle_raw;
 
@@ -141,6 +145,33 @@ unsafe fn resolve_socket(fd: usize) -> Option<usize> {
         if idx < MAX_SOCKETS && SOCKETS[idx].active { return Some(idx); }
     }
     None
+}
+
+/// Increment socket reference count (called on fork/dup).
+pub unsafe fn dup_socket_ref(sock_idx: u8) {
+    let idx = sock_idx as usize;
+    if idx < MAX_SOCKETS && SOCKETS[idx].active {
+        SOCKETS[idx].ref_count = SOCKETS[idx].ref_count.saturating_add(1);
+    }
+}
+
+/// Decrement socket reference count. Frees smoltcp handle when it reaches 0.
+pub unsafe fn close_socket_ref(sock_idx: u8) {
+    let idx = sock_idx as usize;
+    if idx < MAX_SOCKETS && SOCKETS[idx].active {
+        SOCKETS[idx].ref_count = SOCKETS[idx].ref_count.saturating_sub(1);
+        if SOCKETS[idx].ref_count == 0 {
+            #[cfg(feature = "net")]
+            if SOCKETS[idx].smol_handle_raw >= 0 {
+                let handle = to_handle(SOCKETS[idx].smol_handle_raw);
+                if SOCKETS[idx].sock_type == SOCK_STREAM {
+                    rux_net::tcp_close(handle);
+                }
+                rux_net::socket_free(handle);
+            }
+            SOCKETS[idx].active = false;
+        }
+    }
 }
 
 /// bind(fd, addr, addrlen)
@@ -253,15 +284,23 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr:
             let handle = to_handle(sock.smol_handle_raw);
 
             if sock.sock_type == SOCK_STREAM {
-                // Ensure connection is established before sending
-                rux_net::poll(crate::arch::Arch::ticks());
-                match rux_net::tcp_send(handle, &kbuf[..send_len]) {
-                    Ok(n) => {
-                        rux_net::poll(crate::arch::Arch::ticks());
-                        return n as isize;
+                let nonblock = fd < rux_fs::fdtable::MAX_FDS
+                    && ((*rux_fs::fdtable::fd_table())[fd].flags & O_NONBLOCK) != 0;
+                let max_iters = if nonblock { 10u32 } else { 30_000u32 };
+                for _ in 0..max_iters {
+                    rux_net::poll(crate::arch::Arch::ticks());
+                    if !rux_net::tcp_is_established(handle) {
+                        return -32; // EPIPE — connection closed
                     }
-                    Err(_) => return crate::errno::EIO,
+                    match rux_net::tcp_send(handle, &kbuf[..send_len]) {
+                        Ok(n) => {
+                            rux_net::poll(crate::arch::Arch::ticks());
+                            return n as isize;
+                        }
+                        Err(_) => { /* TX buffer full — poll and retry */ }
+                    }
                 }
+                return if nonblock { crate::errno::EAGAIN } else { crate::errno::EIO };
             } else if sock.sock_type == SOCK_DGRAM {
                 if SOCKETS[idx].bound_port == 0 {
                     let port = rux_net::alloc_port();
@@ -424,6 +463,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                     // 2. Move the connected smoltcp handle to the new slot
                     SOCKETS[new_sock_idx] = SocketSlot::empty();
                     SOCKETS[new_sock_idx].active = true;
+                    SOCKETS[new_sock_idx].ref_count = 1;
                     SOCKETS[new_sock_idx].sock_type = SOCK_STREAM;
                     SOCKETS[new_sock_idx].smol_handle_raw = SOCKETS[idx].smol_handle_raw;
                     SOCKETS[new_sock_idx].connected = true;
@@ -500,54 +540,21 @@ pub fn sys_shutdown(fd: usize, how: usize) -> isize {
 /// The fd is known to be active and is_socket — skip those checks.
 pub fn close_socket_for_exec(fd: usize) {
     unsafe {
-        let sock_idx = (*rux_fs::fdtable::fd_table())[fd].socket_idx as usize;
-        // Check if any OTHER fd still references this socket
-        let still_referenced = (0..rux_fs::fdtable::MAX_FDS).any(|f| {
-            f != fd && {
-                let e = &(*rux_fs::fdtable::fd_table())[f];
-                e.active && e.is_socket && e.socket_idx as usize == sock_idx
-                    && e.fd_flags & rux_fs::fdtable::FD_CLOEXEC == 0 // non-CLOEXEC fd survives exec
-            }
-        });
-        if !still_referenced && sock_idx < MAX_SOCKETS {
-            #[cfg(feature = "net")]
-            if SOCKETS[sock_idx].smol_handle_raw >= 0 {
-                let handle = to_handle(SOCKETS[sock_idx].smol_handle_raw);
-                if SOCKETS[sock_idx].sock_type == SOCK_STREAM {
-                    rux_net::tcp_close(handle);
-                }
-                rux_net::socket_free(handle);
-            }
-            SOCKETS[sock_idx].active = false;
-        }
+        let sock_idx = (*rux_fs::fdtable::fd_table())[fd].socket_idx;
+        close_socket_ref(sock_idx);
     }
 }
 
-/// close a socket
+/// close a socket — decrements refcount, frees when it reaches 0
 pub fn sys_close_socket(fd: usize) -> isize {
     unsafe {
         if fd >= rux_fs::fdtable::MAX_FDS { return crate::errno::EBADF; }
         let entry = &(*rux_fs::fdtable::fd_table())[fd];
         if !entry.active || !entry.is_socket { return crate::errno::EBADF; }
-        let sock_idx = entry.socket_idx as usize;
+        let sock_idx = entry.socket_idx;
 
         (*rux_fs::fdtable::fd_table())[fd] = rux_fs::fdtable::EMPTY_FD;
-
-        let still_referenced = (0..rux_fs::fdtable::MAX_FDS).any(|f| {
-            let e = &(*rux_fs::fdtable::fd_table())[f];
-            e.active && e.is_socket && e.socket_idx as usize == sock_idx
-        });
-        if !still_referenced && sock_idx < MAX_SOCKETS {
-            #[cfg(feature = "net")]
-            if SOCKETS[sock_idx].smol_handle_raw >= 0 {
-                let handle = to_handle(SOCKETS[sock_idx].smol_handle_raw);
-                if SOCKETS[sock_idx].sock_type == SOCK_STREAM {
-                    rux_net::tcp_close(handle);
-                }
-                rux_net::socket_free(handle);
-            }
-            SOCKETS[sock_idx].active = false;
-        }
+        close_socket_ref(sock_idx);
     }
     0
 }
@@ -655,8 +662,8 @@ pub fn sys_getsockopt(fd: usize, _level: usize, optname: usize, optval: usize, o
             7 | 8 => 65536, // SO_SNDBUF / SO_RCVBUF
             _ => 0,
         };
-        if optval != 0 { *(optval as *mut i32) = val; }
-        if optlen != 0 { *(optlen as *mut u32) = 4; }
+        if optval >= 0x1000 { crate::uaccess::put_user(optval, val); }
+        if optlen >= 0x1000 { crate::uaccess::put_user(optlen, 4u32); }
     }
     0
 }

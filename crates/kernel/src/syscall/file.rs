@@ -656,6 +656,102 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
             }
             0
         }
+        // ── Network interface ioctls (SIOCGIF*) ─────────────────────
+        // struct ifreq { char ifr_name[16]; union { sockaddr, flags, ... }; }
+        // sockaddr_in { sa_family(2), sin_port(2), sin_addr(4), zero(8) } at offset 16
+        0x8912 => {
+            // SIOCGIFCONF: list network interfaces
+            // arg → struct ifconf { int ifc_len; union { char* buf; struct ifreq* req; } }
+            if arg == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(arg, 16).is_err() { return crate::errno::EFAULT; }
+            unsafe {
+                let ifc_len = *(arg as *const i32);
+                let ifc_buf = *((arg + 8) as *const usize); // pointer to buffer (64-bit)
+                if ifc_buf != 0 && ifc_len >= 40 {
+                    if crate::uaccess::validate_user_ptr(ifc_buf, 40).is_err() { return crate::errno::EFAULT; }
+                    let req = ifc_buf as *mut u8;
+                    // ifr_name = "eth0"
+                    core::ptr::write_bytes(req, 0, 40);
+                    *req.add(0) = b'e'; *req.add(1) = b't'; *req.add(2) = b'h'; *req.add(3) = b'0';
+                    // ifr_addr: sockaddr_in with our IP
+                    *((req.add(16)) as *mut u16) = 2; // AF_INET
+                    #[cfg(feature = "net")]
+                    {
+                        let ip = rux_net::our_ip();
+                        *req.add(20) = ip[0]; *req.add(21) = ip[1];
+                        *req.add(22) = ip[2]; *req.add(23) = ip[3];
+                    }
+                    #[cfg(not(feature = "net"))]
+                    { *req.add(20) = 10; *req.add(21) = 0; *req.add(22) = 2; *req.add(23) = 15; }
+                }
+                *(arg as *mut i32) = 40; // one ifreq entry
+            }
+            0
+        }
+        0x8913 => {
+            // SIOCGIFFLAGS: get interface flags
+            if arg == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(arg, 32).is_err() { return crate::errno::EFAULT; }
+            unsafe {
+                // IFF_UP | IFF_RUNNING | IFF_BROADCAST | IFF_MULTICAST
+                *((arg + 16) as *mut u16) = 0x1 | 0x40 | 0x2 | 0x1000;
+            }
+            0
+        }
+        0x8914 => { 0 } // SIOCSIFFLAGS: set flags (stub — always succeed)
+        0x8915 => {
+            // SIOCGIFADDR: get interface address
+            if arg == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(arg, 32).is_err() { return crate::errno::EFAULT; }
+            unsafe {
+                let sa = (arg + 16) as *mut u8;
+                core::ptr::write_bytes(sa, 0, 16);
+                *(sa as *mut u16) = 2; // AF_INET
+                #[cfg(feature = "net")]
+                {
+                    let ip = rux_net::our_ip();
+                    *sa.add(4) = ip[0]; *sa.add(5) = ip[1];
+                    *sa.add(6) = ip[2]; *sa.add(7) = ip[3];
+                }
+                #[cfg(not(feature = "net"))]
+                { *sa.add(4) = 10; *sa.add(5) = 0; *sa.add(6) = 2; *sa.add(7) = 15; }
+            }
+            0
+        }
+        0x8916 => { 0 } // SIOCSIFADDR: set address (stub)
+        0x891B => {
+            // SIOCGIFNETMASK: get netmask
+            if arg == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(arg, 32).is_err() { return crate::errno::EFAULT; }
+            unsafe {
+                let sa = (arg + 16) as *mut u8;
+                core::ptr::write_bytes(sa, 0, 16);
+                *(sa as *mut u16) = 2; // AF_INET
+                *sa.add(4) = 255; *sa.add(5) = 255; *sa.add(6) = 255; *sa.add(7) = 0;
+            }
+            0
+        }
+        0x8927 => {
+            // SIOCGIFHWADDR: get hardware (MAC) address
+            if arg == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(arg, 32).is_err() { return crate::errno::EFAULT; }
+            unsafe {
+                let sa = (arg + 16) as *mut u8;
+                core::ptr::write_bytes(sa, 0, 16);
+                *(sa as *mut u16) = 1; // ARPHRD_ETHER
+                // MAC: 52:54:00:12:34:56 (QEMU default)
+                *sa.add(2) = 0x52; *sa.add(3) = 0x54; *sa.add(4) = 0x00;
+                *sa.add(5) = 0x12; *sa.add(6) = 0x34; *sa.add(7) = 0x56;
+            }
+            0
+        }
+        0x8933 => {
+            // SIOCGIFINDEX: get interface index
+            if arg == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(arg, 32).is_err() { return crate::errno::EFAULT; }
+            unsafe { *((arg + 16) as *mut i32) = 1; } // eth0 = index 1
+            0
+        }
         _ => -25 // -ENOTTY
     }
 }

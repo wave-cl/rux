@@ -20,21 +20,25 @@ rustup run nightly cargo build -p rux-kernel --target ${TARGET} --features "${FE
 # Convert to 32-bit ELF for QEMU multiboot
 rust-objcopy --output-target=elf32-i386 ${KERNEL} ${KERNEL}.elf32
 
-# Optional ext2 root disk
+# Optional ext2 root disk (when present, skip initrd — ext2 has the full rootfs)
 DISK_ARGS=""
 ROOTFS="${ROOTFS:-rootfs/rootfs_x86_64.img}"
 if [ -f "${ROOTFS}" ]; then
   DISK_ARGS="-drive file=${ROOTFS},format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0"
+  INITRD=""  # ext2 root has all files; initrd causes dynamic linker hangs
 fi
 
-# Networking (virtio-net PCI) — QEMU user-mode NAT
-NET_ARGS="-netdev user,id=net0 -device virtio-net-pci,netdev=net0"
+# Networking (virtio-net PCI) — QEMU user-mode NAT with SSH port forwarding
+NET_ARGS="-netdev user,id=net0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netdev=net0"
 
 # Run
+INITRD_ARGS=""
+[ -n "${INITRD}" ] && INITRD_ARGS="-initrd ${INITRD}"
+
 exec ${QEMU} \
   -cpu max -smp 2 \
   -kernel ${KERNEL}.elf32 \
-  -initrd ${INITRD} \
+  ${INITRD_ARGS} \
   ${DISK_ARGS} \
   ${NET_ARGS} \
   -serial mon:stdio \

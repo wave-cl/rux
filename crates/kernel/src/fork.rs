@@ -12,7 +12,7 @@ use crate::errno::{CLONE_THREAD, CLONE_CHILD_CLEARTID};
 
 // ── Shared helpers ───────────────────────────────────────────────────
 
-/// Copy a parent's FD table to a child, bumping pipe reference counts.
+/// Copy a parent's FD table to a child, bumping pipe and socket reference counts.
 #[inline]
 unsafe fn copy_fds_with_pipe_refs(src: &[OpenFile; MAX_FDS], dst: &mut [OpenFile; MAX_FDS]) {
     for i in 0..MAX_FDS {
@@ -23,6 +23,9 @@ unsafe fn copy_fds_with_pipe_refs(src: &[OpenFile; MAX_FDS], dst: &mut [OpenFile
             if dst[i].pipe_id_write != 0xFF {
                 (crate::pipe::PIPE.dup_ref)(dst[i].pipe_id_write, true);
             }
+        }
+        if dst[i].active && dst[i].is_socket {
+            crate::syscall::socket::dup_socket_ref(dst[i].socket_idx);
         }
     }
 }

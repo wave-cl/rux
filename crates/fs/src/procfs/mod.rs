@@ -43,6 +43,7 @@ const INO_NET_DIR: InodeId = 19;          // /proc/net
 const INO_NET_TCP: InodeId = 20;          // /proc/net/tcp
 const INO_NET_UDP: InodeId = 21;          // /proc/net/udp
 const INO_CPUINFO: InodeId = 22;          // /proc/cpuinfo
+const INO_NET_DEV: InodeId = 23;          // /proc/net/dev
 
 const NUM_SYS_ENTRIES: usize = 12;
 
@@ -267,6 +268,12 @@ impl ProcFs {
             }
             INO_NET_UDP => {
                 let s = b"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+                let len = s.len().min(buf.len());
+                buf[..len].copy_from_slice(&s[..len]);
+                len
+            }
+            INO_NET_DEV => {
+                let s = b"Inter-|   Receive                                                |  Transmit\n face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n  eth0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0\n    lo:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0\n";
                 let len = s.len().min(buf.len());
                 buf[..len].copy_from_slice(&s[..len]);
                 len
@@ -693,7 +700,7 @@ impl FileSystem for ProcFs {
         }
 
         // System files or PID files
-        if (ino >= INO_UPTIME && ino <= INO_CPUINFO && ino != INO_SELF
+        if (ino >= INO_UPTIME && ino <= INO_NET_DEV && ino != INO_SELF
             && !matches!(ino, INO_SYS_DIR | INO_SYS_KERNEL_DIR | INO_SYS_VM_DIR | INO_SYS_K_RANDOM_DIR | INO_NET_DIR))
             || is_pid_file(ino) {
             if is_pid_file(ino) && !self.pid_exists(pid_from_file(ino)) {
@@ -805,6 +812,7 @@ impl FileSystem for ProcFs {
             return match name_bytes {
                 b"tcp" => Ok(INO_NET_TCP),
                 b"udp" => Ok(INO_NET_UDP),
+                b"dev" => Ok(INO_NET_DEV),
                 _ => Err(VfsError::NotFound),
             };
         }
@@ -907,7 +915,7 @@ impl FileSystem for ProcFs {
         }
         // /proc/net
         if dir == INO_NET_DIR {
-            let entries: &[(&[u8], InodeId)] = &[(b"tcp", INO_NET_TCP), (b"udp", INO_NET_UDP)];
+            let entries: &[(&[u8], InodeId)] = &[(b"tcp", INO_NET_TCP), (b"udp", INO_NET_UDP), (b"dev", INO_NET_DEV)];
             return readdir_static(entries, offset, buf, false);
         }
 

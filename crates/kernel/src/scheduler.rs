@@ -98,6 +98,9 @@ pub unsafe fn init_context_fns() {
     });
     // Per-CPU FD_TABLE callback
     rux_fs::fdtable::GET_CPU_FN = Some(|| crate::percpu::cpu_id());
+    // Socket refcount callbacks for dup/close in fdtable
+    rux_fs::fdtable::SOCKET_DUP_REF = Some(crate::syscall::socket::dup_socket_ref);
+    rux_fs::fdtable::SOCKET_CLOSE_REF = Some(crate::syscall::socket::close_socket_ref);
 }
 
 /// Set up the idle task (slot 0) in the scheduler with a proper stack frame,
