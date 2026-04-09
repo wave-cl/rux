@@ -135,6 +135,8 @@ pub struct TaskInfo {
     pub gid: u32,
     pub state: u8,     // 0=free, 1=ready, 2=running, 3=sleeping, 5=zombie, 6=pipe, 8=stopped
     pub threads: u32,
+    pub rss_pages: u32,  // resident set size in 4K pages
+    pub brk_addr: usize, // program break address (top of heap)
 }
 
 /// Kernel callbacks for dynamic data.
@@ -148,6 +150,7 @@ pub struct ProcFs {
     pub get_task_info: fn(u32) -> TaskInfo,
     pub get_idle_ticks: fn() -> u64,
     pub get_task_cwd: fn(u32, &mut [u8]) -> usize,
+    pub get_task_environ: fn(u32, &mut [u8]) -> usize,
     pub num_cpus: u32,
 }
 
@@ -162,8 +165,9 @@ impl ProcFs {
         get_task_info: fn(u32) -> TaskInfo,
         get_idle_ticks: fn() -> u64,
         get_task_cwd: fn(u32, &mut [u8]) -> usize,
+        get_task_environ: fn(u32, &mut [u8]) -> usize,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_info, get_idle_ticks, get_task_cwd, num_cpus: 1 }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_info, get_idle_ticks, get_task_cwd, get_task_environ, num_cpus: 1 }
     }
 
     /// Check if a PID exists by querying the kernel task table.
@@ -201,7 +205,8 @@ impl ProcFs {
             }
             INO_STAT => {
                 let ticks = (self.get_ticks)();
-                fmt_cpu_stat(buf, ticks)
+                let idle = (self.get_idle_ticks)();
+                self.gen_cpu_stat(buf, ticks, idle)
             }
             INO_VERSION => {
                 let s = concat!("rux version ", env!("CARGO_PKG_VERSION"), "\n");
@@ -308,8 +313,8 @@ impl ProcFs {
             }
             _ if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE => {
                 // /proc/[pid]/maps — synthesized memory map
-                // Format: start-end perms offset dev inode pathname
-                self.gen_pid_maps(buf)
+                let pid = ino - PID_MAPS_BASE;
+                self.gen_pid_maps(pid, buf)
             }
             _ if is_pid_file(ino) => {
                 let pid = pid_from_file(ino);
@@ -344,11 +349,15 @@ impl ProcFs {
                     buf[..len].copy_from_slice(&s[..len]);
                     len
                 } else if ino >= PID_ENVIRON_BASE {
-                    // /proc/[pid]/environ — simplified
-                    let s = b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0HOME=/root\0";
-                    let len = s.len().min(buf.len());
-                    buf[..len].copy_from_slice(&s[..len]);
-                    len
+                    // /proc/[pid]/environ — real environment from task table
+                    let len = (self.get_task_environ)(pid as u32, buf);
+                    if len > 0 { len } else {
+                        // Fallback for processes without stored environ
+                        let s = b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0HOME=/root\0";
+                        let l = s.len().min(buf.len());
+                        buf[..l].copy_from_slice(&s[..l]);
+                        l
+                    }
                 } else if ino >= PID_COMM_BASE {
                     // /proc/[pid]/comm — process name (basename of argv[0])
                     let mut cmdline_buf = [0u8; 128];
@@ -366,7 +375,7 @@ impl ProcFs {
                 } else if ino >= PID_STATUS_BASE && ino < PID_EXE_BASE {
                     self.gen_pid_status(pid, buf)
                 } else if ino >= PID_STATM_BASE && ino < PID_STATUS_BASE {
-                    self.gen_pid_statm(buf)
+                    self.gen_pid_statm(pid, buf)
                 } else if ino >= PID_CMDLINE_BASE && ino < PID_STATM_BASE {
                     self.gen_pid_cmdline(pid, buf)
                 } else {
@@ -383,9 +392,9 @@ impl ProcFs {
     ///         itrealvalue starttime vsize rss rsslim ...
     fn gen_pid_stat(&self, pid: u64, buf: &mut [u8]) -> usize {
         let ticks = (self.get_ticks)();
-        let used_frames = (self.get_total_frames)().saturating_sub((self.get_free_frames)());
-        let vsize = used_frames * 4096;
-        let rss = used_frames;
+        let info = (self.get_task_info)(pid as u32);
+        let rss = if info.rss_pages > 0 { info.rss_pages as usize } else { 64 };
+        let vsize = rss * 4096;
         let mut pos = 0;
         // pid (comm) state ppid pgrp session tty_nr tpgid flags
         pos += fmt_u64(&mut buf[pos..], pid);
@@ -403,7 +412,6 @@ impl ProcFs {
         buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
         pos += nlen;
         // state ppid pgrp session tty_nr tpgid flags
-        let info = (self.get_task_info)(pid as u32);
         let state_ch = match info.state {
             5 => b'Z', 8 => b'T', 3 => b'S', 6 | 7 => b'S',
             _ => b'S',
@@ -449,8 +457,9 @@ impl ProcFs {
 
     /// Generate /proc/[pid]/statm — memory in pages
     /// Format: size resident shared text lib data dt
-    fn gen_pid_statm(&self, buf: &mut [u8]) -> usize {
-        let used = (self.get_total_frames)().saturating_sub((self.get_free_frames)());
+    fn gen_pid_statm(&self, pid: u64, buf: &mut [u8]) -> usize {
+        let info = (self.get_task_info)(pid as u32);
+        let used = if info.rss_pages > 0 { info.rss_pages as usize } else { 64 };
         let mut pos = 0;
         pos += fmt_u64(&mut buf[pos..], used as u64); // size
         buf[pos] = b' '; pos += 1;
@@ -465,8 +474,8 @@ impl ProcFs {
 
     /// Generate /proc/[pid]/status — human-readable
     fn gen_pid_status(&self, pid: u64, buf: &mut [u8]) -> usize {
-        let used_kb = (self.get_total_frames)().saturating_sub((self.get_free_frames)()) * 4;
         let info = (self.get_task_info)(pid as u32);
+        let used_kb = if info.rss_pages > 0 { info.rss_pages as usize * 4 } else { 256 };
 
         // Real process name
         let mut cmdline_buf = [0u8; 128];
@@ -540,18 +549,83 @@ impl ProcFs {
         pos
     }
 
-    /// Generate /proc/[pid]/maps — synthesized memory map.
-    /// Without VMA tracking, we emit the standard regions that Alpine programs expect.
-    fn gen_pid_maps(&self, buf: &mut [u8]) -> usize {
+    /// Generate /proc/stat with per-CPU lines and real idle time.
+    fn gen_cpu_stat(&self, buf: &mut [u8], ticks: u64, idle: u64) -> usize {
+        let ncpu = (self.num_cpus as u64).max(1);
+        let user = ticks.saturating_sub(idle) / ncpu;
+        let idle_per = idle / ncpu;
         let mut pos = 0;
-        // Text segment (typical ELF load address)
-        pos += copy_str(&mut buf[pos..], b"08000000-08100000 r-xp 00000000 fe:00 1 /bin/busybox\n");
+        // Aggregate "cpu" line: user nice system idle iowait irq softirq steal guest guest_nice
+        pos += copy_str(&mut buf[pos..], b"cpu  ");
+        pos += fmt_u64(&mut buf[pos..], user);
+        pos += copy_str(&mut buf[pos..], b" 0 0 ");
+        pos += fmt_u64(&mut buf[pos..], idle);
+        pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0\n");
+        // Per-CPU lines
+        for cpu in 0..self.num_cpus {
+            pos += copy_str(&mut buf[pos..], b"cpu");
+            pos += fmt_u64(&mut buf[pos..], cpu as u64);
+            pos += copy_str(&mut buf[pos..], b" ");
+            pos += fmt_u64(&mut buf[pos..], user);
+            pos += copy_str(&mut buf[pos..], b" 0 0 ");
+            pos += fmt_u64(&mut buf[pos..], idle_per);
+            pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0\n");
+            if pos + 100 > buf.len() { break; }
+        }
+        // Count running tasks
+        let mut pids = [0u32; 64];
+        let total = (self.get_active_pids)(&mut pids);
+        pos += copy_str(&mut buf[pos..], b"intr 0\nctxt 0\nbtime 1700000000\nprocesses ");
+        pos += fmt_u64(&mut buf[pos..], total as u64);
+        pos += copy_str(&mut buf[pos..], b"\nprocs_running ");
+        pos += fmt_u64(&mut buf[pos..], total.max(1) as u64);
+        pos += copy_str(&mut buf[pos..], b"\nprocs_blocked 0\n");
+        pos
+    }
+
+    /// Generate /proc/[pid]/maps — synthesized from per-process brk/rss.
+    /// Format: start-end perms offset dev inode pathname
+    fn gen_pid_maps(&self, pid: u64, buf: &mut [u8]) -> usize {
+        let info = (self.get_task_info)(pid as u32);
+        let brk = if info.brk_addr > 0 { info.brk_addr } else { 0x800000 };
+        // Infer text start: brk is typically just past text+data, so text ~ brk - rss*4096
+        let rss_bytes = (info.rss_pages as usize).max(16) * 4096;
+        let text_start = if brk > rss_bytes { brk - rss_bytes } else { 0x400000 };
+        let text_start_page = text_start & !0xFFF;
+        // Split: ~75% text (r-x), ~25% data (rw-)
+        let text_pages = (info.rss_pages as usize * 3 / 4).max(1);
+        let text_end = text_start_page + text_pages * 4096;
+        let data_end = (brk + 0xFFF) & !0xFFF;
+        let heap_end = data_end + 0x100000; // assume ~1MB heap
+
+        let mut pos = 0;
+        // Text
+        pos += fmt_hex(&mut buf[pos..], text_start_page);
+        buf[pos] = b'-'; pos += 1;
+        pos += fmt_hex(&mut buf[pos..], text_end);
+        pos += copy_str(&mut buf[pos..], b" r-xp 00000000 fe:00 1 ");
+        // Get exe name from cmdline
+        let mut cmd = [0u8; 128];
+        let clen = (self.get_task_cmdline)(pid as u32, &mut cmd);
+        let end = cmd[..clen].iter().position(|&b| b == 0).unwrap_or(clen);
+        let name = &cmd[..end];
+        let nlen = name.len().min(buf.len() - pos - 1);
+        buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
+        pos += nlen;
+        buf[pos] = b'\n'; pos += 1;
         // Data/BSS
-        pos += copy_str(&mut buf[pos..], b"08100000-08120000 rw-p 00100000 fe:00 1 /bin/busybox\n");
-        // Heap (brk area)
-        pos += copy_str(&mut buf[pos..], b"08200000-08300000 rw-p 00000000 00:00 0 [heap]\n");
-        // mmap region
-        pos += copy_str(&mut buf[pos..], b"10000000-10100000 rw-p 00000000 00:00 0 \n");
+        pos += fmt_hex(&mut buf[pos..], text_end);
+        buf[pos] = b'-'; pos += 1;
+        pos += fmt_hex(&mut buf[pos..], data_end);
+        pos += copy_str(&mut buf[pos..], b" rw-p 00000000 fe:00 1 ");
+        buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
+        pos += nlen;
+        buf[pos] = b'\n'; pos += 1;
+        // Heap
+        pos += fmt_hex(&mut buf[pos..], data_end);
+        buf[pos] = b'-'; pos += 1;
+        pos += fmt_hex(&mut buf[pos..], heap_end);
+        pos += copy_str(&mut buf[pos..], b" rw-p 00000000 00:00 0 [heap]\n");
         // Stack
         pos += copy_str(&mut buf[pos..], b"7ffe0000-80000000 rw-p 00000000 00:00 0 [stack]\n");
         pos
@@ -978,24 +1052,6 @@ fn fmt_meminfo(buf: &mut [u8], total_kb: usize, free_kb: usize) -> usize {
     pos
 }
 
-fn fmt_cpu_stat(buf: &mut [u8], ticks: u64) -> usize {
-    let mut pos = 0;
-    pos += copy_str(&mut buf[pos..], b"cpu  0 0 0 ");
-    pos += fmt_u64(&mut buf[pos..], ticks);
-    pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0\n");
-    // Per-CPU line (htop expects at least cpu0)
-    pos += copy_str(&mut buf[pos..], b"cpu0 0 0 0 ");
-    pos += fmt_u64(&mut buf[pos..], ticks);
-    pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0\n");
-    // Additional fields htop requires
-    pos += copy_str(&mut buf[pos..], b"intr 0\n");
-    pos += copy_str(&mut buf[pos..], b"ctxt 0\n");
-    pos += copy_str(&mut buf[pos..], b"btime 1700000000\n");
-    pos += copy_str(&mut buf[pos..], b"processes 1\n");
-    pos += copy_str(&mut buf[pos..], b"procs_running 1\n");
-    pos += copy_str(&mut buf[pos..], b"procs_blocked 0\n");
-    pos
-}
 
 fn copy_str(buf: &mut [u8], s: &[u8]) -> usize {
     let len = s.len().min(buf.len());
@@ -1022,4 +1078,15 @@ fn fmt_u64_pad2(buf: &mut [u8], n: u64) -> usize {
 
 fn fmt_usize(buf: &mut [u8], n: usize) -> usize {
     fmt_u64(buf, n as u64)
+}
+
+fn fmt_hex(buf: &mut [u8], mut n: usize) -> usize {
+    if n == 0 { buf[0] = b'0'; return 1; }
+    let hex = b"0123456789abcdef";
+    let mut tmp = [0u8; 16];
+    let mut i = 16;
+    while n > 0 { i -= 1; tmp[i] = hex[n & 0xF]; n >>= 4; }
+    let len = (16 - i).min(buf.len());
+    buf[..len].copy_from_slice(&tmp[i..i + len]);
+    len
 }

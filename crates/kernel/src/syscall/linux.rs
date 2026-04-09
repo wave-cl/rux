@@ -52,6 +52,9 @@ pub fn brk(addr: usize) -> isize {
                     // OOM: return current brk unchanged (Linux behavior)
                     return super::process().program_brk as isize;
                 }
+                let new_pages = (new_page - old_page) / 4096;
+                let idx = crate::task_table::current_task_idx();
+                crate::task_table::TASK_TABLE[idx].rss_pages += new_pages as u32;
             }
             super::process().program_brk = addr;
         } else if addr < old_brk {
@@ -60,6 +63,10 @@ pub fn brk(addr: usize) -> isize {
             let new_page = (addr + 0xFFF) & !0xFFF;
             if new_page < old_page {
                 super::posix::munmap(new_page, old_page - new_page);
+                let freed_pages = (old_page - new_page) / 4096;
+                let idx = crate::task_table::current_task_idx();
+                crate::task_table::TASK_TABLE[idx].rss_pages =
+                    crate::task_table::TASK_TABLE[idx].rss_pages.saturating_sub(freed_pages as u32);
             }
             super::process().program_brk = addr;
         }

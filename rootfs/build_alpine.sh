@@ -67,7 +67,8 @@ install_apk() {
                ncurses-terminfo-base ncurses-libs libncursesw sqlite \
                c-ares nghttp2-libs brotli-libs libidn2 libunistring libpsl zstd-libs libcurl curl ca-certificates \
                pcre2 git \
-               lua5.4 lua5.4-libs; do
+               lua5.4 lua5.4-libs \
+               htop; do
         local f=$(find_pkg "$pkg")
         if [ -n "$f" ]; then
             fetch_and_extract "$f"

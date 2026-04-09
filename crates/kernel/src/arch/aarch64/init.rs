@@ -91,6 +91,13 @@ pub fn aarch64_init(dtb_addr: usize) {
     unsafe { super::timer::init(1000); }
     console::write_str("rux: timer initialized (1000 Hz)\n");
 
+    // Read PL031 RTC for wall-clock time
+    unsafe {
+        let rtc_epoch = super::rtc::read_rtc();
+        crate::syscall::process::set_boot_epoch(rtc_epoch);
+    }
+    console::write_str("rux: PL031 RTC read\n");
+
     unsafe { super::gic::enable_irqs(); }
     console::write_str("rux: interrupts enabled\n");
 
@@ -148,8 +155,8 @@ pub fn aarch64_init(dtb_addr: usize) {
             rux_klib::PhysAddr::new(0x08000000), 0x20000, dev_flags, alloc,
         ).expect("gic map");
         kpt.identity_map_range(
-            rux_klib::PhysAddr::new(0x09000000), 0x1000, dev_flags, alloc,
-        ).expect("uart map");
+            rux_klib::PhysAddr::new(0x09000000), 0x11000, dev_flags, alloc,
+        ).expect("uart+rtc map");
         // virtio-mmio region: 32 devices × 0x200 bytes each at 0x0a000000
         // Map full 64KB to ensure all device slots are covered
         kpt.identity_map_range(
@@ -291,6 +298,8 @@ pub fn aarch64_init(dtb_addr: usize) {
                             gid: TASK_TABLE[i].gid,
                             state: TASK_TABLE[i].state as u8,
                             threads: 1,
+                            rss_pages: TASK_TABLE[i].rss_pages,
+                            brk_addr: TASK_TABLE[i].program_brk,
                         };
                     }
                 }
@@ -303,6 +312,17 @@ pub fn aarch64_init(dtb_addr: usize) {
                     if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
                         let len = TASK_TABLE[i].fs_ctx.cwd_path_len.min(buf.len());
                         buf[..len].copy_from_slice(&TASK_TABLE[i].fs_ctx.cwd_path[..len]);
+                        return len;
+                    }
+                }
+                0
+            },
+            |pid, buf| unsafe {
+                use crate::task_table::*;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
+                        let len = (TASK_TABLE[i].environ_len as usize).min(buf.len());
+                        buf[..len].copy_from_slice(&TASK_TABLE[i].environ[..len]);
                         return len;
                     }
                 }

@@ -243,6 +243,13 @@ pub fn x86_64_init(multiboot_info: usize) {
     // (selects syscall_entry vs syscall_entry_gs based on GS_PERCPU_ACTIVE)
     unsafe { super::syscall::init_syscall_msrs(); }
 
+    // Read hardware RTC for wall-clock time
+    unsafe {
+        let rtc_epoch = super::rtc::read_rtc();
+        crate::syscall::process::set_boot_epoch(rtc_epoch);
+    }
+    console::write_str("rux: CMOS RTC read\n");
+
     // Initialize PIT timer at 1000 Hz
     unsafe { super::pit::init(1000); }
     console::write_str("rux: PIT timer initialized (1000 Hz)\n");
@@ -602,6 +609,8 @@ pub fn x86_64_init(multiboot_info: usize) {
                             gid: TASK_TABLE[i].gid,
                             state: TASK_TABLE[i].state as u8,
                             threads: 1,
+                            rss_pages: TASK_TABLE[i].rss_pages,
+                            brk_addr: TASK_TABLE[i].program_brk,
                         };
                     }
                 }
@@ -614,6 +623,17 @@ pub fn x86_64_init(multiboot_info: usize) {
                     if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
                         let len = TASK_TABLE[i].fs_ctx.cwd_path_len.min(buf.len());
                         buf[..len].copy_from_slice(&TASK_TABLE[i].fs_ctx.cwd_path[..len]);
+                        return len;
+                    }
+                }
+                0
+            },
+            |pid, buf| unsafe {
+                use crate::task_table::*;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
+                        let len = (TASK_TABLE[i].environ_len as usize).min(buf.len());
+                        buf[..len].copy_from_slice(&TASK_TABLE[i].environ[..len]);
                         return len;
                     }
                 }

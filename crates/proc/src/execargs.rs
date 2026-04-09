@@ -28,6 +28,24 @@ pub fn get_cmdline() -> (&'static [u8], u8) {
     unsafe { (&*(&raw const CMDLINE_BUF), *(&raw const CMDLINE_LEN)) }
 }
 
+/// Copy the last exec'd environ as null-separated KEY=VALUE pairs into buf.
+/// Returns bytes written.
+pub fn copy_environ(buf: &mut [u8]) -> usize {
+    unsafe {
+        let envc = *(&raw const ENVC);
+        let mut pos = 0;
+        for i in 0..envc {
+            let off = ENVP_OFFSETS[i];
+            let len = ENVP_LENS[i];
+            if pos + len + 1 > buf.len() { break; }
+            buf[pos..pos+len].copy_from_slice(&ENVP_BUF[off..off+len]);
+            buf[pos+len] = 0; // null separator
+            pos += len + 1;
+        }
+        pos
+    }
+}
+
 /// Dynamic linking auxv entries (set by exec, cleared for static binaries).
 static mut AUXV_PHDR: usize = 0;   // AT_PHDR: address of program headers
 static mut AUXV_PHENT: usize = 0;  // AT_PHENT: size of one program header entry

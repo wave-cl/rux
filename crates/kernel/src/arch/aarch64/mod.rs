@@ -12,6 +12,7 @@ pub mod psci;
 pub mod uaccess;
 pub mod fork;
 pub mod task_switch;
+pub mod rtc;
 
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("exception.S"));
@@ -109,8 +110,8 @@ unsafe impl super::KernelMapOps for Aarch64 {
         let dev_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::NO_CACHE);
         pt.identity_map_range(PhysAddr::new(0x08000000), 0x20000, dev_flags, alloc)
             .expect("gic map");
-        pt.identity_map_range(PhysAddr::new(0x09000000), 0x1000, dev_flags, alloc)
-            .expect("uart map");
+        pt.identity_map_range(PhysAddr::new(0x09000000), 0x11000, dev_flags, alloc)
+            .expect("uart+rtc map");
         // virtio-mmio region (for ext2 root disk access from any page table)
         pt.identity_map_range(PhysAddr::new(0x0a000000), 0x10000, dev_flags, alloc)
             .expect("virtio-mmio map");

@@ -100,6 +100,13 @@ pub struct TaskSlot {
     pub cmdline: [u8; 128],     // null-separated argv
     pub cmdline_len: u8,
 
+    // ── Environment (for /proc/[pid]/environ) ────────────────────
+    pub environ: [u8; 512],     // null-separated KEY=VALUE pairs
+    pub environ_len: u16,
+
+    // ── Memory tracking (for /proc/[pid]/stat vsize/rss) ─────────
+    pub rss_pages: u32,         // resident set size in 4K pages
+
     // ── Preemption ────────────────────────────────────────────────────
     pub preempt_count: u32,     // saved/restored on context switch
 
@@ -131,6 +138,8 @@ impl TaskSlot {
             waiting_pipe_id: 0,
             itimer_real_deadline: 0, itimer_real_interval: 0,
             cmdline: [0; 128], cmdline_len: 0,
+            environ: [0; 512], environ_len: 0,
+            rss_pages: 0,
             preempt_count: 0,
             fpu_state: rux_arch::FpuState::new(),
         }

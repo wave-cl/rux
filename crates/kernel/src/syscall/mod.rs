@@ -7,7 +7,7 @@ pub mod posix;
 pub mod linux;
 mod file;
 mod fs_ops;
-mod process;
+pub(crate) mod process;
 pub(crate) mod signal;
 mod memory;
 pub(crate) mod socket;
@@ -574,9 +574,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Gettimeofday => unsafe {
             use rux_arch::TimerOps;
             let ticks = crate::arch::Arch::ticks();
+            let epoch = process::boot_epoch();
             if a0 != 0 {
                 if crate::uaccess::validate_user_ptr(a0, 16).is_err() { return crate::errno::EFAULT; }
-                *(a0 as *mut u64) = ticks / 1000;                // tv_sec
+                *(a0 as *mut u64) = epoch + ticks / 1000;        // tv_sec (wall clock)
                 *((a0 + 8) as *mut u64) = (ticks % 1000) * 1000; // tv_usec
             }
             if a1 != 0 {
@@ -1198,6 +1199,14 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     crate::uaccess::stac();
     rux_proc::execargs::set_from_user(path, argv_ptr, envp_ptr);
     crate::uaccess::clac();
+
+    // Save environ to task table for /proc/[pid]/environ
+    {
+        let idx = crate::task_table::current_task_idx();
+        let slot = &mut crate::task_table::TASK_TABLE[idx];
+        let len = rux_proc::execargs::copy_environ(&mut slot.environ);
+        slot.environ_len = len as u16;
+    }
 
     let ino = match rux_fs::path::resolve_path(fs, path) {
         Ok(ino) => ino,

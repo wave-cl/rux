@@ -198,7 +198,11 @@ pub unsafe fn load_elf_from_inode(
         crate::arch::Arch::write(new_root);
         crate::arch::PageTable::flush_tlb_all();
         unsafe {
-            crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].pt_root = new_root;
+            let idx = crate::task_table::current_task_idx();
+            crate::task_table::TASK_TABLE[idx].pt_root = new_root;
+            // Estimate RSS: ELF segments + stack (32 pages)
+            let rss_est = (max_end as usize / 4096) + 32;
+            crate::task_table::TASK_TABLE[idx].rss_pages = rss_est as u32;
         }
     }
 

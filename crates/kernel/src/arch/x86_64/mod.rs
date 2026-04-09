@@ -13,6 +13,7 @@ pub mod apic;
 pub mod uaccess;
 pub mod fork;
 pub mod task_switch;
+pub mod rtc;
 
 // Include boot assembly: multiboot1 header + 32→64 bit transition
 core::arch::global_asm!(include_str!("boot.S"), options(att_syntax));
