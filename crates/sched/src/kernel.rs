@@ -38,6 +38,8 @@ pub struct ContextFns {
     pub start_timer: unsafe fn(),
     /// Called before context_switch to swap process state (page tables, globals, etc.).
     pub pre_switch: Option<unsafe fn(old_idx: usize, new_idx: usize)>,
+    /// Get the current CPU ID (reads per-CPU register — GS-base or TPIDR_EL1).
+    pub get_cpu: Option<fn() -> u32>,
 }
 
 /// Global scheduler state.
@@ -58,8 +60,8 @@ pub struct ContextFns {
 pub struct Scheduler {
     pub cfs: CfsClass,
     pub tasks: [KernelTask; MAX_TASKS],
-    /// Index of the currently running task (into `tasks` array).
-    pub current: usize,
+    /// Per-CPU current task index. Indexed by cpu_id.
+    pub current_per_cpu: [usize; 64],
     /// Clock in nanoseconds (advanced by timer ISR).
     pub clock_ns: u64,
     /// Per-CPU reschedule bitmask. Bit N set = CPU N needs to reschedule.
@@ -81,7 +83,7 @@ impl Scheduler {
         let mut s = Self {
             cfs: CfsClass::new(),
             tasks: [EMPTY_TASK; MAX_TASKS],
-            current: 0,
+            current_per_cpu: [0; 64],
             clock_ns: 0,
             need_resched: 0,
             cpu_id: 0,
@@ -98,6 +100,17 @@ impl Scheduler {
     /// `create_task` or `schedule`.
     pub fn set_context_fns(&mut self, fns: ContextFns) {
         self.ctx = Some(fns);
+    }
+
+    /// Get the current running CPU ID from the per-CPU register.
+    #[inline(always)]
+    fn this_cpu(&self) -> u32 {
+        if let Some(ref ctx) = self.ctx {
+            if let Some(get) = ctx.get_cpu {
+                return get();
+            }
+        }
+        self.cpu_id // fallback to stored value
     }
 
     /// Create a new kernel task. Returns the task index.
@@ -133,28 +146,24 @@ impl Scheduler {
     /// Called from the timer ISR. Advances the clock, ticks the current task,
     /// and sets `need_resched` if a context switch is needed.
     pub fn tick(&mut self, elapsed_ns: u64) {
+        let cpu = self.this_cpu();
         self.clock_ns += elapsed_ns;
-        self.cfs.set_clock(self.cpu_id, self.clock_ns);
+        self.cfs.set_clock(cpu, self.clock_ns);
 
-        let current = self.current;
-        // Idle task (slot 0) is never on the CFS runqueue — skip task_tick
-        // but check if any tasks became runnable (via wake_task or enqueue)
+        let current = self.current_per_cpu[cpu as usize];
         if current == 0 {
-            if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
-                self.need_resched |= 1u64 << self.cpu_id;
+            if self.cfs.rqs[cpu as usize].nr_running > 0 {
+                self.need_resched |= 1u64 << cpu;
             }
             return;
         }
         if current < MAX_TASKS && self.tasks[current].active {
             let entity = &mut self.tasks[current].entity;
-            if self.cfs.task_tick(self.cpu_id, entity) {
-                self.need_resched |= 1u64 << self.cpu_id;
+            if self.cfs.task_tick(cpu, entity) {
+                self.need_resched |= 1u64 << cpu;
             }
-            // Force reschedule when other tasks are waiting.
-            // Without preemptive ISR scheduling, this ensures the
-            // post_syscall check catches pending tasks promptly.
-            if self.cfs.rqs[self.cpu_id as usize].nr_running > 0 {
-                self.need_resched |= 1u64 << self.cpu_id;
+            if self.cfs.rqs[cpu as usize].nr_running > 0 {
+                self.need_resched |= 1u64 << cpu;
             }
         }
     }
@@ -162,7 +171,7 @@ impl Scheduler {
     /// Remove the current task from the runqueue (it's going to sleep/wait/exit).
     /// Sets need_resched so the next schedule() call picks another task.
     pub fn dequeue_current(&mut self) {
-        self.need_resched |= 1u64 << self.cpu_id;
+        self.need_resched |= 1u64 << self.this_cpu();
         // Task won't be put_prev'd in schedule() because we mark it non-active
         // by setting its state to Interruptible. Actually, schedule() only
         // put_prev's if the task is active. We need to ensure it's not
@@ -202,7 +211,8 @@ impl Scheduler {
     }
 
     pub unsafe fn schedule(&mut self) {
-        self.schedule_on(self.cpu_id);
+        let cpu = self.this_cpu();
+        self.schedule_on(cpu);
     }
 
     /// Schedule on a specific CPU's runqueue.
@@ -214,7 +224,7 @@ impl Scheduler {
         }
         self.need_resched &= !cpu_bit;
 
-        let old_idx = self.current;
+        let old_idx = self.current_per_cpu[cpu as usize];
 
         // Put the current task back on the runqueue (skip slot 0 = idle/main,
         // skip sleeping/waiting/zombie tasks that called dequeue_current)
@@ -237,7 +247,7 @@ impl Scheduler {
             0 // No runnable tasks — go back to idle/main (slot 0)
         };
 
-        self.current = new_idx;
+        self.current_per_cpu[cpu as usize] = new_idx;
 
         // If more tasks are queued, set need_resched so the next syscall
         // return (post_syscall) triggers another switch. This ensures rapid

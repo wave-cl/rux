@@ -319,7 +319,6 @@ pub unsafe fn load() {
 pub unsafe extern "C" fn isr_check_preempt() {
     if crate::arch::preemptible() {
         let sched = crate::scheduler::get();
-        sched.set_running_cpu(crate::percpu::cpu_id() as u32);
         if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
             crate::arch::preempt_disable();
             sched.schedule();

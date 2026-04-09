@@ -47,7 +47,6 @@ pub unsafe fn get() -> &'static mut Scheduler {
 #[inline(always)]
 pub unsafe fn locked_tick(elapsed_ns: u64) {
     sched_lock();
-    get().set_running_cpu(crate::percpu::cpu_id() as u32);
     get().tick(elapsed_ns);
     sched_unlock();
 }
@@ -85,6 +84,7 @@ pub unsafe fn init_context_fns() {
         stop_timer: crate::arch::Arch::stop_timer,
         start_timer: crate::arch::Arch::start_timer,
         pre_switch: Some(crate::task_table::swap_process_state),
+        get_cpu: Some(|| crate::percpu::cpu_id() as u32),
     });
 }
 
@@ -108,5 +108,5 @@ pub unsafe fn init_idle_sched() {
     sched.tasks[1].active = true;
     sched.tasks[1].entity = rux_sched::entity::SchedEntity::new(1);
     sched.tasks[1].entity.state = rux_sched::TaskState::Running;
-    sched.current = 1;
+    sched.current_per_cpu[0] = 1; // BSP starts with PID 1
 }
