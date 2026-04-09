@@ -14,7 +14,7 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
         pc.cpu_id = cpu_id as u32;
         pc.online = true;
         pc.idle = true;
-        pc.current_task_idx = usize::MAX;
+        pc.current_task_idx = 0; // idle task (slot 0)
         pc.irq_stack_top = crate::task_table::IRQ_STACKS.0[cpu_id as usize].as_ptr() as u64
             + crate::task_table::IRQ_STACK_SIZE as u64;
 

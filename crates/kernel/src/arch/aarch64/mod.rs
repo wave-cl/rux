@@ -36,7 +36,7 @@ unsafe impl rux_arch::PerCpuOps for Aarch64 {
 impl rux_arch::SyscallArgOps for Aarch64 {
     #[inline(always)]
     fn saved_syscall_arg5() -> usize {
-        unsafe { syscall::SAVED_SYSCALL_A5 as usize }
+        unsafe { syscall::SAVED_SYSCALL_A5_PERCPU[crate::percpu::cpu_id()] as usize }
     }
 }
 

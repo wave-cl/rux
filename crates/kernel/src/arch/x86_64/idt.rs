@@ -336,7 +336,10 @@ pub unsafe extern "C" fn isr_check_preempt() {
 /// Saves RSP at the top of the IRQ stack, switches, calls func, restores via popq.
 #[inline(always)]
 unsafe fn call_on_irq_stack(func: unsafe fn(u64, u64, *mut u8), vector: u64, error_code: u64, frame: *mut u8) {
-    let irq_stack_top = super::syscall::CURRENT_IRQ_STACK_TOP;
+    // Per-CPU IRQ stack. percpu.irq_stack_top is set per-AP at boot.
+    // Fallback to global for BSP early boot (before percpu is fully initialized).
+    let pc_top = crate::percpu::this_cpu().irq_stack_top;
+    let irq_stack_top = if pc_top != 0 { pc_top } else { super::syscall::CURRENT_IRQ_STACK_TOP };
     if irq_stack_top == 0 {
         // IRQ stack not initialized yet (early boot) — run on current stack
         func(vector, error_code, frame);

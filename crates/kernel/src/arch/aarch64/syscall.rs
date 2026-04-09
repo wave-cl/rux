@@ -17,7 +17,9 @@ const SIGRETURN_TRAMPOLINE_VA: usize = 0x7FFD_F000;
 
 /// Whether the trampoline page has been mapped in the current page table.
 static mut TRAMPOLINE_MAPPED: bool = false;
-/// 6th syscall argument (x5) — saved for mmap offset.
+/// 6th syscall argument (x5) — per-CPU for SMP safety.
+pub static mut SAVED_SYSCALL_A5_PERCPU: [u64; crate::percpu::MAX_CPUS] = [0; crate::percpu::MAX_CPUS];
+/// Legacy alias — reads/writes current CPU's slot.
 pub static mut SAVED_SYSCALL_A5: u64 = 0;
 
 /// Reset trampoline state on exec (new page table invalidates old mapping).
@@ -27,7 +29,9 @@ pub fn reset_trampoline() { unsafe { TRAMPOLINE_MAPPED = false; } }
 pub fn handle_syscall(frame: *mut u8) {
     unsafe {
         let regs = frame as *mut u64;
-        CURRENT_REGS_PTR = regs; // Set for SignalOps + VforkContext
+        let cpu = crate::percpu::cpu_id();
+        CURRENT_REGS_PTR_PERCPU[cpu] = regs;
+        CURRENT_REGS_PTR = regs; // legacy compat
 
         // aarch64 syscall convention: x8 = number, x0-x5 = args
         let nr = *regs.add(8);   // x8
@@ -37,7 +41,8 @@ pub fn handle_syscall(frame: *mut u8) {
         let a3 = *regs.add(3);   // x3
         let a4 = *regs.add(4);   // x4
         let a5 = *regs.add(5);   // x5 (6th arg, used by mmap for offset)
-        SAVED_SYSCALL_A5 = a5;
+        SAVED_SYSCALL_A5_PERCPU[cpu] = a5;
+        SAVED_SYSCALL_A5 = a5; // legacy compat
 
         // Process creation + sigreturn (handled before generic dispatch)
         let result: i64 = match nr {
@@ -71,10 +76,8 @@ pub fn handle_syscall(frame: *mut u8) {
         };
 
 
-        // Re-sync CURRENT_REGS_PTR: after any syscall that blocked (schedule()),
-        // other tasks may have overwritten this global with their own frame pointer.
-        // Signal delivery in post_syscall uses CURRENT_REGS_PTR to modify ELR/x30,
-        // so it must point to THIS task's exception frame.
+        // Re-sync per-CPU regs pointer after schedule (may have switched tasks)
+        CURRENT_REGS_PTR_PERCPU[cpu] = regs;
         CURRENT_REGS_PTR = regs;
 
 
@@ -159,7 +162,7 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         frame_addr: usize, syscall_result: i64,
         blocked_mask: u64, _restorer: usize, _signum: u8,
     ) {
-        let regs = CURRENT_REGS_PTR;
+        let regs = CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
         let sp: u64;
         core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
         let frame = frame_addr as *mut SignalFrameAarch64;
@@ -176,14 +179,14 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
-        let regs = CURRENT_REGS_PTR;
+        let regs = CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
         *regs.add(31) = handler as u64;                    // ELR_EL1 = handler
         *regs.add(0) = signum as u64;                      // x0 = signal number
         *regs.add(30) = SIGRETURN_TRAMPOLINE_VA as u64;    // x30 (LR) = sigreturn trampoline
     }
 
     unsafe fn sig_redirect_to_handler_siginfo(handler: usize, signum: u8, siginfo_ptr: usize) {
-        let regs = CURRENT_REGS_PTR;
+        let regs = CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
         *regs.add(31) = handler as u64;                    // ELR_EL1 = handler
         *regs.add(0) = signum as u64;                      // x0 = signal number
         *regs.add(1) = siginfo_ptr as u64;                 // x1 = siginfo_t*
@@ -197,7 +200,7 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
         let orig_user_sp = (*frame).orig_user_sp;
 
         // Restore ALL GPRs (x0-x30) — undoes handler's register clobbering
-        let regs = CURRENT_REGS_PTR;
+        let regs = CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
         for i in 0..31 {
             *regs.add(i) = (*frame).saved_regs[i];
         }
@@ -399,8 +402,9 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 437] = {
 
 // ── VforkContext implementation ─────────────────────────────────────────
 
-/// Stash the exception frame pointer so VforkContext methods can access it.
-/// Set by handle_syscall before calling generic_vfork.
+/// Per-CPU exception frame pointer — per-CPU for SMP safety.
+pub static mut CURRENT_REGS_PTR_PERCPU: [*mut u64; crate::percpu::MAX_CPUS] = [core::ptr::null_mut(); crate::percpu::MAX_CPUS];
+/// Legacy alias.
 pub static mut CURRENT_REGS_PTR: *mut u64 = core::ptr::null_mut();
 
 /// Saved parent exception frame for VforkContext (34 u64s).
@@ -412,7 +416,7 @@ unsafe impl rux_arch::VforkContext for super::Aarch64 {
     const CHILD_STACK_VA: usize = 0x7FFD_0000;
 
     unsafe fn save_regs() {
-        let regs = CURRENT_REGS_PTR;
+        let regs = CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
         for i in 0..FRAME_REGS {
             SAVED_PARENT_FRAME[i] = *regs.add(i);
         }
