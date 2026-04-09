@@ -172,10 +172,21 @@ impl Scheduler {
     /// Wake a sleeping/waiting task by re-enqueuing it in CFS.
     pub fn wake_task(&mut self, idx: usize) {
         if idx >= MAX_TASKS || !self.tasks[idx].active { return; }
+        let target_cpu = self.tasks[idx].entity.cpu;
+        self.wake_task_on(idx, target_cpu);
+    }
+
+    /// Wake a task on a specific CPU's runqueue.
+    /// Sets need_resched if target is the local CPU.
+    /// Returns the target CPU (caller sends IPI if remote).
+    pub fn wake_task_on(&mut self, idx: usize, target_cpu: u32) -> u32 {
+        if idx >= MAX_TASKS || !self.tasks[idx].active { return self.cpu_id; }
         self.tasks[idx].entity.state = TaskState::Ready;
-        self.cfs.set_clock(self.cpu_id, self.clock_ns);
-        self.cfs.enqueue(self.cpu_id, &mut self.tasks[idx].entity, 0);
-        self.need_resched = true; // trigger reschedule (especially from idle)
+        self.tasks[idx].entity.cpu = target_cpu;
+        self.cfs.set_clock(target_cpu, self.clock_ns);
+        self.cfs.enqueue(target_cpu, &mut self.tasks[idx].entity, 0);
+        self.need_resched = true;
+        target_cpu
     }
 
     /// Perform a context switch if one is pending.
@@ -183,7 +194,19 @@ impl Scheduler {
     ///
     /// # Safety
     /// Manipulates stack pointers and switches execution context.
+    /// Set the CPU ID for the current caller (updated on each tick).
+    #[inline(always)]
+    pub fn set_running_cpu(&mut self, cpu: u32) {
+        self.cpu_id = cpu;
+    }
+
     pub unsafe fn schedule(&mut self) {
+        self.schedule_on(self.cpu_id);
+    }
+
+    /// Schedule on a specific CPU's runqueue.
+    /// Called with the actual running CPU's ID (may differ from self.cpu_id on APs).
+    pub unsafe fn schedule_on(&mut self, cpu: u32) {
         if !self.need_resched {
             return;
         }
@@ -197,16 +220,16 @@ impl Scheduler {
             && self.tasks[old_idx].entity.state == TaskState::Running
         {
             let entity = &mut self.tasks[old_idx].entity;
-            self.cfs.put_prev(self.cpu_id, entity);
+            self.cfs.put_prev(cpu, entity);
         }
 
-        // Pick the next task
+        // Pick the next task from THIS CPU's runqueue
         let mut dummy = SchedEntity::new(999);
         dummy.state = TaskState::Interruptible;
 
-        let new_idx = if let Some(picked) = self.cfs.pick_next(self.cpu_id, &mut dummy) {
+        let new_idx = if let Some(picked) = self.cfs.pick_next(cpu, &mut dummy) {
             let idx = (*picked).id as usize;
-            self.cfs.set_next(self.cpu_id, &mut *picked);
+            self.cfs.set_next(cpu, &mut *picked);
             idx
         } else {
             0 // No runnable tasks — go back to idle/main (slot 0)

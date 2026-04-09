@@ -319,6 +319,7 @@ pub unsafe fn load() {
 pub unsafe extern "C" fn isr_check_preempt() {
     if crate::arch::preemptible() {
         let sched = crate::scheduler::get();
+        sched.set_running_cpu(crate::percpu::cpu_id() as u32);
         if sched.need_resched {
             crate::arch::preempt_disable();
             sched.schedule();
@@ -483,6 +484,11 @@ unsafe fn interrupt_dispatch_inner(vector: u64, error_code: u64, frame: *mut u8)
                 crate::scheduler::locked_tick(1_000_000);
                 // Preemption handled by isr_check_preempt in interrupt_common.
             }
+        }
+        49 => {
+            // Reschedule IPI (Linux RESCHEDULE_VECTOR).
+            // Handler just ACKs — isr_check_preempt does the rescheduling.
+            unsafe { super::apic::eoi(); }
         }
         128 => {
             // INT 0x80 — syscall from user space

@@ -28,6 +28,7 @@ fn esr_ec(esr: u64) -> u32 {
 pub unsafe extern "C" fn aarch64_isr_check_preempt() {
     if crate::arch::preemptible() {
         let sched = crate::scheduler::get();
+        sched.set_running_cpu(crate::percpu::cpu_id() as u32);
         if sched.need_resched {
             crate::arch::preempt_disable();
             sched.schedule();

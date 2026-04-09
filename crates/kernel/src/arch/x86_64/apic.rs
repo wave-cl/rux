@@ -68,6 +68,12 @@ pub unsafe fn send_ipi(target_apic_id: u32, vector: u8) {
     lapic_write(LAPIC_ICR_LO, vector as u32);
 }
 
+/// Send a reschedule IPI to a remote CPU (Linux smp_send_reschedule).
+pub unsafe fn send_reschedule(cpu_id: usize) {
+    let apic_id = crate::percpu::cpu(cpu_id).cpu_id;
+    send_ipi(apic_id, 49);
+}
+
 /// Send INIT IPI to a target CPU (for AP startup).
 pub unsafe fn send_init(target_apic_id: u32) {
     lapic_write(LAPIC_ICR_HI, target_apic_id << 24);

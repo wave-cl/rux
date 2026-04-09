@@ -47,16 +47,30 @@ pub unsafe fn get() -> &'static mut Scheduler {
 #[inline(always)]
 pub unsafe fn locked_tick(elapsed_ns: u64) {
     sched_lock();
+    get().set_running_cpu(crate::percpu::cpu_id() as u32);
     get().tick(elapsed_ns);
     sched_unlock();
 }
 
 /// Lock-protected wake_task: acquire lock, wake, release.
+/// Sends a reschedule IPI if the task's CPU differs from the caller's.
 #[inline(always)]
 pub unsafe fn locked_wake_task(idx: usize) {
     sched_lock();
     get().wake_task(idx);
+    let target_cpu = get().tasks[idx].entity.cpu;
     sched_unlock();
+    send_resched_ipi_if_remote(target_cpu);
+}
+
+/// Send a reschedule IPI to a remote CPU if the target differs from ours.
+#[inline(always)]
+pub unsafe fn send_resched_ipi_if_remote(target_cpu: u32) {
+    let my_cpu = crate::percpu::cpu_id() as u32;
+    if target_cpu != my_cpu && crate::percpu::cpu(target_cpu as usize).online {
+        #[cfg(target_arch = "x86_64")]
+        crate::arch::x86_64::apic::send_reschedule(target_cpu as usize);
+    }
 }
 
 /// Initialize the scheduler's context switch functions for the current arch.
