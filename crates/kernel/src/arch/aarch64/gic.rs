@@ -86,7 +86,9 @@ pub fn handle_irq() {
     unsafe {
         let irq_id = mmio_read(GICC_IAR) & 0x3FF; // bits 9:0 = interrupt ID
 
-        if irq_id == TIMER_IRQ {
+        if irq_id == RESCHED_SGI {
+            // Reschedule IPI — just ACK. aarch64_isr_check_preempt handles scheduling.
+        } else if irq_id == TIMER_IRQ {
             super::timer::handle_tick();
         } else if irq_id == UART_IRQ {
             super::console::serial_irq();
@@ -103,6 +105,21 @@ pub fn handle_irq() {
             mmio_write(GICC_EOIR, irq_id);
         }
     }
+}
+
+/// SGI ID for reschedule IPI (Linux uses SGI 1 or 7; we use 0).
+pub const RESCHED_SGI: u32 = 0;
+
+/// Send a reschedule SGI to a specific CPU.
+pub unsafe fn send_sgi(target_cpu: usize, sgi_id: u32) {
+    // GICD_SGIR format: [25:24]=target filter (0=use target list), [23:16]=target CPU mask, [3:0]=SGI ID
+    let val = ((1u32 << target_cpu as u32) << 16) | (sgi_id & 0xF);
+    mmio_write(GICD_BASE + 0xF00, val); // GICD_SGIR
+}
+
+/// Send a reschedule IPI to a remote CPU.
+pub unsafe fn send_reschedule(cpu_id: usize) {
+    send_sgi(cpu_id, RESCHED_SGI);
 }
 
 /// Enable IRQs (unmask).

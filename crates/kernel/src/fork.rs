@@ -107,8 +107,8 @@ unsafe fn enqueue_child(child_idx: usize) {
     // x86_64: GS-based path (KVM only). aarch64: not yet implemented.
     #[cfg(target_arch = "x86_64")]
     let smp_ok = crate::arch::x86_64::syscall::GS_PERCPU_ACTIVE;
-    #[cfg(not(target_arch = "x86_64"))]
-    let smp_ok = false; // aarch64: shared globals prevent cross-CPU execution
+    #[cfg(target_arch = "aarch64")]
+    let smp_ok = false; // FD_TABLE global prevents cross-CPU execution (needs per-CPU refactor)
     let target_cpu = if !smp_ok || crate::percpu::online_cpus() <= 1 {
         my_cpu
     } else {
