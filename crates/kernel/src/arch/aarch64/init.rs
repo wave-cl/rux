@@ -296,6 +296,18 @@ pub fn aarch64_init(dtb_addr: usize) {
                 }
                 rux_fs::procfs::TaskInfo::default()
             },
+            || crate::idle::idle_ticks(),
+            |pid, buf| unsafe {
+                use crate::task_table::*;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
+                        let len = TASK_TABLE[i].fs_ctx.cwd_path_len.min(buf.len());
+                        buf[..len].copy_from_slice(&TASK_TABLE[i].fs_ctx.cwd_path[..len]);
+                        return len;
+                    }
+                }
+                0
+            },
         );
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr,

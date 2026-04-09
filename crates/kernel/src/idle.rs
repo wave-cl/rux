@@ -1,17 +1,21 @@
 /// Idle task — runs in slot 0 when no other tasks are runnable.
-///
-/// Halts the CPU until the next interrupt (timer tick at 1kHz).
-/// Timer ISR calls wake_sleepers() which re-enqueues sleeping tasks
-/// whose deadlines have passed, triggering a reschedule.
-///
-/// Must never be placed on the CFS run queue — the scheduler falls
-/// back to slot 0 implicitly when pick_next() returns None.
+
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Cumulative idle ticks (incremented each time the idle loop wakes from HLT/WFI).
+static IDLE_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Get the cumulative idle tick count (for /proc/uptime idle field).
+pub fn idle_ticks() -> u64 {
+    IDLE_TICKS.load(Ordering::Relaxed)
+}
 
 pub extern "C" fn idle_loop() -> ! {
     loop {
         unsafe {
             use rux_arch::HaltOps;
             crate::arch::Arch::halt_until_interrupt();
+            IDLE_TICKS.fetch_add(1, Ordering::Relaxed);
             // After timer IRQ wakes us, check if any task became runnable
             let sched = crate::scheduler::get();
             if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {

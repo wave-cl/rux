@@ -146,6 +146,8 @@ pub struct ProcFs {
     pub get_current_pid: fn() -> u32,
     pub get_task_cmdline: fn(u32, &mut [u8]) -> usize,
     pub get_task_info: fn(u32) -> TaskInfo,
+    pub get_idle_ticks: fn() -> u64,
+    pub get_task_cwd: fn(u32, &mut [u8]) -> usize,
     pub num_cpus: u32,
 }
 
@@ -158,8 +160,10 @@ impl ProcFs {
         get_current_pid: fn() -> u32,
         get_task_cmdline: fn(u32, &mut [u8]) -> usize,
         get_task_info: fn(u32) -> TaskInfo,
+        get_idle_ticks: fn() -> u64,
+        get_task_cwd: fn(u32, &mut [u8]) -> usize,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_info, num_cpus: 1 }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_info, get_idle_ticks, get_task_cwd, num_cpus: 1 }
     }
 
     /// Check if a PID exists by querying the kernel task table.
@@ -174,9 +178,21 @@ impl ProcFs {
         match ino {
             INO_UPTIME => {
                 let ticks = (self.get_ticks)();
+                let idle = (self.get_idle_ticks)();
                 let secs = ticks / 1000;
                 let frac = (ticks % 1000) / 10;
-                fmt_uptime(buf, secs, frac)
+                let idle_secs = idle / 1000;
+                let idle_frac = (idle % 1000) / 10;
+                let mut pos = 0;
+                pos += fmt_u64(&mut buf[pos..], secs);
+                buf[pos] = b'.'; pos += 1;
+                pos += fmt_u64_pad2(&mut buf[pos..], frac);
+                buf[pos] = b' '; pos += 1;
+                pos += fmt_u64(&mut buf[pos..], idle_secs);
+                buf[pos] = b'.'; pos += 1;
+                pos += fmt_u64_pad2(&mut buf[pos..], idle_frac);
+                buf[pos] = b'\n'; pos += 1;
+                pos
             }
             INO_MEMINFO => {
                 let total = (self.get_total_frames)() * 4;
@@ -194,10 +210,29 @@ impl ProcFs {
                 len
             }
             INO_LOADAVG => {
-                let s = b"0.00 0.00 0.00 1/1 1\n";
-                let len = s.len().min(buf.len());
-                buf[..len].copy_from_slice(&s[..len]);
-                len
+                // Count running tasks for a simple load estimate
+                let mut pids = [0u32; 64];
+                let total = (self.get_active_pids)(&mut pids);
+                let running = total.max(1); // at least 1 (ourselves)
+                // Format: "load1 load5 load15 running/total last_pid\n"
+                // Simple: load = nr_running * 0.01 (approximate)
+                let mut pos = 0;
+                pos += copy_str(&mut buf[pos..], b"0.");
+                pos += fmt_u64_pad2(&mut buf[pos..], (running as u64).min(99));
+                buf[pos] = b' '; pos += 1;
+                pos += copy_str(&mut buf[pos..], b"0.");
+                pos += fmt_u64_pad2(&mut buf[pos..], (running as u64).min(99));
+                buf[pos] = b' '; pos += 1;
+                pos += copy_str(&mut buf[pos..], b"0.");
+                pos += fmt_u64_pad2(&mut buf[pos..], (running as u64).min(99));
+                buf[pos] = b' '; pos += 1;
+                pos += fmt_u64(&mut buf[pos..], running as u64);
+                buf[pos] = b'/'; pos += 1;
+                pos += fmt_u64(&mut buf[pos..], total as u64);
+                buf[pos] = b' '; pos += 1;
+                pos += fmt_u64(&mut buf[pos..], pids[..total].iter().copied().max().unwrap_or(1) as u64);
+                buf[pos] = b'\n'; pos += 1;
+                pos
             }
             INO_MOUNTS => {
                 // Linux /proc/mounts format: device mountpoint fstype options dump pass
@@ -841,10 +876,11 @@ impl FileSystem for ProcFs {
         }
         // /proc/[pid]/cwd → current working directory
         if is_pid_cwd(ino) {
-            let s = b"/";
-            let len = s.len().min(buf.len());
-            buf[..len].copy_from_slice(&s[..len]);
-            return Ok(len);
+            let pid = pid_from_file(ino);
+            let len = (self.get_task_cwd)(pid as u32, buf);
+            if len > 0 { return Ok(len); }
+            buf[0] = b'/';
+            return Ok(1);
         }
         // /proc/[pid]/root → process root directory
         if is_pid_root(ino) {
