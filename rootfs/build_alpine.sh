@@ -71,7 +71,8 @@ install_apk() {
                htop \
                openssh-server openssh-keygen openssh-sftp-server \
                libedit \
-               dropbear dropbear-dbclient dropbear-scp; do
+               dropbear dropbear-dbclient dropbear-scp \
+               utmps-libs skalibs-libs; do
         local f=$(find_pkg "$pkg")
         if [ -n "$f" ]; then
             fetch_and_extract "$f"
@@ -210,23 +211,50 @@ SSHCONF
     # Dropbear host key dir (keys generated at first boot with -R flag)
     mkdir -p "$STAGING/etc/dropbear"
 
-    # rux-init: mount filesystems and start dropbear SSH
+    # TCP shell server: accept→fork→pipe-based I/O with /bin/sh
+    cat > "$STAGING/usr/bin/tcp-shell" << 'TCPSH'
+#!/usr/bin/python3
+"""TCP shell server — each connection gets its own /bin/sh via subprocess."""
+import socket, os, sys, subprocess
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 22
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('0.0.0.0', port))
+s.listen(5)
+sys.stderr.write(f'rux: tcp-shell listening on port {port}\n')
+sys.stderr.flush()
+while True:
+    conn, addr = s.accept()
+    sys.stderr.write(f'rux: tcp-shell connection from {addr}\n')
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
+        s.close()
+        fd = conn.fileno()
+        os.dup2(fd, 0)
+        os.dup2(fd, 1)
+        os.dup2(fd, 2)
+        if fd > 2:
+            os.close(fd)
+        os.execlp('/bin/sh', 'sh')
+    else:
+        conn.close()
+TCPSH
+    chmod 755 "$STAGING/usr/bin/tcp-shell"
+
+    # rux-init: mount filesystems and start services
     cat > "$STAGING/sbin/rux-init" << 'INITSCRIPT'
 #!/bin/sh
 mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sys /sys 2>/dev/null
 mount -t devtmpfs dev /dev 2>/dev/null
 
-# Start dropbear SSH server (single-process, no fork for key exchange)
-if [ -x /usr/sbin/dropbear ]; then
-    /usr/sbin/dropbear -F -E -R -B 2>&1 &
-    echo "rux: dropbear sshd started (pid $!)"
-elif [ -x /usr/sbin/sshd ]; then
-    /usr/sbin/sshd -D -e &
-    echo "rux: openssh sshd started (pid $!)"
+# Start tcp-shell on port 22 (accessible via ssh port forwarding)
+if [ -x /usr/bin/tcp-shell ]; then
+    /usr/bin/tcp-shell 22 &
 fi
 
-echo "Alpine Linux on rux — ssh root@localhost -p 2222"
+echo "Alpine Linux on rux — nc localhost 2222"
 INITSCRIPT
     chmod 755 "$STAGING/sbin/rux-init"
 
