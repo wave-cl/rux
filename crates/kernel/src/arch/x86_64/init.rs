@@ -589,6 +589,24 @@ pub fn x86_64_init(multiboot_info: usize) {
                 }
                 0
             },
+            |pid| unsafe {
+                use crate::task_table::*;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
+                        return rux_fs::procfs::TaskInfo {
+                            pid: TASK_TABLE[i].pid,
+                            ppid: TASK_TABLE[i].ppid,
+                            pgid: TASK_TABLE[i].pgid,
+                            sid: TASK_TABLE[i].sid,
+                            uid: TASK_TABLE[i].uid,
+                            gid: TASK_TABLE[i].gid,
+                            state: TASK_TABLE[i].state as u8,
+                            threads: 1,
+                        };
+                    }
+                }
+                rux_fs::procfs::TaskInfo::default()
+            },
         );
         (&raw mut PROCFS).as_mut().unwrap().num_cpus = crate::percpu::online_cpus() as u32;
         crate::boot::boot(crate::boot::BootParams {

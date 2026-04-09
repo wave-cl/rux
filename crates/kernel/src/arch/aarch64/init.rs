@@ -278,6 +278,24 @@ pub fn aarch64_init(dtb_addr: usize) {
                 }
                 0
             },
+            |pid| unsafe {
+                use crate::task_table::*;
+                for i in 0..MAX_PROCS {
+                    if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
+                        return rux_fs::procfs::TaskInfo {
+                            pid: TASK_TABLE[i].pid,
+                            ppid: TASK_TABLE[i].ppid,
+                            pgid: TASK_TABLE[i].pgid,
+                            sid: TASK_TABLE[i].sid,
+                            uid: TASK_TABLE[i].uid,
+                            gid: TASK_TABLE[i].gid,
+                            state: TASK_TABLE[i].state as u8,
+                            threads: 1,
+                        };
+                    }
+                }
+                rux_fs::procfs::TaskInfo::default()
+            },
         );
         crate::boot::boot(crate::boot::BootParams {
             alloc_ptr,

@@ -124,6 +124,19 @@ fn pid_from_file(ino: InodeId) -> u64 {
     else { ino - PID_STAT_BASE }
 }
 
+/// Per-task information for procfs.
+#[derive(Clone, Copy, Default)]
+pub struct TaskInfo {
+    pub pid: u32,
+    pub ppid: u32,
+    pub pgid: u32,
+    pub sid: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub state: u8,     // 0=free, 1=ready, 2=running, 3=sleeping, 5=zombie, 6=pipe, 8=stopped
+    pub threads: u32,
+}
+
 /// Kernel callbacks for dynamic data.
 pub struct ProcFs {
     pub get_ticks: fn() -> u64,
@@ -132,6 +145,7 @@ pub struct ProcFs {
     pub get_active_pids: fn(&mut [u32]) -> usize,
     pub get_current_pid: fn() -> u32,
     pub get_task_cmdline: fn(u32, &mut [u8]) -> usize,
+    pub get_task_info: fn(u32) -> TaskInfo,
     pub num_cpus: u32,
 }
 
@@ -143,8 +157,9 @@ impl ProcFs {
         get_active_pids: fn(&mut [u32]) -> usize,
         get_current_pid: fn() -> u32,
         get_task_cmdline: fn(u32, &mut [u8]) -> usize,
+        get_task_info: fn(u32) -> TaskInfo,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, num_cpus: 1 }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_info, num_cpus: 1 }
     }
 
     /// Check if a PID exists by querying the kernel task table.
@@ -352,7 +367,22 @@ impl ProcFs {
         let nlen = name.len().min(15);
         buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
         pos += nlen;
-        pos += copy_str(&mut buf[pos..], b") S 0 1 1 0 -1 0 ");
+        // state ppid pgrp session tty_nr tpgid flags
+        let info = (self.get_task_info)(pid as u32);
+        let state_ch = match info.state {
+            5 => b'Z', 8 => b'T', 3 => b'S', 6 | 7 => b'S',
+            _ => b'S',
+        };
+        buf[pos] = b')'; pos += 1;
+        buf[pos] = b' '; pos += 1;
+        buf[pos] = state_ch; pos += 1;
+        buf[pos] = b' '; pos += 1;
+        pos += fmt_u64(&mut buf[pos..], info.ppid as u64);
+        buf[pos] = b' '; pos += 1;
+        pos += fmt_u64(&mut buf[pos..], info.pgid as u64);
+        buf[pos] = b' '; pos += 1;
+        pos += fmt_u64(&mut buf[pos..], info.sid as u64);
+        pos += copy_str(&mut buf[pos..], b" 0 -1 0 ");
         // minflt cminflt majflt cmajflt utime stime cutime cstime
         pos += copy_str(&mut buf[pos..], b"0 0 0 0 ");
         pos += fmt_u64(&mut buf[pos..], ticks / 10); // utime in ticks (HZ=100)
@@ -401,19 +431,49 @@ impl ProcFs {
     /// Generate /proc/[pid]/status — human-readable
     fn gen_pid_status(&self, pid: u64, buf: &mut [u8]) -> usize {
         let used_kb = (self.get_total_frames)().saturating_sub((self.get_free_frames)()) * 4;
+        let info = (self.get_task_info)(pid as u32);
+
+        // Real process name
+        let mut cmdline_buf = [0u8; 128];
+        let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
+        let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
+        let argv0 = &cmdline_buf[..argv0_end];
+        let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
+        let name = &argv0[base_start..];
+        let name = if name.is_empty() { b"sh" as &[u8] } else { name };
+
+        let state_str = match info.state {
+            5 => b"Z (zombie)" as &[u8], 8 => b"T (stopped)",
+            3 => b"S (sleeping)", 6 | 7 => b"D (disk sleep)",
+            2 => b"R (running)", _ => b"S (sleeping)",
+        };
+
         let mut pos = 0;
-        pos += copy_str(&mut buf[pos..], b"Name:\tsh\n");
-        pos += copy_str(&mut buf[pos..], b"State:\tS (sleeping)\n");
-        pos += copy_str(&mut buf[pos..], b"Pid:\t");
+        pos += copy_str(&mut buf[pos..], b"Name:\t");
+        let nlen = name.len().min(15);
+        buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
+        pos += nlen;
+        pos += copy_str(&mut buf[pos..], b"\nState:\t");
+        pos += copy_str(&mut buf[pos..], state_str);
+        pos += copy_str(&mut buf[pos..], b"\nPid:\t");
         pos += fmt_u64(&mut buf[pos..], pid);
-        pos += copy_str(&mut buf[pos..], b"\nPpid:\t0\n");
-        pos += copy_str(&mut buf[pos..], b"Uid:\t0\t0\t0\t0\n");
-        pos += copy_str(&mut buf[pos..], b"Gid:\t0\t0\t0\t0\n");
-        pos += copy_str(&mut buf[pos..], b"VmSize:\t");
+        pos += copy_str(&mut buf[pos..], b"\nPpid:\t");
+        pos += fmt_u64(&mut buf[pos..], info.ppid as u64);
+        pos += copy_str(&mut buf[pos..], b"\nUid:\t");
+        pos += fmt_u64(&mut buf[pos..], info.uid as u64);
+        buf[pos] = b'\t'; pos += 1;
+        pos += fmt_u64(&mut buf[pos..], info.uid as u64);
+        pos += copy_str(&mut buf[pos..], b"\t0\t0\nGid:\t");
+        pos += fmt_u64(&mut buf[pos..], info.gid as u64);
+        buf[pos] = b'\t'; pos += 1;
+        pos += fmt_u64(&mut buf[pos..], info.gid as u64);
+        pos += copy_str(&mut buf[pos..], b"\t0\t0\nVmSize:\t");
         pos += fmt_u64(&mut buf[pos..], used_kb as u64);
         pos += copy_str(&mut buf[pos..], b" kB\nVmRSS:\t");
         pos += fmt_u64(&mut buf[pos..], used_kb as u64);
-        pos += copy_str(&mut buf[pos..], b" kB\nThreads:\t1\n");
+        pos += copy_str(&mut buf[pos..], b" kB\nThreads:\t");
+        pos += fmt_u64(&mut buf[pos..], info.threads.max(1) as u64);
+        pos += copy_str(&mut buf[pos..], b"\n");
         pos
     }
 
