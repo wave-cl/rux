@@ -114,11 +114,9 @@ interrupt_common:
 
     call interrupt_dispatch
 
-    // Check if returning to user mode (CS at RSP+144 != kernel CS 0x08).
-    // If so, check need_resched for deferred preemption.
-    // CS offset: 15 GPRs (120) + vector (8) + error_code (8) + RIP (8) = 144.
-    cmpq $0x08, 144(%rsp)
-    je interrupt_return
+    // Check preemption (safe for both kernel and user mode returns).
+    // interrupt_dispatch ran on the IRQ stack; we're back on the task stack
+    // with the exception frame intact below us.
     call isr_check_preempt
 
     // Restore registers — fork_child_return jumps here
@@ -329,9 +327,46 @@ pub unsafe extern "C" fn isr_check_preempt() {
     }
 }
 
+/// Run a function on the per-CPU IRQ stack (Linux call_on_stack approach).
+/// Saves RSP at the top of the IRQ stack, switches, calls func, restores via popq.
+#[inline(always)]
+unsafe fn call_on_irq_stack(func: unsafe fn(u64, u64, *mut u8), vector: u64, error_code: u64, frame: *mut u8) {
+    let irq_stack_top = super::syscall::CURRENT_IRQ_STACK_TOP;
+    if irq_stack_top == 0 {
+        // IRQ stack not initialized yet (early boot) — run on current stack
+        func(vector, error_code, frame);
+        return;
+    }
+    core::arch::asm!(
+        "mov [{}], rsp",          // save current RSP at top of IRQ stack
+        "mov rsp, {}",            // switch to IRQ stack
+        "call {}",                // call handler (on IRQ stack)
+        "pop rsp",                // restore original RSP
+        in(reg) irq_stack_top,
+        in(reg) irq_stack_top,
+        sym interrupt_dispatch_inner,
+        in("rdi") vector,
+        in("rsi") error_code,
+        in("rdx") frame,
+        clobber_abi("C"),
+    );
+}
+
 /// Rust dispatch function called from the assembly common handler.
 #[no_mangle]
 pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u8) {
+    // Non-exception vectors (IRQs): run on IRQ stack
+    if vector >= 32 {
+        unsafe { call_on_irq_stack(interrupt_dispatch_inner, vector, error_code, frame); }
+        return;
+    }
+    // Exceptions (vectors 0-31): run on current stack (may need task stack for page fault handling)
+    unsafe { interrupt_dispatch_inner(vector, error_code, frame); }
+}
+
+/// Inner dispatch — runs on IRQ stack for IRQs, task stack for exceptions.
+#[no_mangle]
+unsafe fn interrupt_dispatch_inner(vector: u64, error_code: u64, frame: *mut u8) {
     match vector {
         0 => panic!("Division by zero"),
         6 | 13 => {
@@ -437,18 +472,8 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
                 }
 
                 crate::scheduler::locked_tick(1_000_000);
-                // ISR preemption: safe when preempt_count == 0 (task is not
-                // inside schedule/pipe_block/sched_lock). Critical sections
-                // increment preempt_count via irq_disable or sched_lock.
-                // Also preempts on ISR return to user mode (isr_check_preempt).
-                if crate::arch::preemptible() {
-                    let sched = crate::scheduler::get();
-                    if sched.need_resched {
-                        crate::arch::preempt_disable();
-                        sched.schedule();
-                        crate::arch::preempt_enable();
-                    }
-                }
+                // Preemption handled by isr_check_preempt in interrupt_common
+                // assembly — runs on the task stack after call_on_irq_stack returns.
             }
         }
         48 => {
@@ -456,15 +481,7 @@ pub extern "C" fn interrupt_dispatch(vector: u64, error_code: u64, frame: *mut u
             unsafe { super::apic::eoi(); }
             unsafe {
                 crate::scheduler::locked_tick(1_000_000);
-                // ISR preemption for AP cores (same as BSP vector 32).
-                if crate::arch::preemptible() {
-                    let sched = crate::scheduler::get();
-                    if sched.need_resched {
-                        crate::arch::preempt_disable();
-                        sched.schedule();
-                        crate::arch::preempt_enable();
-                    }
-                }
+                // Preemption handled by isr_check_preempt in interrupt_common.
             }
         }
         128 => {

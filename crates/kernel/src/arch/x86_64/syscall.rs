@@ -11,6 +11,10 @@ use super::console;
 /// Used by SignalOps, VforkContext, and the RIP-relative syscall entry path.
 pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
+/// Per-CPU IRQ stack top. Interrupt handlers run on this stack to avoid
+/// corrupting the task kernel stack during context_switch from IRQ context.
+pub static mut CURRENT_IRQ_STACK_TOP: u64 = 0;
+
 /// Saved user RSP during syscall (single-process, no swapgs needed).
 #[no_mangle]
 pub static mut SAVED_USER_RSP: u64 = 0;

@@ -140,7 +140,14 @@ pub fn x86_64_init(multiboot_info: usize) {
     console::write_str("rux: GDT + TSS loaded\n");
 
     // Set GS-base AFTER GDT init (GDT init zeros GS segment, clearing hidden base)
-    unsafe { crate::percpu::init_this_cpu(0); }
+    unsafe {
+        crate::percpu::init_this_cpu(0);
+        // Per-CPU IRQ stack for BSP (Linux call_on_irq_stack approach).
+        // -8 to leave room for the saved RSP at the top (Linux convention).
+        super::syscall::CURRENT_IRQ_STACK_TOP =
+            crate::task_table::IRQ_STACKS.0[0].as_ptr() as u64
+            + crate::task_table::IRQ_STACK_SIZE as u64 - 8;
+    }
 
     // Detect and enable CPU features
     unsafe {
