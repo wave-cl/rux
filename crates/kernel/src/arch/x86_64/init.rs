@@ -22,19 +22,30 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         // 3. IDT (shared with BSP — IDT is the same for all CPUs)
         super::idt::load();
 
-        // 4. Set GS-base + per-CPU state
+        // 4. Enable FSGSBASE (required for rdgsbase in percpu_base)
+        {
+            let mut cr4: u64;
+            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
+            cr4 |= 1 << 16;
+            core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
+        }
+
+        // 5. Set GS-base + per-CPU state
         crate::percpu::init_this_cpu(cpu_id as usize);
         let pc = crate::percpu::cpu(cpu_id as usize);
         pc.cpu_id = cpu_id;
         pc.syscall_kstack_top = kstack_top as u64;
         pc.online = true;
         pc.idle = true;
-        pc.current_task_idx = usize::MAX;
+        pc.current_task_idx = 0; // idle task
+        pc.irq_stack_top = crate::task_table::IRQ_STACKS.0[cpu_id as usize].as_ptr() as u64
+            + crate::task_table::IRQ_STACK_SIZE as u64 - 8;
 
-        // AP is online — BSP prints status after all APs check in
-
-        // 5. Start LAPIC timer on AP (vector 48, ~1000 Hz)
-        super::apic::init_timer(48, 100_000);
+        // 6. Enable LAPIC. Timer only on KVM (TCG shared globals prevent AP scheduling).
+        super::apic::enable_lapic();
+        if super::syscall::GS_PERCPU_ACTIVE {
+            super::apic::init_timer(48, 100_000);
+        }
 
         // 6. Enable interrupts and enter scheduler loop
         // After each timer interrupt (vector 48), check if the scheduler

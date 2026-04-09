@@ -54,6 +54,13 @@ pub unsafe fn init_bsp() {
     lapic_write(LAPIC_TPR, 0);
 }
 
+/// Enable the local LAPIC on an AP (SVR + TPR).
+pub unsafe fn enable_lapic() {
+    let svr = lapic_read(LAPIC_SVR);
+    lapic_write(LAPIC_SVR, svr | (1 << 8) | 0xFF);
+    lapic_write(LAPIC_TPR, 0);
+}
+
 /// Send End-of-Interrupt to the LAPIC.
 pub unsafe fn eoi() {
     lapic_write(LAPIC_EOI, 0);
