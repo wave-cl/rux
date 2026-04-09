@@ -90,7 +90,7 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
             None => return crate::errno::ENOMEM,
         };
 
-        let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+        let fd_table = &mut *rux_fs::fdtable::fd_table();
         let fd = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
             .find(|&f| !fd_table[f].active)
         {
@@ -135,7 +135,7 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
 
 unsafe fn resolve_socket(fd: usize) -> Option<usize> {
     if fd >= rux_fs::fdtable::MAX_FDS { return None; }
-    let entry = &(*rux_fs::fdtable::FD_TABLE)[fd];
+    let entry = &(*rux_fs::fdtable::fd_table())[fd];
     if entry.active && entry.is_socket {
         let idx = entry.socket_idx as usize;
         if idx < MAX_SOCKETS && SOCKETS[idx].active { return Some(idx); }
@@ -205,7 +205,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
             }
 
             // Non-blocking: return EINPROGRESS
-            let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
+            let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::fd_table())[fd].flags & O_NONBLOCK) != 0;
             if nonblock { return crate::errno::EINPROGRESS; }
 
             // Blocking: poll until established
@@ -293,7 +293,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_pt
         None => return crate::errno::EBADF,
     };
     unsafe {
-        let nonblock = (fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0)
+        let nonblock = (fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::fd_table())[fd].flags & O_NONBLOCK) != 0)
             || flags & MSG_DONTWAIT != 0;
 
         #[cfg(feature = "net")]
@@ -399,7 +399,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
         #[cfg(feature = "net")]
         {
             use rux_arch::TimerOps;
-            let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::FD_TABLE)[fd].flags & O_NONBLOCK) != 0;
+            let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::fd_table())[fd].flags & O_NONBLOCK) != 0;
             let listen_handle = to_handle(SOCKETS[idx].smol_handle_raw);
             let max_iters = if nonblock { 10u32 } else { 60_000u32 };
 
@@ -413,7 +413,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                         Some(i) => i,
                         None => return crate::errno::ENOMEM,
                     };
-                    let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                    let fd_table = &mut *rux_fs::fdtable::fd_table();
                     let new_fd = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
                         .find(|&f| !fd_table[f].active)
                     {
@@ -500,11 +500,11 @@ pub fn sys_shutdown(fd: usize, how: usize) -> isize {
 /// The fd is known to be active and is_socket — skip those checks.
 pub fn close_socket_for_exec(fd: usize) {
     unsafe {
-        let sock_idx = (*rux_fs::fdtable::FD_TABLE)[fd].socket_idx as usize;
+        let sock_idx = (*rux_fs::fdtable::fd_table())[fd].socket_idx as usize;
         // Check if any OTHER fd still references this socket
         let still_referenced = (0..rux_fs::fdtable::MAX_FDS).any(|f| {
             f != fd && {
-                let e = &(*rux_fs::fdtable::FD_TABLE)[f];
+                let e = &(*rux_fs::fdtable::fd_table())[f];
                 e.active && e.is_socket && e.socket_idx as usize == sock_idx
                     && e.fd_flags & rux_fs::fdtable::FD_CLOEXEC == 0 // non-CLOEXEC fd survives exec
             }
@@ -527,14 +527,14 @@ pub fn close_socket_for_exec(fd: usize) {
 pub fn sys_close_socket(fd: usize) -> isize {
     unsafe {
         if fd >= rux_fs::fdtable::MAX_FDS { return crate::errno::EBADF; }
-        let entry = &(*rux_fs::fdtable::FD_TABLE)[fd];
+        let entry = &(*rux_fs::fdtable::fd_table())[fd];
         if !entry.active || !entry.is_socket { return crate::errno::EBADF; }
         let sock_idx = entry.socket_idx as usize;
 
-        (*rux_fs::fdtable::FD_TABLE)[fd] = rux_fs::fdtable::EMPTY_FD;
+        (*rux_fs::fdtable::fd_table())[fd] = rux_fs::fdtable::EMPTY_FD;
 
         let still_referenced = (0..rux_fs::fdtable::MAX_FDS).any(|f| {
-            let e = &(*rux_fs::fdtable::FD_TABLE)[f];
+            let e = &(*rux_fs::fdtable::fd_table())[f];
             e.active && e.is_socket && e.socket_idx as usize == sock_idx
         });
         if !still_referenced && sock_idx < MAX_SOCKETS {
@@ -624,8 +624,8 @@ pub fn sys_setsockopt(fd: usize, level: usize, optname: usize, optval: usize, _o
     // SOL_SOCKET=1, SO_REUSEADDR=2
     if level == 1 && optname == 2 {
         unsafe {
-            if fd < rux_fs::fdtable::MAX_FDS && (*rux_fs::fdtable::FD_TABLE)[fd].is_socket {
-                let idx = (*rux_fs::fdtable::FD_TABLE)[fd].socket_idx as usize;
+            if fd < rux_fs::fdtable::MAX_FDS && (*rux_fs::fdtable::fd_table())[fd].is_socket {
+                let idx = (*rux_fs::fdtable::fd_table())[fd].socket_idx as usize;
                 if idx < MAX_SOCKETS && SOCKETS[idx].active {
                     let val = if optval != 0 && crate::uaccess::validate_user_ptr(optval, 4).is_ok() {
                         *(optval as *const i32)
@@ -646,8 +646,8 @@ pub fn sys_getsockopt(fd: usize, _level: usize, optname: usize, optval: usize, o
         let val = match optname {
             2 => {
                 // SO_REUSEADDR: return stored value from setsockopt
-                if fd < rux_fs::fdtable::MAX_FDS && (*rux_fs::fdtable::FD_TABLE)[fd].is_socket {
-                    let idx = (*rux_fs::fdtable::FD_TABLE)[fd].socket_idx as usize;
+                if fd < rux_fs::fdtable::MAX_FDS && (*rux_fs::fdtable::fd_table())[fd].is_socket {
+                    let idx = (*rux_fs::fdtable::fd_table())[fd].socket_idx as usize;
                     if idx < MAX_SOCKETS && SOCKETS[idx].reuse_addr { 1i32 } else { 0 }
                 } else { 0 }
             }
@@ -722,7 +722,7 @@ pub fn socket_has_data(fd: usize) -> bool {
 pub fn is_socket(fd: usize) -> bool {
     unsafe {
         if fd >= rux_fs::fdtable::MAX_FDS { return false; }
-        let entry = &(*rux_fs::fdtable::FD_TABLE)[fd];
+        let entry = &(*rux_fs::fdtable::fd_table())[fd];
         entry.active && entry.is_socket
     }
 }

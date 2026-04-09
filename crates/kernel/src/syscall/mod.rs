@@ -956,7 +956,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             // Return a valid fd that never becomes readable. Programs fall back
             // to polling when inotify doesn't fire events.
             unsafe {
-                let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                let fd_table = &mut *rux_fs::fdtable::fd_table();
                 match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
                     .find(|&f| !fd_table[f].active)
                 {
@@ -1008,7 +1008,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             // Return an anonymous fd. mmap on it works via MAP_ANONYMOUS fallback.
             // read/write return 0 (empty). ftruncate is a no-op.
             unsafe {
-                let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                let fd_table = &mut *rux_fs::fdtable::fd_table();
                 match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
                     .find(|&f| !fd_table[f].active)
                 {
@@ -1099,7 +1099,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     Err(_) => { rux_ipc::pipe::close(pipe_a, false); rux_ipc::pipe::close(pipe_a, true); return crate::errno::ENOMEM; }
                 };
                 // Allocate two fds
-                let fd_table = &mut *rux_fs::fdtable::FD_TABLE;
+                let fd_table = &mut *rux_fs::fdtable::fd_table();
                 let fd0 = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS).find(|&f| !fd_table[f].active) {
                     Some(f) => f,
                     None => { rux_ipc::pipe::close(pipe_a, false); rux_ipc::pipe::close(pipe_a, true);

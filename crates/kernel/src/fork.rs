@@ -108,7 +108,7 @@ unsafe fn enqueue_child(child_idx: usize) {
     #[cfg(target_arch = "x86_64")]
     let smp_ok = crate::arch::x86_64::syscall::GS_PERCPU_ACTIVE;
     #[cfg(target_arch = "aarch64")]
-    let smp_ok = false; // FD_TABLE global prevents cross-CPU execution (needs per-CPU refactor)
+    let smp_ok = false; // aarch64 SMP: remaining shared globals cause exception frame corruption
     let target_cpu = if !smp_ok || crate::percpu::online_cpus() <= 1 {
         my_cpu
     } else {

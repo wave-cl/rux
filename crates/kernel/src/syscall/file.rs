@@ -44,10 +44,10 @@ pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
 /// Blocking pipe I/O loop: retries on EAGAIN, wakes waiters on success.
 /// For socketpair fds: reads use pipe_id, writes use pipe_id_write.
 unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
-    let pipe_id = if is_write && (*fdt::FD_TABLE)[fd].pipe_id_write != 0xFF {
-        (*fdt::FD_TABLE)[fd].pipe_id_write
+    let pipe_id = if is_write && (*fdt::fd_table())[fd].pipe_id_write != 0xFF {
+        (*fdt::fd_table())[fd].pipe_id_write
     } else {
-        (*fdt::FD_TABLE)[fd].pipe_id
+        (*fdt::fd_table())[fd].pipe_id
     };
     loop {
         let r = if is_write {
@@ -68,7 +68,7 @@ unsafe fn pipe_io(fd: usize, buf: usize, len: usize, is_write: bool) -> isize {
         }
         if !can_pipe_block() { return eof_val; }
         pipe_block(pipe_id);
-        if fd >= rux_fs::fdtable::MAX_FDS || !(*fdt::FD_TABLE)[fd].active || !(*fdt::FD_TABLE)[fd].is_pipe {
+        if fd >= rux_fs::fdtable::MAX_FDS || !(*fdt::fd_table())[fd].active || !(*fdt::fd_table())[fd].is_pipe {
             return eof_val;
         }
         // Re-check EOF after waking: writer may have closed while we slept.
@@ -118,7 +118,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         }
     }
     unsafe {
-        if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+        if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].active && (*fdt::fd_table())[fd].is_pipe {
             return pipe_io(fd, buf, len, false);
         }
         fdt::sys_read_fd(fd, buf as *mut u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
@@ -155,19 +155,19 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
     }
     unsafe {
         // O_APPEND: seek to end of file before writing
-        if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active
-            && (*fdt::FD_TABLE)[fd].flags & O_APPEND as u32 != 0
-            && !(*fdt::FD_TABLE)[fd].is_pipe
-            && !(*fdt::FD_TABLE)[fd].is_console
+        if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].active
+            && (*fdt::fd_table())[fd].flags & O_APPEND as u32 != 0
+            && !(*fdt::fd_table())[fd].is_pipe
+            && !(*fdt::fd_table())[fd].is_console
         {
             use rux_fs::FileSystem;
-            let ino = (*fdt::FD_TABLE)[fd].ino;
+            let ino = (*fdt::fd_table())[fd].ino;
             let mut stat = core::mem::zeroed::<rux_fs::InodeStat>();
             if crate::kstate::fs().stat(ino, &mut stat).is_ok() {
-                (*fdt::FD_TABLE)[fd].offset = stat.size as usize;
+                (*fdt::fd_table())[fd].offset = stat.size as usize;
             }
         }
-        let result = if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
+        let result = if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].active && (*fdt::fd_table())[fd].is_pipe {
             pipe_io(fd, buf, len, true)
         } else {
             fdt::sys_write_fd(fd, buf as *const u8, len, crate::kstate::fs(), &crate::pipe::PIPE)
@@ -178,7 +178,7 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         }
         // Update mtime on successful file write (skip pipes/console)
         if result > 0 && fd < rux_fs::fdtable::MAX_FDS {
-            let f = &(*fdt::FD_TABLE)[fd];
+            let f = &(*fdt::fd_table())[fd];
             if f.active && !f.is_console && !f.is_pipe {
                 use rux_fs::FileSystem;
                 let now = super::current_time_secs();
@@ -267,8 +267,8 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                     let is_dev_console = path == b"/dev/tty" || path == b"/dev/console"
                         || path == b"/dev/ttyS0" || path == b"/dev/tty0";
                     if is_dev_console {
-                        (*fdt::FD_TABLE)[fd as usize].is_console = true;
-                        (*fdt::FD_TABLE)[fd as usize].ino = 0; // not a real file inode
+                        (*fdt::fd_table())[fd as usize].is_console = true;
+                        (*fdt::fd_table())[fd as usize].ino = 0; // not a real file inode
                     }
                 }
                 fd
@@ -325,8 +325,8 @@ pub fn close(fd: usize) -> isize {
     unsafe {
         // If closing a pipe end, wake any tasks blocked on that pipe so they
         // can see the new EOF / EPIPE condition.
-        let pipe_id = if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].active && (*fdt::FD_TABLE)[fd].is_pipe {
-            Some((*fdt::FD_TABLE)[fd].pipe_id)
+        let pipe_id = if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].active && (*fdt::fd_table())[fd].is_pipe {
+            Some((*fdt::fd_table())[fd].pipe_id)
         } else {
             None
         };
@@ -455,7 +455,7 @@ pub fn copy_file_range(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_p
     unsafe {
         use rux_fs::FileSystem;
         if fdt::get_fd(fd_in).is_none() || fdt::get_fd(fd_out).is_none() { return crate::errno::EBADF; }
-        let ft = &*fdt::FD_TABLE;
+        let ft = &*fdt::fd_table();
 
         let fs = crate::kstate::fs();
         let ino_in = ft[fd_in].ino;
@@ -497,9 +497,9 @@ pub fn copy_file_range(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_p
 
         // Update offset pointers
         if off_in_ptr != 0 { crate::uaccess::put_user(off_in_ptr, s_off); }
-        else { (*rux_fs::fdtable::FD_TABLE)[fd_in].offset = s_off as usize; }
+        else { (*rux_fs::fdtable::fd_table())[fd_in].offset = s_off as usize; }
         if off_out_ptr != 0 { crate::uaccess::put_user(off_out_ptr, d_off); }
-        else { (*rux_fs::fdtable::FD_TABLE)[fd_out].offset = d_off as usize; }
+        else { (*rux_fs::fdtable::fd_table())[fd_out].offset = d_off as usize; }
 
         if copied == 0 && len > 0 { return crate::errno::EIO; }
         copied as isize
@@ -646,8 +646,8 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
             // FIONREAD: return number of bytes available to read
             if arg != 0 && crate::uaccess::validate_user_ptr(arg, 4).is_ok() {
                 unsafe {
-                    if _fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[_fd].is_pipe {
-                        let pid = (*fdt::FD_TABLE)[_fd].pipe_id;
+                    if _fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[_fd].is_pipe {
+                        let pid = (*fdt::fd_table())[_fd].pipe_id;
                         *(arg as *mut i32) = rux_ipc::pipe::available(pid) as i32;
                     } else {
                         *(arg as *mut i32) = 0; // unknown/console: 0 bytes

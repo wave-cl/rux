@@ -80,11 +80,11 @@ pub fn getdents64(fd: usize, buf_ptr: usize, bufsize: usize) -> isize {
         } else {
             0 // root
         };
-        let mut offset = if fd < rux_fs::fdtable::MAX_FDS { (*rux_fs::fdtable::FD_TABLE)[fd].offset } else { 0 };
+        let mut offset = if fd < rux_fs::fdtable::MAX_FDS { (*rux_fs::fdtable::fd_table())[fd].offset } else { 0 };
         let result = rux_fs::getdents::pack_getdents64(
             crate::kstate::fs(), dir_ino, buf_ptr as *mut u8, bufsize, &mut offset,
         );
-        if fd < rux_fs::fdtable::MAX_FDS { (*rux_fs::fdtable::FD_TABLE)[fd].offset = offset; }
+        if fd < rux_fs::fdtable::MAX_FDS { (*rux_fs::fdtable::fd_table())[fd].offset = offset; }
         result
     }
 }
@@ -244,8 +244,8 @@ pub fn splice(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_ptr: usize
     unsafe {
         use rux_fs::fdtable as fdt;
 
-        let in_is_pipe = fd_in < fdt::MAX_FDS && (*fdt::FD_TABLE)[fd_in].active && (*fdt::FD_TABLE)[fd_in].is_pipe;
-        let out_is_pipe = fd_out < fdt::MAX_FDS && (*fdt::FD_TABLE)[fd_out].active && (*fdt::FD_TABLE)[fd_out].is_pipe;
+        let in_is_pipe = fd_in < fdt::MAX_FDS && (*fdt::fd_table())[fd_in].active && (*fdt::fd_table())[fd_in].is_pipe;
+        let out_is_pipe = fd_out < fdt::MAX_FDS && (*fdt::fd_table())[fd_out].active && (*fdt::fd_table())[fd_out].is_pipe;
         let out_is_socket = super::socket::is_socket(fd_out);
 
         // At least one fd must be a pipe (Linux requirement)
@@ -270,18 +270,18 @@ pub fn splice(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_ptr: usize
 
         // Read from fd_in
         let bytes_in = if in_is_pipe {
-            let n = (crate::pipe::PIPE.read)((*fdt::FD_TABLE)[fd_in].pipe_id, kbuf.as_mut_ptr(), chunk);
+            let n = (crate::pipe::PIPE.read)((*fdt::fd_table())[fd_in].pipe_id, kbuf.as_mut_ptr(), chunk);
             if n <= 0 { return if n == 0 { 0 } else { n as isize }; }
             n as usize
-        } else if fd_in < fdt::MAX_FDS && (*fdt::FD_TABLE)[fd_in].active {
+        } else if fd_in < fdt::MAX_FDS && (*fdt::fd_table())[fd_in].active {
             use rux_fs::FileSystem;
-            let f = &(*fdt::FD_TABLE)[fd_in];
+            let f = &(*fdt::fd_table())[fd_in];
             let offset = in_off.unwrap_or(f.offset as u64);
             let fs = crate::kstate::fs();
             let n = fs.read(f.ino, offset, &mut kbuf[..chunk]).unwrap_or(0);
             if n == 0 { return 0; }
             if in_off.is_none() {
-                (*fdt::FD_TABLE)[fd_in].offset += n;
+                (*fdt::fd_table())[fd_in].offset += n;
             } else if off_in_ptr != 0 {
                 *(off_in_ptr as *mut i64) += n as i64;
             }
@@ -292,22 +292,22 @@ pub fn splice(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_ptr: usize
 
         // Write to fd_out
         let bytes_out = if out_is_pipe {
-            let n = (crate::pipe::PIPE.write)((*fdt::FD_TABLE)[fd_out].pipe_id, kbuf.as_ptr(), bytes_in);
+            let n = (crate::pipe::PIPE.write)((*fdt::fd_table())[fd_out].pipe_id, kbuf.as_ptr(), bytes_in);
             if n <= 0 { return crate::errno::EIO; }
             n as usize
         } else if out_is_socket {
             let n = super::socket::sys_sendto(fd_out, kbuf.as_ptr() as usize, bytes_in, 0, 0, 0);
             if n < 0 { return n; }
             n as usize
-        } else if fd_out < fdt::MAX_FDS && (*fdt::FD_TABLE)[fd_out].active {
+        } else if fd_out < fdt::MAX_FDS && (*fdt::fd_table())[fd_out].active {
             use rux_fs::FileSystem;
-            let f = &(*fdt::FD_TABLE)[fd_out];
+            let f = &(*fdt::fd_table())[fd_out];
             let offset = out_off.unwrap_or(f.offset as u64);
             let fs = crate::kstate::fs();
             let n = fs.write(f.ino, offset, &kbuf[..bytes_in]).unwrap_or(0);
             if n == 0 { return crate::errno::EIO; }
             if out_off.is_none() {
-                (*fdt::FD_TABLE)[fd_out].offset += n;
+                (*fdt::fd_table())[fd_out].offset += n;
             } else if off_out_ptr != 0 {
                 *(off_out_ptr as *mut i64) += n as i64;
             }
@@ -329,8 +329,8 @@ pub fn tee(fd_in: usize, fd_out: usize, len: usize, _flags: usize) -> isize {
     unsafe {
         use rux_fs::fdtable as fdt;
         // Both fds must be pipes
-        let in_pipe = fd_in < fdt::MAX_FDS && (*fdt::FD_TABLE)[fd_in].active && (*fdt::FD_TABLE)[fd_in].is_pipe;
-        let out_pipe = fd_out < fdt::MAX_FDS && (*fdt::FD_TABLE)[fd_out].active && (*fdt::FD_TABLE)[fd_out].is_pipe;
+        let in_pipe = fd_in < fdt::MAX_FDS && (*fdt::fd_table())[fd_in].active && (*fdt::fd_table())[fd_in].is_pipe;
+        let out_pipe = fd_out < fdt::MAX_FDS && (*fdt::fd_table())[fd_out].active && (*fdt::fd_table())[fd_out].is_pipe;
         if !in_pipe || !out_pipe { return crate::errno::EINVAL; }
     }
     splice(fd_in, 0, fd_out, 0, len, 0)

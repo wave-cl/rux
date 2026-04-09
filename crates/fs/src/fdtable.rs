@@ -61,24 +61,35 @@ static mut FD_TABLE_STORAGE: [OpenFile; MAX_FDS] = [EMPTY_FD; MAX_FDS];
 /// Each CPU has its own pointer to the current task's fd array.
 pub static mut FD_TABLE_PERCPU: [*mut [OpenFile; MAX_FDS]; 16] = [core::ptr::null_mut(); 16];
 
-/// Current CPU ID for FD_TABLE access (set by kernel on context switch).
+/// Current CPU ID for FD_TABLE access (legacy, used before GET_CPU_FN is set).
 pub static mut FD_TABLE_CPU_ID: usize = 0;
 
-/// Get the current CPU's FD_TABLE pointer.
+/// Callback to get the current CPU ID (set by kernel at scheduler init).
+pub static mut GET_CPU_FN: Option<fn() -> usize> = None;
+
+/// Get the current CPU ID via callback or legacy global.
 #[inline(always)]
-pub unsafe fn fd_table() -> *mut [OpenFile; MAX_FDS] {
-    FD_TABLE_PERCPU[FD_TABLE_CPU_ID]
+unsafe fn current_cpu() -> usize {
+    if let Some(f) = GET_CPU_FN { f() } else { FD_TABLE_CPU_ID }
 }
 
-/// Legacy alias for compatibility.
+/// Get the current CPU's FD_TABLE pointer (per-CPU for SMP safety).
+#[inline(always)]
+pub unsafe fn fd_table() -> *mut [OpenFile; MAX_FDS] {
+    let cpu = current_cpu();
+    let p = FD_TABLE_PERCPU[cpu];
+    if !p.is_null() { p } else { FD_TABLE }
+}
+
+/// Legacy alias — single-CPU compat. Use fd_table() for SMP.
 pub static mut FD_TABLE: *mut [OpenFile; MAX_FDS] = core::ptr::null_mut();
 
 /// Point FD_TABLE at a task's FD array. Called on context switch and init.
-/// Updates both the per-CPU pointer and the legacy global.
 #[inline(always)]
 pub unsafe fn set_active_fds(fds: *mut [OpenFile; MAX_FDS]) {
-    FD_TABLE_PERCPU[FD_TABLE_CPU_ID] = fds;
-    FD_TABLE = fds; // legacy compatibility
+    let cpu = current_cpu();
+    FD_TABLE_PERCPU[cpu] = fds;
+    FD_TABLE = fds; // legacy single-CPU compat
 }
 
 /// Point FD_TABLE at boot-time storage (used before task table exists).
@@ -89,8 +100,8 @@ pub unsafe fn init_boot_fds() {
 /// Get the inode for a file descriptor (for getdents to read directory).
 pub fn get_fd_inode(fd: usize) -> Option<u64> {
     unsafe {
-        if fd < MAX_FDS && (*FD_TABLE)[fd].active {
-            Some((*FD_TABLE)[fd].ino)
+        if fd < MAX_FDS && (*fd_table())[fd].active {
+            Some((*fd_table())[fd].ino)
         } else {
             None
         }
@@ -100,20 +111,20 @@ pub fn get_fd_inode(fd: usize) -> Option<u64> {
 /// Get a reference to an open file descriptor, or None if invalid/inactive.
 #[inline(always)]
 pub unsafe fn get_fd(fd: usize) -> Option<&'static OpenFile> {
-    if fd < MAX_FDS && (*FD_TABLE)[fd].active { Some(&(*FD_TABLE)[fd]) } else { None }
+    if fd < MAX_FDS && (*fd_table())[fd].active { Some(&(*fd_table())[fd]) } else { None }
 }
 
 /// Get a mutable reference to an open file descriptor, or None if invalid/inactive.
 #[inline(always)]
 pub unsafe fn get_fd_mut(fd: usize) -> Option<&'static mut OpenFile> {
-    if fd < MAX_FDS && (*FD_TABLE)[fd].active { Some(&mut (*FD_TABLE)[fd]) } else { None }
+    if fd < MAX_FDS && (*fd_table())[fd].active { Some(&mut (*fd_table())[fd]) } else { None }
 }
 
 /// Open a file by inode with flags. Returns fd on success, negative errno on failure.
 pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) -> isize {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
-            if !(*FD_TABLE)[fd].active {
+            if !(*fd_table())[fd].active {
                 let mut offset = 0usize;
                 // O_APPEND: start at end of file
                 if flags & 0x400 != 0 {
@@ -127,7 +138,7 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
                     let _ = fs.truncate(ino, 0);
                 }
                 let fd_flags = if flags & 0o2000000 != 0 { FD_CLOEXEC } else { 0 }; // O_CLOEXEC
-                (*FD_TABLE)[fd] = OpenFile {
+                (*fd_table())[fd] = OpenFile {
                     ino: ino as u64, offset, flags, fd_flags, active: true, is_console: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                     is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
@@ -143,9 +154,9 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
 pub fn sys_dup(oldfd: usize) -> isize {
     if oldfd >= MAX_FDS { return -9; }
     unsafe {
-        if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
+        if oldfd > 2 && !(*fd_table())[oldfd].active { return -9; }
         for newfd in FIRST_FILE_FD..MAX_FDS {
-            if !(*FD_TABLE)[newfd].active {
+            if !(*fd_table())[newfd].active {
                 return sys_dup2_inner(oldfd, newfd, None);
             }
         }
@@ -158,10 +169,10 @@ pub fn sys_dup(oldfd: usize) -> isize {
 pub fn sys_dupfd(oldfd: usize, minfd: usize) -> isize {
     if oldfd >= MAX_FDS { return -9; }
     unsafe {
-        if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
+        if oldfd > 2 && !(*fd_table())[oldfd].active { return -9; }
         let start = minfd.max(FIRST_FILE_FD);
         for newfd in start..MAX_FDS {
-            if !(*FD_TABLE)[newfd].active {
+            if !(*fd_table())[newfd].active {
                 return sys_dup2_inner(oldfd, newfd, None);
             }
         }
@@ -177,36 +188,36 @@ pub fn sys_dup2(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize {
 fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize {
     if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
     unsafe {
-        if oldfd > 2 && !(*FD_TABLE)[oldfd].active { return -9; }
+        if oldfd > 2 && !(*fd_table())[oldfd].active { return -9; }
         // POSIX: if oldfd == newfd, return newfd without closing/reopening
         if oldfd == newfd { return newfd as isize; }
         // Close newfd if it's currently open (including pipe cleanup)
-        if (*FD_TABLE)[newfd].active {
-            if (*FD_TABLE)[newfd].is_pipe {
+        if (*fd_table())[newfd].active {
+            if (*fd_table())[newfd].is_pipe {
                 if let Some(p) = pipes {
-                    (p.close)((*FD_TABLE)[newfd].pipe_id, (*FD_TABLE)[newfd].pipe_write);
+                    (p.close)((*fd_table())[newfd].pipe_id, (*fd_table())[newfd].pipe_write);
                 }
             }
-            (*FD_TABLE)[newfd].active = false;
+            (*fd_table())[newfd].active = false;
         }
-        if oldfd <= 2 && (!(*FD_TABLE)[oldfd].active || (*FD_TABLE)[oldfd].is_console) {
+        if oldfd <= 2 && (!(*fd_table())[oldfd].active || (*fd_table())[oldfd].is_console) {
             // Duping a console fd (stdin/stdout/stderr not redirected)
-            (*FD_TABLE)[newfd] = OpenFile {
+            (*fd_table())[newfd] = OpenFile {
                 ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: true,
                 is_pipe: false, pipe_id: 0, pipe_write: false,
                 is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
             };
         } else {
-            (*FD_TABLE)[newfd] = (*FD_TABLE)[oldfd];
+            (*fd_table())[newfd] = (*fd_table())[oldfd];
             // POSIX: dup2 clears FD_CLOEXEC on the new fd
-            (*FD_TABLE)[newfd].fd_flags = 0;
+            (*fd_table())[newfd].fd_flags = 0;
             // Increment pipe ref count for the dup'd fd (skip in vfork child)
-            if (*FD_TABLE)[newfd].is_pipe {
+            if (*fd_table())[newfd].is_pipe {
                 if let Some(p) = pipes {
-                    (p.dup_ref)((*FD_TABLE)[newfd].pipe_id, (*FD_TABLE)[newfd].pipe_write);
+                    (p.dup_ref)((*fd_table())[newfd].pipe_id, (*fd_table())[newfd].pipe_write);
                     // Socketpair: also dup the write-direction pipe ref
-                    if (*FD_TABLE)[newfd].pipe_id_write != 0xFF {
-                        (p.dup_ref)((*FD_TABLE)[newfd].pipe_id_write, true);
+                    if (*fd_table())[newfd].pipe_id_write != 0xFF {
+                        (p.dup_ref)((*fd_table())[newfd].pipe_id_write, true);
                     }
                 }
             }
@@ -236,7 +247,7 @@ pub fn sys_close(fd: usize, pipes: Option<&PipeFns>) -> isize {
                 }
             }
         }
-        (*FD_TABLE)[fd].active = false;
+        (*fd_table())[fd].active = false;
     }
     0
 }
@@ -245,8 +256,8 @@ pub fn sys_close(fd: usize, pipes: Option<&PipeFns>) -> isize {
 pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
-            if !(*FD_TABLE)[fd].active {
-                (*FD_TABLE)[fd] = OpenFile {
+            if !(*fd_table())[fd].active {
+                (*fd_table())[fd] = OpenFile {
                     ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: false,
                     is_pipe: true, pipe_id, pipe_write: is_write,
                     is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
@@ -364,17 +375,17 @@ pub fn close_on_exec(pipes: Option<&PipeFns>, sock_close: Option<SocketCloseFn>)
     let mut cp_count = 0;
     unsafe {
         for fd in FIRST_FILE_FD..MAX_FDS {
-            if (*FD_TABLE)[fd].active && (*FD_TABLE)[fd].fd_flags & FD_CLOEXEC != 0 {
-                if (*FD_TABLE)[fd].is_pipe {
-                    let pid = (*FD_TABLE)[fd].pipe_id;
+            if (*fd_table())[fd].active && (*fd_table())[fd].fd_flags & FD_CLOEXEC != 0 {
+                if (*fd_table())[fd].is_pipe {
+                    let pid = (*fd_table())[fd].pipe_id;
                     if let Some(p) = pipes {
-                        (p.close)(pid, (*FD_TABLE)[fd].pipe_write);
+                        (p.close)(pid, (*fd_table())[fd].pipe_write);
                     }
                     if cp_count < 16 { closed_pipes[cp_count] = pid; cp_count += 1; }
-                } else if (*FD_TABLE)[fd].is_socket {
+                } else if (*fd_table())[fd].is_socket {
                     if let Some(sc) = sock_close { sc(fd); }
                 }
-                (*FD_TABLE)[fd].active = false;
+                (*fd_table())[fd].active = false;
             }
         }
     }
@@ -418,6 +429,6 @@ pub fn create_pipe(
 pub fn is_console_fd(fd: usize) -> bool {
     unsafe {
         if fd >= MAX_FDS { return false; }
-        !(*FD_TABLE)[fd].active || (*FD_TABLE)[fd].is_console
+        !(*fd_table())[fd].active || (*fd_table())[fd].is_console
     }
 }

@@ -7,7 +7,7 @@ use rux_fs::fdtable as fdt;
 /// Allocate an fd from the fd table, applying O_NONBLOCK if set in flags.
 /// Returns the fd number on success, or negative errno.
 unsafe fn alloc_virtual_fd(flags: usize) -> isize {
-    let fd_table = &mut *fdt::FD_TABLE;
+    let fd_table = &mut *fdt::fd_table();
     let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
         Some(f) => f,
         None => return crate::errno::ENOMEM,
@@ -56,7 +56,7 @@ pub(crate) unsafe fn yield_1ms() {
 unsafe fn blocking_read_u64<F>(fd: usize, buf: usize, max_iters: u32, mut check: F) -> isize
 where F: FnMut() -> Option<u64>
 {
-    let nonblock = fd < fdt::MAX_FDS && ((*fdt::FD_TABLE)[fd].flags & 0x800) != 0;
+    let nonblock = fd < fdt::MAX_FDS && ((*fdt::fd_table())[fd].flags & 0x800) != 0;
     for _ in 0..max_iters {
         if let Some(val) = check() {
             *(buf as *mut u64) = val;
@@ -113,7 +113,7 @@ pub fn epoll_create(_flags: usize) -> isize {
             None => return crate::errno::ENOMEM,
         };
         // Allocate an FD for this epoll instance
-        let fd_table = &mut *fdt::FD_TABLE;
+        let fd_table = &mut *fdt::fd_table();
         let fd = match (fdt::FIRST_FILE_FD..fdt::MAX_FDS).find(|&f| !fd_table[f].active) {
             Some(f) => f,
             None => return crate::errno::ENOMEM,
@@ -239,8 +239,8 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         if timerfd_has_data(fd) { revents |= EPOLLIN; }
                     } else if is_signalfd(fd) {
                         if signalfd_has_data(fd) { revents |= EPOLLIN; }
-                    } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].is_pipe {
-                        let pid = (*fdt::FD_TABLE)[fd].pipe_id;
+                    } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].is_pipe {
+                        let pid = (*fdt::fd_table())[fd].pipe_id;
                         if crate::pipe::has_data(pid) { revents |= EPOLLIN; }
                         if crate::pipe::writers_closed(pid) { revents |= EPOLLHUP; }
                     } else {
@@ -252,7 +252,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         if super::socket::socket_can_write(fd) { revents |= EPOLLOUT; }
                     } else if is_eventfd(fd) {
                         revents |= EPOLLOUT;
-                    } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::FD_TABLE)[fd].is_pipe && (*fdt::FD_TABLE)[fd].pipe_write {
+                    } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].is_pipe && (*fdt::fd_table())[fd].pipe_write {
                         revents |= EPOLLOUT;
                     } else if !is_timerfd(fd) {
                         revents |= EPOLLOUT;
@@ -265,7 +265,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                     }
                 }
                 // EPOLLERR: always reported if fd is invalid
-                if fd >= rux_fs::fdtable::MAX_FDS || (!(*fdt::FD_TABLE)[fd].active && !super::socket::is_socket(fd)) {
+                if fd >= rux_fs::fdtable::MAX_FDS || (!(*fdt::fd_table())[fd].active && !super::socket::is_socket(fd)) {
                     revents |= EPOLLERR;
                 }
                 if revents != 0 {
@@ -606,7 +606,7 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
         let pending_masked = hot.pending.0 & mask;
         if pending_masked == 0 {
             // Check O_NONBLOCK on the fd
-            let f = &(*rux_fs::fdtable::FD_TABLE)[fd];
+            let f = &(*rux_fs::fdtable::fd_table())[fd];
             if f.flags & 0o4000 != 0 {
                 return crate::errno::EAGAIN; // non-blocking
             }
@@ -783,8 +783,8 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             // File-backed: allocate pages and read file data
             use rux_fs::FileSystem;
             let fs = crate::kstate::fs();
-            let ino = (*rux_fs::fdtable::FD_TABLE)[fd].ino;
-            if (*rux_fs::fdtable::FD_TABLE)[fd].active && ino != 0 {
+            let ino = (*rux_fs::fdtable::fd_table())[fd].ino;
+            if (*rux_fs::fdtable::fd_table())[fd].active && ino != 0 {
                 // Map pages with temporary WRITE permission for data loading.
                 // Final permissions are applied after the file data is written.
                 let load_flags = rux_mm::MappingFlags::USER
@@ -1250,7 +1250,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             let fd = *(entry as *const i32) as usize;
             fd < rux_fs::fdtable::MAX_FDS && (
                 super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd)
-                || is_signalfd(fd) || (*fdt::FD_TABLE)[fd].is_pipe
+                || is_signalfd(fd) || (*fdt::fd_table())[fd].is_pipe
             )
         })
     };
@@ -1277,7 +1277,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
 
             if fd >= fdt::MAX_FDS { *revents_ptr = 0; continue; }
 
-            let f = &(*fdt::FD_TABLE)[fd];
+            let f = &(*fdt::fd_table())[fd];
             let mut revents: i16 = 0;
             if f.active && f.is_socket {
                 // Socket: check actual readiness

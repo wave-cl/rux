@@ -88,6 +88,8 @@ pub unsafe fn init_context_fns() {
         pre_switch: Some(crate::task_table::swap_process_state),
         get_cpu: Some(|| crate::percpu::cpu_id() as u32),
     });
+    // Per-CPU FD_TABLE callback
+    rux_fs::fdtable::GET_CPU_FN = Some(|| crate::percpu::cpu_id());
 }
 
 /// Set up the idle task (slot 0) in the scheduler with a proper stack frame,

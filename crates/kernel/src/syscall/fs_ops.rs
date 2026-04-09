@@ -38,7 +38,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
     }
     if fd <= 2 {
         unsafe {
-            if (*fdt::FD_TABLE)[fd].is_pipe {
+            if (*fdt::fd_table())[fd].is_pipe {
                 synthetic_stat(buf, 0o10666, fd); // S_IFIFO | 0666
                 return 0;
             }
@@ -46,7 +46,7 @@ pub fn fstat(fd: usize, buf: usize) -> isize {
     }
     unsafe {
         use rux_fs::FileSystem;
-        let f = &(*fdt::FD_TABLE)[fd];
+        let f = &(*fdt::fd_table())[fd];
         if !f.active { return crate::errno::EBADF; }
         let fs = crate::kstate::fs();
         let mut vfs_stat = core::mem::zeroed::<rux_fs::InodeStat>();
