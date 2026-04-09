@@ -318,8 +318,13 @@ pub unsafe fn load() {
 #[no_mangle]
 pub unsafe extern "C" fn isr_check_preempt() {
     if crate::arch::preemptible() {
+        let cpu = crate::percpu::cpu_id() as u32;
+        // On TCG (no GS-based per-CPU), only BSP can ISR-preempt safely.
+        // AP preemption would overwrite shared globals (CURRENT_KSTACK_TOP, etc).
+        #[cfg(target_arch = "x86_64")]
+        if cpu != 0 && !super::syscall::GS_PERCPU_ACTIVE { return; }
         let sched = crate::scheduler::get();
-        if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
+        if sched.need_resched & (1u64 << cpu) != 0 {
             crate::arch::preempt_disable();
             sched.schedule();
             crate::arch::preempt_enable();
