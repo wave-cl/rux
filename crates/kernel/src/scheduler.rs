@@ -43,12 +43,20 @@ pub unsafe fn get() -> &'static mut Scheduler {
     &mut *(&raw mut SCHED)
 }
 
-/// Lock-protected tick: acquire lock, call tick, release.
+/// Lock-protected tick: try-lock to avoid deadlock on TCG SMP
+/// (ISR spinning on lock held by other vCPU in serialized execution).
 #[inline(always)]
 pub unsafe fn locked_tick(elapsed_ns: u64) {
-    sched_lock();
-    get().tick(elapsed_ns);
-    sched_unlock();
+    crate::arch::preempt_disable();
+    if SCHED_LOCK.compare_exchange(
+        false, true,
+        core::sync::atomic::Ordering::Acquire,
+        core::sync::atomic::Ordering::Relaxed,
+    ).is_ok() {
+        get().tick(elapsed_ns);
+        SCHED_LOCK.store(false, core::sync::atomic::Ordering::Release);
+    }
+    crate::arch::preempt_enable();
 }
 
 /// Lock-protected wake_task: acquire lock, wake, release.

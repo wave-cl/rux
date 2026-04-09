@@ -20,7 +20,7 @@ unsafe impl rux_arch::ForkOps for super::Aarch64 {
     unsafe fn setup_child_kstack(kstack_top: usize) -> usize {
         // The parent's exception frame (34 u64s = 272 bytes) is on the current
         // kernel stack. CURRENT_REGS_PTR points to the base of this frame.
-        let parent_regs = super::syscall::CURRENT_REGS_PTR;
+        let parent_regs = super::syscall::CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
 
         let mut sp = kstack_top & !0xF; // 16-byte align
 
