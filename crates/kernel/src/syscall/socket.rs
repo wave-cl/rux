@@ -461,11 +461,13 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                     };
 
                     // 2. Move the connected smoltcp handle to the new slot
+                    let listen_port = SOCKETS[idx].bound_port;
                     SOCKETS[new_sock_idx] = SocketSlot::empty();
                     SOCKETS[new_sock_idx].active = true;
                     SOCKETS[new_sock_idx].ref_count = 1;
                     SOCKETS[new_sock_idx].sock_type = SOCK_STREAM;
                     SOCKETS[new_sock_idx].smol_handle_raw = SOCKETS[idx].smol_handle_raw;
+                    SOCKETS[new_sock_idx].bound_port = listen_port; // inherit local port
                     SOCKETS[new_sock_idx].connected = true;
 
                     fd_table[new_fd] = rux_fs::fdtable::EMPTY_FD;
