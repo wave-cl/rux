@@ -74,8 +74,12 @@ const PID_ENVIRON_BASE: InodeId = 8100; // /proc/[pid]/environ
 const PID_CGROUP_BASE: InodeId = 8200;  // /proc/[pid]/cgroup
 const PID_MOUNTINFO_BASE: InodeId = 8300; // /proc/[pid]/mountinfo
 const PID_OOM_BASE: InodeId = 8400;   // /proc/[pid]/oom_score
+const PID_CWD_BASE: InodeId = 8500;   // /proc/[pid]/cwd (symlink)
+const PID_ROOT_BASE: InodeId = 8600;  // /proc/[pid]/root (symlink)
+const PID_LIMITS_BASE: InodeId = 8700; // /proc/[pid]/limits
+const PID_IO_BASE: InodeId = 8800;    // /proc/[pid]/io
 
-const PID_SUBENTRIES: [(&[u8], InodeId); 12] = [
+const PID_SUBENTRIES: [(&[u8], InodeId); 16] = [
     (b"stat", PID_STAT_BASE),
     (b"cmdline", PID_CMDLINE_BASE),
     (b"statm", PID_STATM_BASE),
@@ -88,15 +92,26 @@ const PID_SUBENTRIES: [(&[u8], InodeId); 12] = [
     (b"cgroup", PID_CGROUP_BASE),
     (b"mountinfo", PID_MOUNTINFO_BASE),
     (b"oom_score", PID_OOM_BASE),
+    (b"cwd", PID_CWD_BASE),
+    (b"root", PID_ROOT_BASE),
+    (b"limits", PID_LIMITS_BASE),
+    (b"io", PID_IO_BASE),
 ];
 
 fn is_pid_dir(ino: InodeId) -> bool { ino >= PID_DIR_BASE && ino < PID_STAT_BASE }
 fn is_pid_fd_dir(ino: InodeId) -> bool { ino >= PID_FD_DIR_BASE && ino < PID_FD_DIR_BASE + 100 }
 fn is_pid_exe(ino: InodeId) -> bool { ino >= PID_EXE_BASE && ino < PID_MAPS_BASE }
-fn is_pid_file(ino: InodeId) -> bool { ino >= PID_STAT_BASE && !is_pid_fd_dir(ino) }
+fn is_pid_cwd(ino: InodeId) -> bool { ino >= PID_CWD_BASE && ino < PID_ROOT_BASE }
+fn is_pid_root(ino: InodeId) -> bool { ino >= PID_ROOT_BASE && ino < PID_LIMITS_BASE }
+fn is_pid_symlink(ino: InodeId) -> bool { is_pid_exe(ino) || is_pid_cwd(ino) || is_pid_root(ino) }
+fn is_pid_file(ino: InodeId) -> bool { ino >= PID_STAT_BASE && !is_pid_fd_dir(ino) && !is_pid_symlink(ino) }
 fn pid_from_dir(ino: InodeId) -> u64 { ino - PID_DIR_BASE }
 fn pid_from_file(ino: InodeId) -> u64 {
-    if ino >= PID_OOM_BASE { ino - PID_OOM_BASE }
+    if ino >= PID_IO_BASE { ino - PID_IO_BASE }
+    else if ino >= PID_LIMITS_BASE { ino - PID_LIMITS_BASE }
+    else if ino >= PID_ROOT_BASE { ino - PID_ROOT_BASE }
+    else if ino >= PID_CWD_BASE { ino - PID_CWD_BASE }
+    else if ino >= PID_OOM_BASE { ino - PID_OOM_BASE }
     else if ino >= PID_MOUNTINFO_BASE { ino - PID_MOUNTINFO_BASE }
     else if ino >= PID_CGROUP_BASE { ino - PID_CGROUP_BASE }
     else if ino >= PID_ENVIRON_BASE { ino - PID_ENVIRON_BASE }
@@ -249,7 +264,19 @@ impl ProcFs {
             _ if is_pid_file(ino) => {
                 let pid = pid_from_file(ino);
                 if !self.pid_exists(pid) { return 0; }
-                if ino >= PID_OOM_BASE {
+                if ino >= PID_IO_BASE {
+                    // /proc/[pid]/io — I/O statistics (stub: zeroes)
+                    let s = b"rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n";
+                    let len = s.len().min(buf.len());
+                    buf[..len].copy_from_slice(&s[..len]);
+                    len
+                } else if ino >= PID_LIMITS_BASE {
+                    // /proc/[pid]/limits — default resource limits
+                    let s = b"Limit                     Soft Limit           Hard Limit           Units     \nMax cpu time              unlimited            unlimited            seconds   \nMax file size             unlimited            unlimited            bytes     \nMax data size             unlimited            unlimited            bytes     \nMax stack size            8388608              unlimited            bytes     \nMax core file size        0                    unlimited            bytes     \nMax resident set          unlimited            unlimited            bytes     \nMax processes             63704                63704                processes \nMax open files            1024                 1048576              files     \nMax locked memory         8388608              8388608              bytes     \nMax address space         unlimited            unlimited            bytes     \nMax file locks            unlimited            unlimited            locks     \nMax pending signals       63704                63704                signals   \nMax msgqueue size         819200               819200               bytes     \nMax nice priority         0                    0                    \nMax realtime priority     0                    0                    \nMax realtime timeout      unlimited            unlimited            us        \n";
+                    let len = s.len().min(buf.len());
+                    buf[..len].copy_from_slice(&s[..len]);
+                    len
+                } else if ino >= PID_OOM_BASE {
                     // /proc/[pid]/oom_score — always 0
                     let s = b"0\n";
                     buf[..s.len()].copy_from_slice(s);
@@ -273,11 +300,19 @@ impl ProcFs {
                     buf[..len].copy_from_slice(&s[..len]);
                     len
                 } else if ino >= PID_COMM_BASE {
-                    // /proc/[pid]/comm — process name
-                    let s = b"sh\n";
-                    let len = s.len().min(buf.len());
-                    buf[..len].copy_from_slice(&s[..len]);
-                    len
+                    // /proc/[pid]/comm — process name (basename of argv[0])
+                    let mut cmdline_buf = [0u8; 128];
+                    let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
+                    let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
+                    let argv0 = &cmdline_buf[..argv0_end];
+                    // Extract basename (after last '/')
+                    let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
+                    let name = &argv0[base_start..];
+                    let name = if name.is_empty() { b"sh" as &[u8] } else { name };
+                    let len = name.len().min(buf.len().saturating_sub(1));
+                    buf[..len].copy_from_slice(&name[..len]);
+                    buf[len] = b'\n';
+                    len + 1
                 } else if ino >= PID_STATUS_BASE && ino < PID_EXE_BASE {
                     self.gen_pid_status(pid, buf)
                 } else if ino >= PID_STATM_BASE && ino < PID_STATUS_BASE {
@@ -304,7 +339,20 @@ impl ProcFs {
         let mut pos = 0;
         // pid (comm) state ppid pgrp session tty_nr tpgid flags
         pos += fmt_u64(&mut buf[pos..], pid);
-        pos += copy_str(&mut buf[pos..], b" (sh) S 0 1 1 0 -1 0 ");
+        // Get real process name for comm field
+        let mut cmdline_buf = [0u8; 128];
+        let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
+        let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
+        let argv0 = &cmdline_buf[..argv0_end];
+        let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
+        let name = &argv0[base_start..];
+        let name = if name.is_empty() { b"sh" as &[u8] } else { name };
+        buf[pos] = b' '; pos += 1;
+        buf[pos] = b'('; pos += 1;
+        let nlen = name.len().min(15);
+        buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
+        pos += nlen;
+        pos += copy_str(&mut buf[pos..], b") S 0 1 1 0 -1 0 ");
         // minflt cminflt majflt cmajflt utime stime cutime cstime
         pos += copy_str(&mut buf[pos..], b"0 0 0 0 ");
         pos += fmt_u64(&mut buf[pos..], ticks / 10); // utime in ticks (HZ=100)
@@ -631,8 +679,9 @@ impl FileSystem for ProcFs {
             if offset >= PID_SUBENTRIES.len() { return Ok(false); }
             let (name, base) = PID_SUBENTRIES[offset];
             buf.ino = base + pid;
-            buf.kind = if base == PID_EXE_BASE { InodeType::Symlink }
-                       else if base == PID_FD_DIR_BASE { InodeType::Directory }
+            buf.kind = if base == PID_EXE_BASE || base == PID_CWD_BASE || base == PID_ROOT_BASE {
+                           InodeType::Symlink
+                       } else if base == PID_FD_DIR_BASE { InodeType::Directory }
                        else { InodeType::File };
             buf.name_len = name.len() as u8;
             buf.name[..name.len()].copy_from_slice(name);
@@ -726,6 +775,20 @@ impl FileSystem for ProcFs {
                 return Ok(len);
             }
             let s = b"/bin/sh";
+            let len = s.len().min(buf.len());
+            buf[..len].copy_from_slice(&s[..len]);
+            return Ok(len);
+        }
+        // /proc/[pid]/cwd → current working directory
+        if is_pid_cwd(ino) {
+            let s = b"/";
+            let len = s.len().min(buf.len());
+            buf[..len].copy_from_slice(&s[..len]);
+            return Ok(len);
+        }
+        // /proc/[pid]/root → process root directory
+        if is_pid_root(ino) {
+            let s = b"/";
             let len = s.len().min(buf.len());
             buf[..len].copy_from_slice(&s[..len]);
             return Ok(len);

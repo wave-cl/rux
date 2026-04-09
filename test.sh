@@ -153,6 +153,11 @@ echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
 head -c 100 /dev/urandom > /tmp/rnd && wc -c /tmp/rnd
 du -s /bin | cut -f1
 ls /proc/self/fd
+readlink /proc/self/cwd
+readlink /proc/self/root
+cat /proc/self/limits | head -1
+cat /proc/self/io | head -1
+cat /proc/self/comm
 cat /proc/self/maps | head -1
 echo a | cat | cat | cat
 echo p1 | sed 's/p/q/' | tr a-z A-Z
@@ -433,6 +438,11 @@ check "urandom write"         "100"
 check "du (statx)"            "/"
 check "proc/self/fd"          "0"
 check "proc/self/maps"        "r-xp"
+check "proc/self/cwd"         "/"
+check "proc/self/root"        "/"
+check "proc/self/limits"      "Limit"
+check "proc/self/io"          "rchar"
+check "proc/self/comm"        "sh"
 check "triple pipe"           "a"
 check "pipe chain"            "Q1"
 check "O_TRUNC (>)"          "new"
@@ -609,6 +619,11 @@ echo hello > /tmp/src && cp /tmp/src /tmp/dst && cat /tmp/dst
 head -c 100 /dev/urandom > /tmp/rnd && wc -c /tmp/rnd
 du -s /bin | cut -f1
 ls /proc/self/fd
+readlink /proc/self/cwd
+readlink /proc/self/root
+cat /proc/self/limits | head -1
+cat /proc/self/io | head -1
+cat /proc/self/comm
 cat /proc/self/maps | head -1
 echo a | cat | cat | cat
 echo p1 | sed 's/p/q/' | tr a-z A-Z
@@ -870,6 +885,11 @@ check "urandom write"         "100"
 check "du (statx)"            "/"
 check "proc/self/fd"          "0"
 check "proc/self/maps"        "r-xp"
+check "proc/self/cwd"         "/"
+check "proc/self/root"        "/"
+check "proc/self/limits"      "Limit"
+check "proc/self/io"          "rchar"
+check "proc/self/comm"        "sh"
 check "triple pipe"           "a"
 check "pipe chain"            "Q1"
 check "O_TRUNC (>)"          "new"
