@@ -418,7 +418,7 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
         rux_fs::fdtable::set_active_fds(&mut (*tt_ptr)[fds_idx].fds);
         crate::arch::Arch::restore_task_hw(new.saved_user_sp, new.tls, new.kstack_top);
         crate::arch::Arch::restore_fpu(&new.fpu_state as *const _ as *const u8);
-        crate::percpu::this_cpu().preempt_count = new.preempt_count;
+        // preempt_count not restored — caller's preempt_disable is still active
         if new.pt_root != 0 {
             crate::arch::Arch::switch_page_table(new.pt_root, new.asid);
         }
@@ -489,8 +489,10 @@ pub unsafe fn swap_process_state(old_idx: usize, new_idx: usize) {
     // Restore FPU/SIMD state
     crate::arch::Arch::restore_fpu(&new.fpu_state as *const _ as *const u8);
 
-    // Restore preempt_count (per-task, not per-CPU)
-    crate::percpu::this_cpu().preempt_count = new.preempt_count;
+    // Note: preempt_count is NOT restored here. It was saved to old task above.
+    // The new task resumes with whatever preempt_count the caller set (via
+    // preempt_disable before schedule). This avoids a window between restore
+    // and context_switch where preempt_count=0 could allow re-entrant schedule.
 
     // Switch page table with ASID/PCID to avoid full TLB flush.
     if new.pt_root != 0 && new.pt_root != old.pt_root {
