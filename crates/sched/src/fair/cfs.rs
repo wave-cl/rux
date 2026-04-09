@@ -22,6 +22,9 @@ impl CfsClass {
     }
 
     #[inline(always)]
+    pub fn nr_running(&self, cpu: CpuId) -> u32 { self.rqs[cpu as usize].nr_running }
+
+    #[inline(always)]
     pub fn set_clock(&mut self, cpu: CpuId, now_ns: u64) {
         self.rqs[cpu as usize].set_clock(now_ns);
     }

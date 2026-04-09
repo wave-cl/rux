@@ -99,6 +99,34 @@ unsafe fn init_child_slot(
 #[inline]
 unsafe fn enqueue_child(child_idx: usize) {
     use rux_sched::SchedClassOps;
+    let my_cpu = crate::percpu::cpu_id() as u32;
+    // SMP fork distribution: place child on least-loaded CPU.
+    // Only active with GS-based per-CPU syscall entry (KVM/real HW).
+    // On TCG, shared globals prevent cross-CPU task execution.
+    // SMP fork distribution requires per-CPU syscall globals.
+    // x86_64: GS-based path (KVM only). aarch64: not yet implemented.
+    #[cfg(target_arch = "x86_64")]
+    let smp_ok = crate::arch::x86_64::syscall::GS_PERCPU_ACTIVE;
+    #[cfg(not(target_arch = "x86_64"))]
+    let smp_ok = false; // aarch64: shared globals prevent cross-CPU execution
+    let target_cpu = if !smp_ok || crate::percpu::online_cpus() <= 1 {
+        my_cpu
+    } else {
+        let s = crate::scheduler::get();
+        let load = |c: u32| -> u32 {
+            let nr = s.cfs.nr_running(c);
+            if s.current_per_cpu[c as usize] > 0 { nr + 1 } else { nr }
+        };
+        let my_load = load(my_cpu);
+        let mut best = my_cpu;
+        let mut bl = my_load;
+        for c in 0..crate::percpu::MAX_CPUS as u32 {
+            if c == my_cpu || !crate::percpu::cpu(c as usize).online { continue; }
+            let n = load(c);
+            if n < bl { bl = n; best = c; }
+        }
+        best
+    };
     let sched = crate::scheduler::get();
     let task = &mut sched.tasks[child_idx];
     task.active = true;
@@ -106,12 +134,13 @@ unsafe fn enqueue_child(child_idx: usize) {
     task.entity = rux_sched::entity::SchedEntity::new(child_idx as u64);
     task.entity.state = rux_sched::TaskState::Ready;
     task.entity.nice = 0;
-    sched.cfs.set_clock(0, sched.clock_ns);
-    sched.cfs.enqueue(0, &mut task.entity, rux_sched::fair::constants::WF_FORK);
-    // Trigger reschedule so the new child can run promptly.
-    // Without this, the parent continues until the next timer tick,
-    // which delays pipeline startup (child needs to exec before siblings).
-    sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
+    task.entity.cpu = target_cpu;
+    sched.cfs.set_clock(target_cpu, sched.clock_ns);
+    sched.cfs.enqueue(target_cpu, &mut task.entity, rux_sched::fair::constants::WF_FORK);
+    sched.need_resched |= 1u64 << target_cpu;
+    if target_cpu != my_cpu {
+        crate::scheduler::send_resched_ipi_if_remote(target_cpu);
+    }
 }
 
 // ── fork() ───────────────────────────────────────────────────────────
