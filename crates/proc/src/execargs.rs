@@ -164,12 +164,13 @@ pub fn set(path: &[u8], arg: &[u8]) {
 ///
 /// Layout: [sp]=argc, argv[0..n], NULL, envp[0..m], NULL, auxv, strings
 /// Default environment for boot/init (when no user envp provided).
-const DEFAULT_ENV: [&[u8]; 5] = [
+const DEFAULT_ENV: [&[u8]; 6] = [
     b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0",
     b"HOME=/root\0",
     b"TERM=linux\0",
     b"LANG=C.UTF-8\0",
     b"PYTHONUTF8=1\0",
+    b"OPENSSL_ia32cap=0x00000000:0x00000000\0",
 ];
 
 pub unsafe fn write_to_stack(stack_top: usize) -> usize {

@@ -184,9 +184,8 @@ CONF
     mkdir -p "$STAGING/root/.ssh"
     chmod 700 "$STAGING/root/.ssh"
 
-    # Pre-generate host keys (avoids slow keygen at boot)
+    # Pre-generate host keys — ED25519 only (fast on TCG, no RSA keygen)
     ssh-keygen -t ed25519 -f "$STAGING/etc/ssh/ssh_host_ed25519_key" -N "" -q
-    ssh-keygen -t rsa -b 2048 -f "$STAGING/etc/ssh/ssh_host_rsa_key" -N "" -q
 
     # sshd_config: allow root login with key auth
     cat > "$STAGING/etc/ssh/sshd_config" << 'SSHCONF'
@@ -196,6 +195,10 @@ PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
 PasswordAuthentication yes
 PermitEmptyPasswords yes
+HostKey /etc/ssh/ssh_host_ed25519_key
+KexAlgorithms curve25519-sha256
+Ciphers chacha20-poly1305@openssh.com
+MACs hmac-sha2-256-etm@openssh.com
 Subsystem sftp /usr/lib/ssh/sftp-server
 UseDNS no
 SSHCONF
@@ -242,19 +245,20 @@ while True:
 TCPSH
     chmod 755 "$STAGING/usr/bin/tcp-shell"
 
-    # rux-init: mount filesystems and start services
+    # rux-init: mount filesystems and start sshd
     cat > "$STAGING/sbin/rux-init" << 'INITSCRIPT'
 #!/bin/sh
 mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sys /sys 2>/dev/null
 mount -t devtmpfs dev /dev 2>/dev/null
 
-# Start tcp-shell on port 22 (accessible via ssh port forwarding)
-if [ -x /usr/bin/tcp-shell ]; then
-    /usr/bin/tcp-shell 22 &
+# Start sshd (OPENSSL_ia32cap is set by kernel to disable RDRAND)
+if [ -x /usr/sbin/sshd ]; then
+    /usr/sbin/sshd -e
+    echo "rux: sshd started"
 fi
 
-echo "Alpine Linux on rux — nc localhost 2222"
+echo "Alpine Linux on rux — ssh root@localhost -p 2222"
 INITSCRIPT
     chmod 755 "$STAGING/sbin/rux-init"
 
