@@ -263,6 +263,16 @@ pub unsafe fn sys_clone(flags: usize, child_stack: usize, parent_tid_ptr: usize,
         copy_fds_with_pipe_refs(&parent.fds, &mut TASK_TABLE[child_idx].fds);
     }
 
+    // CLONE_SIGHAND: share signal handlers with parent (threads see same sigaction).
+    if flags & crate::errno::CLONE_SIGHAND != 0 {
+        let parent_owner = if parent.shared_signal_cold_with != u16::MAX {
+            parent.shared_signal_cold_with as usize
+        } else {
+            parent_idx
+        };
+        TASK_TABLE[child_idx].shared_signal_cold_with = parent_owner as u16;
+    }
+
     // Override user stack if provided
     if child_stack != 0 {
         TASK_TABLE[child_idx].saved_user_sp = child_stack;

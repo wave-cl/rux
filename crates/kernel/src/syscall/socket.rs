@@ -28,6 +28,8 @@ struct SocketSlot {
     connected: bool,
     /// Socket options
     reuse_addr: bool,
+    /// Pending error (set on failed operations, cleared by getsockopt SO_ERROR)
+    pending_error: i32,
     /// AF_UNIX support
     is_unix: bool,
     unix_path: [u8; 108],
@@ -44,7 +46,7 @@ impl SocketSlot {
             active: false, ref_count: 0, sock_type: 0, bound_port: 0,
             smol_handle_raw: -1,
             connected_ip: [0; 4], connected_port: 0, connected: false,
-            reuse_addr: false,
+            reuse_addr: false, pending_error: 0,
             is_unix: false, unix_path: [0; 108], unix_path_len: 0,
             unix_listening: false, unix_pipe_a: 0xFF, unix_pipe_b: 0xFF,
             unix_pending: 0,
@@ -337,7 +339,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
 /// sendto(fd, buf, len, flags, dest_addr, addrlen)
 /// Supports MSG_DONTWAIT (0x40), MSG_NOSIGNAL (0x4000).
 pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr: usize, _addrlen: usize) -> isize {
-    let _ = flags; // MSG_DONTWAIT/MSG_NOSIGNAL noted but send is already non-blocking
+    const MSG_NOSIGNAL: usize = 0x4000;
     let idx = match unsafe { resolve_socket(fd) } {
         Some(i) => i,
         None => return crate::errno::EBADF,
@@ -371,7 +373,11 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr:
                 for _ in 0..max_iters {
                     rux_net::poll(crate::arch::Arch::ticks());
                     if !rux_net::tcp_is_established(handle) {
-                        return -32; // EPIPE — connection closed
+                        // EPIPE: connection closed. Send SIGPIPE unless MSG_NOSIGNAL.
+                        if flags & MSG_NOSIGNAL == 0 {
+                            (*super::process()).signal_hot.pending.0 |= 1u64 << 12; // SIGPIPE=13
+                        }
+                        return -32;
                     }
                     match rux_net::tcp_send(handle, &kbuf[..send_len]) {
                         Ok(n) => {
@@ -818,7 +824,17 @@ pub fn sys_getsockopt(fd: usize, level: usize, optname: usize, optval: usize, op
                     if idx < MAX_SOCKETS && SOCKETS[idx].reuse_addr { 1i32 } else { 0 }
                 } else { 0 }
             }
-            4 => 0i32,     // SO_ERROR = success
+            4 => {
+                // SO_ERROR: read and clear pending error
+                if fd < rux_fs::fdtable::MAX_FDS && (*rux_fs::fdtable::fd_table())[fd].is_socket {
+                    let sidx = (*rux_fs::fdtable::fd_table())[fd].socket_idx as usize;
+                    if sidx < MAX_SOCKETS {
+                        let err = SOCKETS[sidx].pending_error;
+                        SOCKETS[sidx].pending_error = 0;
+                        err
+                    } else { 0 }
+                } else { 0 }
+            }
             7 | 8 => 65536, // SO_SNDBUF / SO_RCVBUF
             _ => 0,
         };

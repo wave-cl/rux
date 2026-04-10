@@ -75,6 +75,9 @@ pub struct TaskSlot {
     /// If != u16::MAX, this task shares its fd table with TASK_TABLE[shared_fds_with].
     /// CLONE_FILES threads point to the thread group leader's fd array.
     pub shared_fds_with: u16,
+    /// If != u16::MAX, this task shares signal handlers with TASK_TABLE[shared_signal_cold_with].
+    /// CLONE_SIGHAND threads point to the thread group leader's signal_cold.
+    pub shared_signal_cold_with: u16,
 
     // ── Hardware context ──────────────────────────────────────────────
     pub pt_root: u64,          // CR3 / TTBR0_EL1
@@ -133,6 +136,7 @@ impl TaskSlot {
             sid: 0,
             fds: [EMPTY_FD; MAX_FDS],
             shared_fds_with: u16::MAX,
+            shared_signal_cold_with: u16::MAX,
             pt_root: 0,
             kstack_top: 0, saved_ksp: 0,
             saved_user_sp: 0, tls: 0, asid: 0,
@@ -187,6 +191,17 @@ static mut SIGNAL_COLD_BYTES: AlignedSignalColdBytes = AlignedSignalColdBytes([0
 #[inline(always)]
 pub unsafe fn signal_cold_mut(idx: usize) -> &'static mut rux_proc::signal::SignalCold {
     &mut *((*(&raw mut SIGNAL_COLD_BYTES)).0.as_mut_ptr().add(idx * SIGNAL_COLD_SIZE) as *mut rux_proc::signal::SignalCold)
+}
+
+/// Get signal_cold following the shared_signal_cold_with pointer (like shared_fds_with for fds).
+#[inline(always)]
+pub unsafe fn signal_cold_for(idx: usize) -> &'static mut rux_proc::signal::SignalCold {
+    let owner = if TASK_TABLE[idx].shared_signal_cold_with != u16::MAX {
+        TASK_TABLE[idx].shared_signal_cold_with as usize
+    } else {
+        idx
+    };
+    signal_cold_mut(owner)
 }
 
 /// Raw byte pointer to a task's signal_cold slot. Avoids creating a

@@ -1291,10 +1291,30 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
         crate::pgtrack::begin_child(alloc);
     }
 
-    // Reset signal state on exec (POSIX: caught signals revert to default)
+    // Reset signal state on exec (POSIX):
+    // - Pending signals cleared
+    // - Signal mask cleared
+    // - Caught signals (user handler) reset to SIG_DFL
+    // - SIG_IGN signals preserved across exec
     process().signal_hot = rux_proc::signal::SignalHot::new();
-    process().signal_cold = rux_proc::signal::SignalCold::new();
-    *crate::task_table::signal_cold_mut(crate::task_table::current_task_idx()) = rux_proc::signal::SignalCold::new();
+    {
+        let idx = crate::task_table::current_task_idx();
+        let cold = crate::task_table::signal_cold_mut(idx);
+        for i in 0..32 {
+            if cold.actions[i].handler_type == rux_proc::signal::SignalHandler::User {
+                cold.actions[i] = rux_proc::signal::SignalAction::DEFAULT;
+            }
+            // SIG_IGN and SIG_DFL preserved
+        }
+        cold.saved_mask = rux_proc::signal::SignalSet::EMPTY;
+        cold.rt_queue = rux_proc::signal::SigQueue::new();
+        // Sync to process global
+        core::ptr::copy_nonoverlapping(
+            cold as *const _ as *const u8,
+            &mut process().signal_cold as *mut _ as *mut u8,
+            core::mem::size_of::<rux_proc::signal::SignalCold>(),
+        );
+    }
     process().signal_restorer = [0; 32];
 
     // Note: ITIMER_REAL is preserved across exec (POSIX).

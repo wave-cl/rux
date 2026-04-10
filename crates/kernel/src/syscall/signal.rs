@@ -30,7 +30,8 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     if oldact_ptr != 0 && crate::uaccess::validate_user_ptr(oldact_ptr, 32).is_err() { return crate::errno::EFAULT; }
 
     unsafe {
-        let cold = &mut (*super::process()).signal_cold;
+        let idx = crate::task_table::current_task_idx();
+        let cold = crate::task_table::signal_cold_for(idx);
 
         // Write old action to user oldact
         if oldact_ptr != 0 {
@@ -64,8 +65,8 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
                 _pad1: [0; 4],
             };
             let _ = cold.set_action(sig, action);
-            // Also write to per-task slot for fork inheritance
-            let _ = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx()).set_action(sig, action);
+            // Sync to process global (delivery reads from there)
+            let _ = (*super::process()).signal_cold.set_action(sig, action);
             if Arch::HAS_RESTORER {
                 super::process().signal_restorer[signum] = restorer;
             }
