@@ -507,8 +507,13 @@ unsafe fn interrupt_dispatch_inner(vector: u64, error_code: u64, frame: *mut u8)
         }
         36 => {
             // COM1 serial receive interrupt (IRQ 4)
-            unsafe { super::console::serial_irq(); }
-            unsafe { super::pit::ack(); } // EOI to PIC
+            unsafe {
+                super::console::serial_irq();
+                super::pit::ack(); // EOI to PIC
+                // Set need_resched so isr_check_preempt switches to the woken task
+                let cpu = crate::percpu::cpu_id() as u32;
+                crate::scheduler::get().need_resched |= 1u64 << cpu;
+            }
         }
         _ => {
             crate::arch::x86_64::console::write_str("INT: vector=");
