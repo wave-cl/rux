@@ -941,16 +941,40 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             0
         }
         Syscall::Setresuid => unsafe {
-            process().uid = a0 as u32; process().euid = a1 as u32; process().suid = a2 as u32; 0
+            let (ruid, euid, suid) = (a0 as u32, a1 as u32, a2 as u32);
+            let is_root = process().euid == 0;
+            if !is_root {
+                let (cr, ce, cs) = (process().uid, process().euid, process().suid);
+                if ruid != u32::MAX && ruid != cr && ruid != ce && ruid != cs { return crate::errno::EPERM; }
+                if euid != u32::MAX && euid != cr && euid != ce && euid != cs { return crate::errno::EPERM; }
+                if suid != u32::MAX && suid != cr && suid != ce && suid != cs { return crate::errno::EPERM; }
+            }
+            if ruid != u32::MAX { process().uid = ruid; }
+            if euid != u32::MAX { process().euid = euid; }
+            if suid != u32::MAX { process().suid = suid; }
+            0
         }
         Syscall::Setresgid => unsafe {
-            process().gid = a0 as u32; process().egid = a1 as u32; process().sgid = a2 as u32; 0
+            let (rgid, egid, sgid) = (a0 as u32, a1 as u32, a2 as u32);
+            let is_root = process().euid == 0;
+            // Non-root: can only set to current real, effective, or saved gid
+            if !is_root {
+                let (cr, ce, cs) = (process().gid, process().egid, process().sgid);
+                if rgid != u32::MAX && rgid != cr && rgid != ce && rgid != cs { return crate::errno::EPERM; }
+                if egid != u32::MAX && egid != cr && egid != ce && egid != cs { return crate::errno::EPERM; }
+                if sgid != u32::MAX && sgid != cr && sgid != ce && sgid != cs { return crate::errno::EPERM; }
+            }
+            if rgid != u32::MAX { process().gid = rgid; }
+            if egid != u32::MAX { process().egid = egid; }
+            if sgid != u32::MAX { process().sgid = sgid; }
+            0
         }
         Syscall::SchedSetaffinity | Syscall::SchedGetparam | Syscall::SchedSetparam |
         Syscall::SchedGetscheduler | Syscall::SchedSetscheduler => 0, // single-CPU stubs
 
         // ── Batch 2: filesystem misc ──────────────────────────────
-        Syscall::Chroot | Syscall::PivotRoot => crate::errno::ENOSYS, // no namespace support
+        Syscall::Chroot => 0, // stub: succeed (sshd privilege separation needs this)
+        Syscall::PivotRoot => crate::errno::ENOSYS, // no namespace support
         Syscall::Fadvise => 0, // advisory — safe to ignore
         Syscall::Inotify => {
             // inotify_init1(flags) → fd
