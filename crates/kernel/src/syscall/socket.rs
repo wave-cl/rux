@@ -176,6 +176,7 @@ pub unsafe fn dup_socket_ref(sock_idx: u8) {
 }
 
 /// Decrement socket reference count. Frees smoltcp handle when it reaches 0.
+/// Disables interrupts to prevent timer ISR's poll() from accessing the freed socket.
 pub unsafe fn close_socket_ref(sock_idx: u8) {
     let idx = sock_idx as usize;
     if idx < MAX_SOCKETS && SOCKETS[idx].active {
@@ -183,11 +184,16 @@ pub unsafe fn close_socket_ref(sock_idx: u8) {
         if SOCKETS[idx].ref_count == 0 {
             #[cfg(feature = "net")]
             if SOCKETS[idx].smol_handle_raw >= 0 {
+                // Disable interrupts: poll() in the timer ISR must not access
+                // the socket set while we're removing the socket from it.
+                let was = crate::arch::irq_disable();
                 let handle = to_handle(SOCKETS[idx].smol_handle_raw);
+                SOCKETS[idx].smol_handle_raw = -1; // invalidate before free
                 if SOCKETS[idx].sock_type == SOCK_STREAM {
                     rux_net::tcp_close(handle);
                 }
                 rux_net::socket_free(handle);
+                crate::arch::irq_restore(was);
             }
             SOCKETS[idx].active = false;
         }
