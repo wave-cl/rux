@@ -378,7 +378,10 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr:
                             rux_net::poll(crate::arch::Arch::ticks());
                             return n as isize;
                         }
-                        Err(_) => { /* TX buffer full — poll and retry */ }
+                        Err(_) => {
+                            // TX buffer full — yield to scheduler then retry
+                            super::memory::yield_1ms();
+                        }
                     }
                 }
                 return if nonblock { crate::errno::EAGAIN } else { crate::errno::EIO };
@@ -443,8 +446,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_pt
                         return 0;
                     }
                     if nonblock { return crate::errno::EAGAIN; }
-                    use rux_arch::HaltOps;
-                    crate::arch::Arch::halt_until_interrupt();
+                    super::memory::yield_1ms();
                 }
                 return crate::errno::EAGAIN;
             } else if sock.sock_type == SOCK_DGRAM {
@@ -469,8 +471,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_pt
                         Err(_) => {}
                     }
                     if nonblock { return crate::errno::EAGAIN; }
-                    use rux_arch::HaltOps;
-                    crate::arch::Arch::halt_until_interrupt();
+                    super::memory::yield_1ms();
                 }
                 return crate::errno::EAGAIN;
             }
