@@ -35,6 +35,9 @@ pub enum TaskState {
     WaitingForFutex = 7,
     /// Stopped by signal (SIGTSTP/SIGSTOP/SIGTTIN/SIGTTOU).
     Stopped = 8,
+    /// Uninterruptible sleep (like Linux TASK_UNINTERRUPTIBLE).
+    /// Cannot be woken by signals — used during COW and page table ops.
+    Uninterruptible = 9,
 }
 
 /// Per-process state container.

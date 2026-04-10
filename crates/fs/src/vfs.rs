@@ -23,7 +23,7 @@ fn decode(tagged: InodeId) -> (u8, InodeId) {
 }
 
 /// Maximum mount points.
-pub const MAX_MOUNTS: usize = 8;
+pub const MAX_MOUNTS: usize = 16;
 
 /// A mounted filesystem — enum to avoid trait objects in no_std.
 pub enum MountedFs {

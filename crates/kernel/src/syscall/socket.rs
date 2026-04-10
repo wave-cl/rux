@@ -482,7 +482,11 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                             let _ = rux_net::tcp_listen(new_listen, listen_port);
                         }
                         None => {
-                            // Out of smoltcp sockets — can't re-listen, but accept still works
+                            // Out of smoltcp sockets — listen fd can't accept again.
+                            // This is an OOM condition. The current accept succeeds,
+                            // but the server can't accept more connections until a
+                            // socket is freed. Mark handle invalid so next accept
+                            // returns EAGAIN instead of operating on a stale handle.
                             SOCKETS[idx].smol_handle_raw = -1;
                         }
                     }

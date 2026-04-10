@@ -23,7 +23,7 @@ const O_NOFOLLOW: usize = 0x8000;
 /// readv(fd, iov, iovcnt) — scatter read
 pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
     if iovcnt == 0 { return 0; }
-    let cnt = iovcnt.min(16);
+    let cnt = iovcnt.min(64);
     if crate::uaccess::validate_user_ptr(iov_ptr, cnt * 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let iov = iov_ptr as *const [usize; 2];
@@ -522,7 +522,7 @@ pub fn copy_file_range(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_p
 
 /// writev(fd, iov, iovcnt) — POSIX.1
 pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
-    let cnt = iovcnt.min(16);
+    let cnt = iovcnt.min(64);
     if crate::uaccess::validate_user_ptr(iov_ptr, cnt * 16).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let iov = iov_ptr as *const [usize; 2];

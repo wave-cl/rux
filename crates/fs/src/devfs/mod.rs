@@ -14,8 +14,11 @@ const INO_CONSOLE: InodeId = 4;
 const INO_TTY: InodeId = 5;
 const INO_RANDOM: InodeId = 6;
 const INO_FULL: InodeId = 7;
+const INO_STDIN: InodeId = 8;
+const INO_STDOUT: InodeId = 9;
+const INO_STDERR: InodeId = 10;
 
-const NUM_ENTRIES: usize = 7;
+const NUM_ENTRIES: usize = 10;
 
 const ENTRIES: [(&[u8], InodeId); NUM_ENTRIES] = [
     (b"null", INO_NULL),
@@ -25,6 +28,9 @@ const ENTRIES: [(&[u8], InodeId); NUM_ENTRIES] = [
     (b"tty", INO_TTY),
     (b"random", INO_RANDOM),
     (b"full", INO_FULL),
+    (b"stdin", INO_STDIN),
+    (b"stdout", INO_STDOUT),
+    (b"stderr", INO_STDERR),
 ];
 
 /// Linux major:minor encoded as (major << 8) | minor.
@@ -77,6 +83,11 @@ impl FileSystem for DevFs {
                 buf.mode = S_IFCHR | 0o666;
                 buf.nlink = 1;
                 buf.rdev = dev_rdev(ino);
+            }
+            INO_STDIN | INO_STDOUT | INO_STDERR => {
+                buf.mode = crate::S_IFLNK | 0o777;
+                buf.nlink = 1;
+                buf.size = 15; // "/proc/self/fd/N"
             }
             _ => return Err(VfsError::NotFound),
         }
@@ -164,7 +175,17 @@ impl FileSystem for DevFs {
     fn rmdir(&mut self, _dir: InodeId, _name: FileName<'_>) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
     fn link(&mut self, _dir: InodeId, _name: FileName<'_>, _target: InodeId) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
     fn symlink(&mut self, _dir: InodeId, _name: FileName<'_>, _target: &[u8]) -> Result<InodeId, VfsError> { Err(VfsError::ReadOnly) }
-    fn readlink(&self, _ino: InodeId, _buf: &mut [u8]) -> Result<usize, VfsError> { Err(VfsError::NotSupported) }
+    fn readlink(&self, ino: InodeId, buf: &mut [u8]) -> Result<usize, VfsError> {
+        let target: &[u8] = match ino {
+            INO_STDIN => b"/proc/self/fd/0",
+            INO_STDOUT => b"/proc/self/fd/1",
+            INO_STDERR => b"/proc/self/fd/2",
+            _ => return Err(VfsError::NotSupported),
+        };
+        let len = target.len().min(buf.len());
+        buf[..len].copy_from_slice(&target[..len]);
+        Ok(len)
+    }
     fn rename(&mut self, _old_dir: InodeId, _old_name: FileName<'_>, _new_dir: InodeId, _new_name: FileName<'_>) -> Result<(), VfsError> { Err(VfsError::ReadOnly) }
     fn chmod(&mut self, _ino: InodeId, _mode: u32) -> Result<(), VfsError> { Ok(()) }
     fn chown(&mut self, _ino: InodeId, _uid: u32, _gid: u32) -> Result<(), VfsError> { Ok(()) }

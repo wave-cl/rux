@@ -395,7 +395,7 @@ pub fn fchownat(dirfd: usize, path_ptr: usize, uid: usize, gid: usize) -> isize 
         let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_at(dirfd, path) {
             Ok(ino) => ino,
-            Err(_) => return crate::errno::ENOENT, // Silently succeed for non-existent (matches chown behavior)
+            Err(_) => return crate::errno::ENOENT,
         };
         let cred = super::current_cred();
         match crate::kstate::fs().checked_chown(ino, uid as u32, gid as u32, &cred) {

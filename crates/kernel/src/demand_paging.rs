@@ -52,9 +52,22 @@ pub unsafe fn demand_page(addr: usize) -> bool {
     }
 }
 
+/// Maximum stack size in pages (8MB / 4KB = 2048 pages, like Linux RLIMIT_STACK default).
+const MAX_STACK_PAGES: usize = 2048;
+
+/// Stack base: lowest address of the initial stack mapping.
+/// ELF loader maps 32 pages below stack_top (typically 0x80000000).
+#[cfg(target_arch = "x86_64")]
+const STACK_TOP: usize = 0x80000000;
+#[cfg(target_arch = "aarch64")]
+const STACK_TOP: usize = 0x80000000;
+const INITIAL_STACK_PAGES: usize = 32;
+const STACK_FLOOR: usize = STACK_TOP - MAX_STACK_PAGES * 4096;
+
 /// Try to resolve a user-space page fault.
 ///
-/// Attempts COW resolution (for write faults), then demand paging.
+/// Attempts COW resolution (for write faults), then demand paging,
+/// then stack growth (for faults just below the current stack).
 /// Returns true if the fault was resolved; false means the caller
 /// should deliver SIGSEGV or panic (kernel fault).
 #[inline]
@@ -77,6 +90,13 @@ pub unsafe fn handle_user_fault(addr: u64, is_write: bool) -> bool {
         }
         if demand_page(addr as usize) {
             return true;
+        }
+        // Stack growth: if the fault is in the growable stack region
+        // (below the initial stack mapping but above the stack floor),
+        // map a new page. Linux allows growth up to RLIMIT_STACK (8MB).
+        let page_addr = addr as usize & !0xFFF;
+        if page_addr >= STACK_FLOOR && page_addr < STACK_TOP {
+            return demand_page(page_addr);
         }
     }
     false
