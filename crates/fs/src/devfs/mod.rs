@@ -17,8 +17,11 @@ const INO_FULL: InodeId = 7;
 const INO_STDIN: InodeId = 8;
 const INO_STDOUT: InodeId = 9;
 const INO_STDERR: InodeId = 10;
+const INO_PTMX: InodeId = 11;
+const INO_PTS_DIR: InodeId = 12;
+const INO_PTS_BASE: InodeId = 100; // pts/0 = 100, pts/1 = 101, ...
 
-const NUM_ENTRIES: usize = 10;
+const NUM_ENTRIES: usize = 12;
 
 const ENTRIES: [(&[u8], InodeId); NUM_ENTRIES] = [
     (b"null", INO_NULL),
@@ -31,6 +34,8 @@ const ENTRIES: [(&[u8], InodeId); NUM_ENTRIES] = [
     (b"stdin", INO_STDIN),
     (b"stdout", INO_STDOUT),
     (b"stderr", INO_STDERR),
+    (b"ptmx", INO_PTMX),
+    (b"pts", INO_PTS_DIR),
 ];
 
 /// Linux major:minor encoded as (major << 8) | minor.
@@ -87,7 +92,21 @@ impl FileSystem for DevFs {
             INO_STDIN | INO_STDOUT | INO_STDERR => {
                 buf.mode = crate::S_IFLNK | 0o777;
                 buf.nlink = 1;
-                buf.size = 15; // "/proc/self/fd/N"
+                buf.size = 15;
+            }
+            INO_PTMX => {
+                buf.mode = S_IFCHR | 0o666;
+                buf.nlink = 1;
+                buf.rdev = (5 << 8) | 2; // 5:2 (Linux ptmx)
+            }
+            INO_PTS_DIR => {
+                buf.mode = S_IFDIR | 0o755;
+                buf.nlink = 2;
+            }
+            _ if ino >= INO_PTS_BASE && ino < INO_PTS_BASE + 16 => {
+                buf.mode = S_IFCHR | 0o620;
+                buf.nlink = 1;
+                buf.rdev = (136 << 8) | ((ino - INO_PTS_BASE) as u32); // 136:N
             }
             _ => return Err(VfsError::NotFound),
         }
@@ -148,8 +167,18 @@ impl FileSystem for DevFs {
     fn truncate(&mut self, _ino: InodeId, _size: u64) -> Result<(), VfsError> { Ok(()) }
 
     fn lookup(&self, dir: InodeId, name: FileName<'_>) -> Result<InodeId, VfsError> {
-        if dir != INO_ROOT { return Err(VfsError::NotADirectory); }
         let name_bytes = name.as_bytes();
+        if dir == INO_PTS_DIR {
+            // /dev/pts/N — parse N and return INO_PTS_BASE + N
+            let mut n = 0u64;
+            for &b in name_bytes {
+                if b < b'0' || b > b'9' { return Err(VfsError::NotFound); }
+                n = n * 10 + (b - b'0') as u64;
+            }
+            if n < 16 { return Ok(INO_PTS_BASE + n); }
+            return Err(VfsError::NotFound);
+        }
+        if dir != INO_ROOT { return Err(VfsError::NotADirectory); }
         for &(entry_name, entry_ino) in &ENTRIES {
             if entry_name == name_bytes {
                 return Ok(entry_ino);
@@ -159,6 +188,18 @@ impl FileSystem for DevFs {
     }
 
     fn readdir(&self, dir: InodeId, offset: usize, buf: &mut DirEntry) -> Result<bool, VfsError> {
+        if dir == INO_PTS_DIR {
+            if offset >= 16 { return Ok(false); }
+            buf.ino = INO_PTS_BASE + offset as u64;
+            buf.kind = InodeType::File;
+            // Format number as name
+            let mut tmp = [0u8; 4];
+            let len = if offset >= 10 { tmp[0] = b'0' + (offset / 10) as u8; tmp[1] = b'0' + (offset % 10) as u8; 2 }
+                      else { tmp[0] = b'0' + offset as u8; 1 };
+            buf.name_len = len as u8;
+            buf.name[..len].copy_from_slice(&tmp[..len]);
+            return Ok(true);
+        }
         if dir != INO_ROOT { return Err(VfsError::NotADirectory); }
         if offset >= NUM_ENTRIES { return Ok(false); }
         let (name, ino) = ENTRIES[offset];

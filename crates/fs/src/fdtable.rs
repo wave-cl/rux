@@ -43,12 +43,17 @@ pub struct OpenFile {
     /// For socketpair: pipe_id for the write direction (reads use pipe_id).
     /// 0xFF = not a socketpair (normal pipe or socket).
     pub pipe_id_write: u8,
+    /// PTY master or slave fd.
+    pub is_pty: bool,
+    pub pty_id: u8,
+    pub pty_master: bool, // true = master, false = slave
 }
 
 pub const EMPTY_FD: OpenFile = OpenFile {
     ino: 0, offset: 0, flags: 0, fd_flags: 0, active: false, is_console: false,
     is_pipe: false, pipe_id: 0, pipe_write: false,
     is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
+    is_pty: false, pty_id: 0, pty_master: false,
 };
 
 /// Boot-time storage used before init_pid1 points FD_TABLE at a task slot.
@@ -146,6 +151,7 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
                     ino: ino as u64, offset, flags, fd_flags, active: true, is_console: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,
                     is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
+                    is_pty: false, pty_id: 0, pty_master: false,
                 };
                 return fd as isize;
             }
@@ -213,6 +219,7 @@ fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize 
                 ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: true,
                 is_pipe: false, pipe_id: 0, pipe_write: false,
                 is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
+                is_pty: false, pty_id: 0, pty_master: false,
             };
         } else {
             (*fd_table())[newfd] = (*fd_table())[oldfd];
@@ -271,6 +278,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
                     ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: false,
                     is_pipe: true, pipe_id, pipe_write: is_write,
                     is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
+                    is_pty: false, pty_id: 0, pty_master: false,
                 };
                 return Ok(fd as isize);
             }

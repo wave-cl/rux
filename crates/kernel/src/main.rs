@@ -11,6 +11,7 @@ mod pipe;
 mod cow;
 mod demand_paging;
 mod tty;
+mod pty;
 mod pgtrack;
 mod syscall;
 mod uaccess;

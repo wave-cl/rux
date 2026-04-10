@@ -56,6 +56,7 @@ pub fn exit(status: i32) -> ! {
                         ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: true,
                         is_pipe: false, pipe_id: 0, pipe_write: false,
                         is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
+                        is_pty: false, pty_id: 0, pty_master: false,
                     };
                 }
             }

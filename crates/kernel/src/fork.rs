@@ -27,6 +27,10 @@ unsafe fn copy_fds_with_pipe_refs(src: &[OpenFile; MAX_FDS], dst: &mut [OpenFile
         if dst[i].active && dst[i].is_socket {
             crate::syscall::socket::dup_socket_ref(dst[i].socket_idx);
         }
+        if dst[i].active && dst[i].is_pty {
+            if dst[i].pty_master { crate::pty::dup_master(dst[i].pty_id); }
+            else { crate::pty::dup_slave(dst[i].pty_id); }
+        }
     }
 }
 

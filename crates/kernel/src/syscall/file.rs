@@ -106,6 +106,28 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         if len < 128 { return crate::errno::EINVAL; }
         return super::memory::signalfd_read(fd, buf);
     }
+    // PTY master/slave read
+    unsafe {
+        if fd < fdt::MAX_FDS && (*fdt::fd_table())[fd].is_pty {
+            let f = &(*fdt::fd_table())[fd];
+            let pty_id = f.pty_id;
+            let is_master = f.pty_master;
+            if crate::uaccess::validate_user_ptr(buf, len).is_err() { return crate::errno::EFAULT; }
+            let dst = core::slice::from_raw_parts_mut(buf as *mut u8, len);
+            // Blocking read loop
+            for _ in 0..30_000u32 {
+                let r = if is_master {
+                    crate::pty::master_read(pty_id, dst)
+                } else {
+                    crate::pty::slave_read(pty_id, dst)
+                };
+                if r != crate::errno::EAGAIN { return r; }
+                if (*fdt::fd_table())[fd].flags & 0o4000 != 0 { return crate::errno::EAGAIN; } // O_NONBLOCK
+                super::memory::yield_1ms();
+            }
+            return crate::errno::EAGAIN;
+        }
+    }
     if fdt::is_console_fd(fd) {
         unsafe {
             let tty = &mut *(&raw mut crate::tty::TTY);
@@ -143,6 +165,22 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         if len < 8 { return crate::errno::EINVAL; }
         if crate::uaccess::validate_user_ptr(buf, 8).is_err() { return crate::errno::EFAULT; }
         return super::memory::eventfd_write(fd, buf);
+    }
+    // PTY master/slave write
+    unsafe {
+        if fd < fdt::MAX_FDS && (*fdt::fd_table())[fd].is_pty {
+            let f = &(*fdt::fd_table())[fd];
+            let pty_id = f.pty_id;
+            let is_master = f.pty_master;
+            let write_len = len.min(4096);
+            if crate::uaccess::validate_user_ptr(buf, write_len).is_err() { return crate::errno::EFAULT; }
+            let src = core::slice::from_raw_parts(buf as *const u8, write_len);
+            return if is_master {
+                crate::pty::master_write(pty_id, src)
+            } else {
+                crate::pty::slave_write(pty_id, src)
+            };
+        }
     }
     if fdt::is_console_fd(fd) {
         let write_len = len.min(65536);
@@ -262,13 +300,43 @@ pub fn open(path_ptr: usize, flags: usize, mode: usize) -> isize {
                     return crate::errno::EACCES;
                 }
                 let fd = fdt::sys_open_ino(ino, flags as u32, crate::kstate::fs());
-                // Mark /dev/tty and /dev/console as console fds
+                // Mark special device fds
                 if fd >= 0 {
                     let is_dev_console = path == b"/dev/tty" || path == b"/dev/console"
                         || path == b"/dev/ttyS0" || path == b"/dev/tty0";
                     if is_dev_console {
                         (*fdt::fd_table())[fd as usize].is_console = true;
-                        (*fdt::fd_table())[fd as usize].ino = 0; // not a real file inode
+                        (*fdt::fd_table())[fd as usize].ino = 0;
+                    }
+                    // /dev/ptmx: allocate PTY master
+                    if path == b"/dev/ptmx" {
+                        if let Some(pty_id) = crate::pty::alloc() {
+                            (*fdt::fd_table())[fd as usize].is_pty = true;
+                            (*fdt::fd_table())[fd as usize].pty_id = pty_id;
+                            (*fdt::fd_table())[fd as usize].pty_master = true;
+                            (*fdt::fd_table())[fd as usize].is_console = false;
+                        } else {
+                            fdt::sys_close(fd as usize, None);
+                            return crate::errno::ENOMEM;
+                        }
+                    }
+                    // /dev/pts/N: open PTY slave
+                    if path.len() >= 10 && &path[..9] == b"/dev/pts/" {
+                        let mut n = 0u8;
+                        for &b in &path[9..] {
+                            if b >= b'0' && b <= b'9' { n = n * 10 + (b - b'0'); }
+                            else { break; }
+                        }
+                        if crate::pty::is_slave_available(n) {
+                            crate::pty::open_slave(n);
+                            (*fdt::fd_table())[fd as usize].is_pty = true;
+                            (*fdt::fd_table())[fd as usize].pty_id = n;
+                            (*fdt::fd_table())[fd as usize].pty_master = false;
+                            (*fdt::fd_table())[fd as usize].is_console = false;
+                        } else {
+                            fdt::sys_close(fd as usize, None);
+                            return crate::errno::EIO;
+                        }
                     }
                 }
                 fd
@@ -317,6 +385,14 @@ pub fn close(fd: usize) -> isize {
     // Socket close
     if super::socket::is_socket(fd) {
         return super::socket::sys_close_socket(fd);
+    }
+    // PTY close
+    unsafe {
+        if fd < fdt::MAX_FDS && (*fdt::fd_table())[fd].is_pty {
+            let f = &(*fdt::fd_table())[fd];
+            if f.pty_master { crate::pty::close_master(f.pty_id); }
+            else { crate::pty::close_slave(f.pty_id); }
+        }
     }
     // eventfd / timerfd / signalfd close — release slot, then fall through to fd close
     super::memory::eventfd_close(fd);
@@ -542,13 +618,119 @@ pub fn writev(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {
 
 /// ioctl(fd, request, arg) — POSIX.1 (terminal operations)
 pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
-    let _fd = fd; // backward compat for FIONBIO/FIONREAD sections
+    let _fd = fd;
     const TCGETS: usize = 0x5401;
     const TIOCGWINSZ: usize = 0x5413;
     const TIOCSPGRP: usize = 0x5410;
     const TIOCGPGRP: usize = 0x540F;
     const TIOCSCTTY: usize = 0x540E;
     const TIOCNOTTY: usize = 0x5422;
+    const TIOCGPTN: usize = 0x80045430;
+    const TIOCSPTLCK: usize = 0x40045431;
+
+    // PTY-specific ioctls
+    unsafe {
+        if fd < fdt::MAX_FDS && (*fdt::fd_table())[fd].is_pty {
+            let f = &(*fdt::fd_table())[fd];
+            let pty_id = f.pty_id;
+            let is_master = f.pty_master;
+            match request {
+                TIOCGPTN => {
+                    // Get slave PTY number
+                    if arg != 0 && crate::uaccess::validate_user_ptr(arg, 4).is_ok() {
+                        crate::uaccess::put_user(arg, pty_id as u32);
+                    }
+                    return 0;
+                }
+                TIOCSPTLCK => {
+                    // Lock/unlock slave
+                    if arg != 0 && crate::uaccess::validate_user_ptr(arg, 4).is_ok() {
+                        let val: i32 = crate::uaccess::get_user(arg);
+                        crate::pty::set_lock(pty_id, val != 0);
+                    }
+                    return 0;
+                }
+                TIOCGWINSZ => {
+                    if let Some(p) = crate::pty::get_mut(pty_id) {
+                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 8).is_ok() {
+                            *(arg as *mut [u16; 4]) = p.winsize;
+                        }
+                    }
+                    return 0;
+                }
+                0x5414 => {
+                    // TIOCSWINSZ: set window size
+                    if let Some(p) = crate::pty::get_mut(pty_id) {
+                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 8).is_ok() {
+                            p.winsize = *(arg as *const [u16; 4]);
+                        }
+                    }
+                    return 0;
+                }
+                TIOCGPGRP => {
+                    if let Some(p) = crate::pty::get_mut(pty_id) {
+                        if arg != 0 { crate::uaccess::put_user(arg, p.foreground_pgid as i32); }
+                    }
+                    return 0;
+                }
+                TIOCSPGRP => {
+                    if let Some(p) = crate::pty::get_mut(pty_id) {
+                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 4).is_ok() {
+                            p.foreground_pgid = *(arg as *const i32) as u32;
+                        }
+                    }
+                    return 0;
+                }
+                TIOCSCTTY => {
+                    if let Some(p) = crate::pty::get_mut(pty_id) {
+                        let idx = crate::task_table::current_task_idx();
+                        p.session_id = crate::task_table::TASK_TABLE[idx].sid;
+                        p.foreground_pgid = crate::task_table::TASK_TABLE[idx].pgid;
+                    }
+                    return 0;
+                }
+                TCGETS => {
+                    // Return termios for slave
+                    if let Some(p) = crate::pty::get_mut(pty_id) {
+                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 60).is_ok() {
+                            let ptr = arg as *mut u8;
+                            for i in 0..60 { *ptr.add(i) = 0; }
+                            *(arg as *mut u32) = 0x500; // c_iflag: ICRNL | IXON
+                            *((arg + 4) as *mut u32) = 0x5; // c_oflag: OPOST | ONLCR
+                            *((arg + 8) as *mut u32) = 0xBF; // c_cflag
+                            let mut lflag: u32 = 0;
+                            if p.cooked { lflag |= 0x2; }
+                            if p.echo { lflag |= 0x8; }
+                            if p.isig { lflag |= 0x1; }
+                            lflag |= 0x8A30;
+                            *((arg + 12) as *mut u32) = lflag;
+                            let cc = (arg + 17) as *mut u8;
+                            *cc.add(0) = 0x03; *cc.add(1) = 0x1C;
+                            *cc.add(2) = 0x7F; *cc.add(3) = 0x15;
+                            *cc.add(4) = 0x04; *cc.add(10) = 0x1A;
+                        }
+                    }
+                    return 0;
+                }
+                0x5402 | 0x5403 | 0x5404 => {
+                    // TCSETS/TCSETSW/TCSETSF
+                    if let Some(p) = crate::pty::get_mut(pty_id) {
+                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 60).is_ok() {
+                            let lflag = *((arg + 12) as *const u32);
+                            p.cooked = lflag & 0x2 != 0;
+                            p.echo = lflag & 0x8 != 0;
+                            p.isig = lflag & 0x1 != 0;
+                        }
+                    }
+                    return 0;
+                }
+                _ => {
+                    // Fall through to generic ioctl handling (FIONBIO etc.)
+                    if is_master { return 0; } // master: unknown ioctls succeed
+                }
+            }
+        }
+    }
 
     let is_tty = fdt::is_console_fd(fd);
 

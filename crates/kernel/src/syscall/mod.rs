@@ -1135,9 +1135,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                 fd_table[fd0] = rux_fs::fdtable::OpenFile {
                     ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true,
                     is_console: false, is_pipe: true,
-                    pipe_id: pipe_a, pipe_write: false, // reads from pipe_a
+                    pipe_id: pipe_a, pipe_write: false,
                     is_socket: false, socket_idx: 0,
-                    pipe_id_write: pipe_b,              // writes to pipe_b
+                    pipe_id_write: pipe_b,
+                    is_pty: false, pty_id: 0, pty_master: false,
                 };
                 let fd1 = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS).find(|&f| !fd_table[f].active) {
                     Some(f) => f,
@@ -1149,9 +1150,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                 fd_table[fd1] = rux_fs::fdtable::OpenFile {
                     ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true,
                     is_console: false, is_pipe: true,
-                    pipe_id: pipe_b, pipe_write: false, // reads from pipe_b
+                    pipe_id: pipe_b, pipe_write: false,
                     is_socket: false, socket_idx: 0,
-                    pipe_id_write: pipe_a,              // writes to pipe_a
+                    pipe_id_write: pipe_a,
+                    is_pty: false, pty_id: 0, pty_master: false,
                 };
                 // Apply SOCK_CLOEXEC if requested
                 if a1 & 0x80000 != 0 {
