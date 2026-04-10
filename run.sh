@@ -36,7 +36,7 @@ INITRD_ARGS=""
 [ -n "${INITRD}" ] && INITRD_ARGS="-initrd ${INITRD}"
 
 exec ${QEMU} \
-  -cpu max -smp 2 \
+  -cpu max -smp 1 \
   -kernel ${KERNEL}.elf32 \
   ${INITRD_ARGS} \
   ${DISK_ARGS} \
