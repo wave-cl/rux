@@ -929,7 +929,13 @@ pub fn socket_has_data(fd: usize) -> bool {
         #[cfg(feature = "net")]
         if sock.smol_handle_raw >= 0 {
             if sock.sock_type == SOCK_STREAM {
-                return rux_net::tcp_can_recv(to_handle(sock.smol_handle_raw));
+                let handle = to_handle(sock.smol_handle_raw);
+                // Listen sockets: POLLIN means "connection pending"
+                if sock.bound_port != 0 && !sock.connected {
+                    return rux_net::tcp_is_established(handle);
+                }
+                // Connected sockets: POLLIN means "data available"
+                return rux_net::tcp_can_recv(handle);
             } else if sock.sock_type == SOCK_DGRAM {
                 return rux_net::udp_can_recv(to_handle(sock.smol_handle_raw));
             }
