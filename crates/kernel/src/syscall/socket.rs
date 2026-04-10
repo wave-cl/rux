@@ -3,6 +3,24 @@
 //! Supports AF_INET: SOCK_STREAM (TCP), SOCK_DGRAM (UDP), SOCK_RAW (ICMP stub).
 
 const AF_INET: u32 = 2;
+
+/// Sleep until I/O event (network activity) — like poll's WaitingForPoll.
+/// Used by blocking socket operations (connect, accept, send, recv).
+unsafe fn net_wait() {
+    let task_idx = crate::task_table::current_task_idx();
+    crate::task_table::TASK_TABLE[task_idx].state =
+        crate::task_table::TaskState::WaitingForPoll;
+    // Wake after 30s at most (timeout safety)
+    use rux_arch::TimerOps;
+    crate::task_table::TASK_TABLE[task_idx].wake_at =
+        crate::arch::Arch::ticks() + 30_000;
+    crate::task_table::poll_wait_register(task_idx);
+    let sched = crate::scheduler::get();
+    sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+    sched.dequeue_current();
+    sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+    sched.schedule();
+}
 const SOCK_STREAM: u32 = 1;
 const SOCK_DGRAM: u32 = 2;
 const SOCK_RAW: u32 = 3;
@@ -345,7 +363,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
                 rux_net::poll(crate::arch::Arch::ticks());
                 if rux_net::tcp_is_established(handle) { SOCKETS[idx].connected = true; return 0; }
                 if !rux_net::tcp_is_active(handle) { return crate::errno::ECONNREFUSED; }
-                super::memory::yield_1ms();
+                unsafe { net_wait(); }
             }
             return crate::errno::ETIMEDOUT;
         }
@@ -404,7 +422,7 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr:
                         }
                         Err(_) => {
                             // TX buffer full — yield to scheduler then retry
-                            super::memory::yield_1ms();
+                            unsafe { net_wait(); }
                         }
                     }
                 }
@@ -470,7 +488,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_pt
                         return 0;
                     }
                     if nonblock { return crate::errno::EAGAIN; }
-                    super::memory::yield_1ms();
+                    unsafe { net_wait(); }
                 }
                 return crate::errno::EAGAIN;
             } else if sock.sock_type == SOCK_DGRAM {
@@ -495,7 +513,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_pt
                         Err(_) => {}
                     }
                     if nonblock { return crate::errno::EAGAIN; }
-                    super::memory::yield_1ms();
+                    unsafe { net_wait(); }
                 }
                 return crate::errno::EAGAIN;
             }
@@ -581,7 +599,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                     return new_fd as isize;
                 }
                 if nonblock { return crate::errno::EAGAIN; }
-                super::memory::yield_1ms();
+                unsafe { net_wait(); }
             }
             return crate::errno::EAGAIN;
         }
@@ -665,7 +683,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                     return new_fd as isize;
                 }
                 if nonblock { return crate::errno::EAGAIN; }
-                super::memory::yield_1ms();
+                unsafe { net_wait(); }
             }
             return crate::errno::EAGAIN;
         }

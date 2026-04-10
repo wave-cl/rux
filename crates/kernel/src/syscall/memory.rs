@@ -295,8 +295,21 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
             }
         }
 
-        // Yield to scheduler: sleep 1ms then re-poll (allows other tasks to run)
-        unsafe { yield_1ms(); }
+        // Sleep on poll wait queue until I/O event or timeout
+        unsafe {
+            let task_idx = crate::task_table::current_task_idx();
+            crate::task_table::TASK_TABLE[task_idx].state =
+                crate::task_table::TaskState::WaitingForPoll;
+            use rux_arch::TimerOps;
+            crate::task_table::TASK_TABLE[task_idx].wake_at =
+                crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64;
+            crate::task_table::poll_wait_register(task_idx);
+            let sched = crate::scheduler::get();
+            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+            sched.dequeue_current();
+            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+            sched.schedule();
+        }
     }
 }
 
@@ -614,15 +627,28 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
             if f.flags & 0o4000 != 0 {
                 return crate::errno::EAGAIN; // non-blocking
             }
-            // Blocking: wait for a signal to arrive
-            for _ in 0..30_000u32 {
-                yield_1ms();
+            // Blocking: sleep until signal arrives or timeout
+            let sig_deadline = {
+                use rux_arch::TimerOps;
+                crate::arch::Arch::ticks() + 30_000
+            };
+            loop {
+                let task_idx = crate::task_table::current_task_idx();
+                crate::task_table::TASK_TABLE[task_idx].state =
+                    crate::task_table::TaskState::Sleeping;
+                crate::task_table::TASK_TABLE[task_idx].wake_at = sig_deadline;
+                let sched = crate::scheduler::get();
+                sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+                sched.dequeue_current();
+                sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+                sched.schedule();
                 let hot = &mut (*super::process()).signal_hot;
                 pending_masked = hot.pending.0 & mask;
                 if pending_masked != 0 { break; }
-            }
-            if pending_masked == 0 {
-                return crate::errno::EAGAIN; // timeout
+                use rux_arch::TimerOps;
+                if crate::arch::Arch::ticks() >= sig_deadline {
+                    return crate::errno::EAGAIN; // timeout
+                }
             }
             // Re-acquire hot reference after yield
             let hot_ref = &mut (*super::process()).signal_hot;
@@ -1175,8 +1201,21 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
             return ready as isize;
         }
 
-        // Wait for next timer tick
-        unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
+        // Sleep on poll wait queue until I/O or timeout
+        unsafe {
+            let task_idx = crate::task_table::current_task_idx();
+            crate::task_table::TASK_TABLE[task_idx].state =
+                crate::task_table::TaskState::WaitingForPoll;
+            use rux_arch::TimerOps;
+            crate::task_table::TASK_TABLE[task_idx].wake_at =
+                crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64;
+            crate::task_table::poll_wait_register(task_idx);
+            let sched = crate::scheduler::get();
+            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+            sched.dequeue_current();
+            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+            sched.schedule();
+        }
     }
 
     // Timeout: clear all sets

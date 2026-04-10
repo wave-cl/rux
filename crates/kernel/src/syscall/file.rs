@@ -115,17 +115,32 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
             if crate::uaccess::validate_user_ptr(buf, len).is_err() { return crate::errno::EFAULT; }
             let dst = core::slice::from_raw_parts_mut(buf as *mut u8, len);
             // Blocking read loop
-            for _ in 0..30_000u32 {
+            let deadline = {
+                use rux_arch::TimerOps;
+                crate::arch::Arch::ticks() + 30_000
+            };
+            loop {
                 let r = if is_master {
                     crate::pty::master_read(pty_id, dst)
                 } else {
                     crate::pty::slave_read(pty_id, dst)
                 };
                 if r != crate::errno::EAGAIN { return r; }
-                if (*fdt::fd_table())[fd].flags & 0o4000 != 0 { return crate::errno::EAGAIN; } // O_NONBLOCK
-                super::memory::yield_1ms();
+                if (*fdt::fd_table())[fd].flags & 0o4000 != 0 { return crate::errno::EAGAIN; }
+                use rux_arch::TimerOps;
+                if crate::arch::Arch::ticks() >= deadline { return crate::errno::EAGAIN; }
+                // Sleep until woken (pipe write to PTY, or timeout)
+                let task_idx = crate::task_table::current_task_idx();
+                crate::task_table::TASK_TABLE[task_idx].state =
+                    crate::task_table::TaskState::WaitingForPoll;
+                crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
+                crate::task_table::poll_wait_register(task_idx);
+                let sched = crate::scheduler::get();
+                sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+                sched.dequeue_current();
+                sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+                sched.schedule();
             }
-            return crate::errno::EAGAIN;
         }
     }
     if fdt::is_console_fd(fd) {

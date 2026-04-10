@@ -54,12 +54,33 @@ pub fn write_str(s: &str) {
 /// Uses HLT to sleep the CPU between checks — woken by any interrupt.
 pub fn read_byte() -> u8 {
     unsafe {
+        // Check ring buffer first (filled by serial IRQ)
+        if let Some(b) = crate::tty::serial_pop() {
+            return b;
+        }
+        // No data — sleep until serial IRQ wakes us
         loop {
+            // Try direct port read (in case IRQ missed)
             if inb(COM1 + 5) & 0x01 != 0 {
                 return inb(COM1);
             }
-            use rux_arch::HaltOps;
-            super::X86_64::halt_until_interrupt();
+            // Check ring buffer again
+            if let Some(b) = crate::tty::serial_pop() {
+                return b;
+            }
+            // Sleep: put task in WaitingForPoll, woken by serial IRQ or timer
+            let task_idx = crate::task_table::current_task_idx();
+            crate::task_table::TASK_TABLE[task_idx].state =
+                crate::task_table::TaskState::WaitingForPoll;
+            use rux_arch::TimerOps;
+            crate::task_table::TASK_TABLE[task_idx].wake_at =
+                super::X86_64::ticks() + 1000; // 1s timeout (re-check)
+            crate::task_table::poll_wait_register(task_idx);
+            let sched = crate::scheduler::get();
+            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+            sched.dequeue_current();
+            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+            sched.schedule();
         }
     }
 }
@@ -67,8 +88,14 @@ pub fn read_byte() -> u8 {
 /// Serial IRQ handler — drain hardware FIFO into the ring buffer.
 /// Called from interrupt_dispatch for vector 36 (IRQ 4 = COM1).
 pub unsafe fn serial_irq() {
+    let mut got_data = false;
     while inb(COM1 + 5) & 0x01 != 0 {
         crate::tty::serial_push(inb(COM1));
+        got_data = true;
+    }
+    // Wake tasks sleeping in read_byte() / poll()
+    if got_data && crate::task_table::has_poll_waiters() {
+        crate::task_table::poll_wake_all();
     }
 }
 

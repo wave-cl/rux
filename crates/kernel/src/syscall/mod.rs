@@ -911,10 +911,18 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     let sec: u64 = crate::uaccess::get_user(a2);
                     let nsec: u64 = crate::uaccess::get_user(a2 + 8);
                     let ms = (sec * 1000 + nsec / 1_000_000).min(5000);
-                    for _ in 0..ms {
-                        use rux_arch::HaltOps;
-                        crate::arch::Arch::halt_until_interrupt();
-                    }
+                    // Sleep for the specified duration
+                    let task_idx = crate::task_table::current_task_idx();
+                    use rux_arch::TimerOps;
+                    crate::task_table::TASK_TABLE[task_idx].state =
+                        crate::task_table::TaskState::Sleeping;
+                    crate::task_table::TASK_TABLE[task_idx].wake_at =
+                        crate::arch::Arch::ticks() + ms as u64;
+                    let sched = crate::scheduler::get();
+                    sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+                    sched.dequeue_current();
+                    sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+                    sched.schedule();
                 }
             }
             crate::errno::EAGAIN
@@ -1004,8 +1012,20 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Reboot => crate::errno::ENOSYS,
         Syscall::Setdomainname | Syscall::Sethostname => 0, // stubs
         Syscall::Pause => {
-            // Suspend until signal
-            unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
+            // Suspend until signal — sleep properly
+            unsafe {
+                let task_idx = crate::task_table::current_task_idx();
+                use rux_arch::TimerOps;
+                crate::task_table::TASK_TABLE[task_idx].state =
+                    crate::task_table::TaskState::Sleeping;
+                crate::task_table::TASK_TABLE[task_idx].wake_at =
+                    crate::arch::Arch::ticks() + 60_000; // 60s, then re-enter
+                let sched = crate::scheduler::get();
+                sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+                sched.dequeue_current();
+                sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+                sched.schedule();
+            }
             crate::errno::EINTR
         }
         Syscall::Getitimer => unsafe {
