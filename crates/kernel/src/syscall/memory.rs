@@ -603,15 +603,32 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
         let hot = &mut (*super::process()).signal_hot;
 
         // Find a pending signal that matches the signalfd mask
-        let pending_masked = hot.pending.0 & mask;
+        let mut pending_masked = hot.pending.0 & mask;
         if pending_masked == 0 {
             // Check O_NONBLOCK on the fd
             let f = &(*rux_fs::fdtable::fd_table())[fd];
             if f.flags & 0o4000 != 0 {
                 return crate::errno::EAGAIN; // non-blocking
             }
-            // Blocking: wait for a signal (simplified — yield and retry)
-            return crate::errno::EAGAIN; // TODO: proper blocking via schedule
+            // Blocking: wait for a signal to arrive
+            for _ in 0..30_000u32 {
+                yield_1ms();
+                let hot = &mut (*super::process()).signal_hot;
+                pending_masked = hot.pending.0 & mask;
+                if pending_masked != 0 { break; }
+            }
+            if pending_masked == 0 {
+                return crate::errno::EAGAIN; // timeout
+            }
+            // Re-acquire hot reference after yield
+            let hot_ref = &mut (*super::process()).signal_hot;
+            let bit = pending_masked.trailing_zeros() as u8;
+            let signo = bit + 1;
+            hot_ref.pending = rux_proc::signal::SignalSet(hot_ref.pending.0 & !(1u64 << bit));
+            let ptr = buf as *mut u8;
+            core::ptr::write_bytes(ptr, 0, 128);
+            *(ptr as *mut u32) = signo as u32;
+            return 128;
         }
 
         // Dequeue the lowest pending signal

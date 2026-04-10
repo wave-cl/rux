@@ -829,7 +829,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             old
         }
         // No-op stubs: safe to accept silently (single-process, no swap, etc.)
-        Syscall::GetPriority | Syscall::SetPriority | Syscall::SetGroups |
+        Syscall::GetPriority => 20, // nice=0 → getpriority returns 20 (Linux: 20-nice)
+        Syscall::SetPriority | Syscall::SetGroups |
         Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync | Syscall::Syncfs |
         Syscall::Fallocate | Syscall::RestartSyscall | Syscall::Membarrier => 0,
         // Unsupported: return ENOSYS
