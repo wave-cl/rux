@@ -309,7 +309,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             if sig == Signal::Cont {
                 if TASK_TABLE[target_idx].state == TaskState::Stopped {
                     TASK_TABLE[target_idx].state = TaskState::Ready;
-                    TASK_TABLE[target_idx].exit_code = 0xFFFF; // WCONTINUED marker
+                    TASK_TABLE[target_idx].continued = true; // WCONTINUED flag
                     crate::scheduler::get().wake_task(target_idx);
                     // Notify parent so waitpid(WCONTINUED) unblocks
                     notify_parent_child_exit(

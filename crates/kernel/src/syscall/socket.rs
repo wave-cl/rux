@@ -664,6 +664,17 @@ pub fn sys_getsockopt(fd: usize, level: usize, optname: usize, optval: usize, op
             if optlen >= 0x1000 { crate::uaccess::put_user(optlen, 4u32); }
             return 0;
         }
+        // Handle by level
+        if level == 6 {
+            // IPPROTO_TCP
+            let val = match optname {
+                1 => 1i32,    // TCP_NODELAY: always enabled (smoltcp disables Nagle)
+                _ => 0,
+            };
+            if optval >= 0x1000 { crate::uaccess::put_user(optval, val); }
+            if optlen >= 0x1000 { crate::uaccess::put_user(optlen, 4u32); }
+            return 0;
+        }
         // SOL_SOCKET (level=1) and others
         let val = match optname {
             2 => {

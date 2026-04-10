@@ -946,8 +946,11 @@ pub fn mremap(old_addr: usize, old_size: usize, new_size: usize, flags: usize, n
     };
 
     if can_grow_in_place {
-        // Extend in place — map new pages (demand-paged, no immediate alloc)
-        // The demand pager will allocate on first access.
+        // Extend in place — map the new pages
+        let pg_flags = rux_mm::MappingFlags::READ
+            .or(rux_mm::MappingFlags::WRITE)
+            .or(rux_mm::MappingFlags::USER);
+        unsafe { super::map_user_pages(grow_start, grow_end, pg_flags); }
         return old_addr as isize;
     }
 
@@ -1221,10 +1224,11 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
 
 /// poll(fds, nfds, timeout) — POSIX.1: check fd readiness.
 /// Returns number of fds with events, or 0 on timeout.
-/// ppoll wrapper: reads timeout from timespec pointer
+/// ppoll wrapper: reads timeout from timespec pointer.
+/// NULL timeout_ptr = infinite wait (like Linux), capped at 30s per iteration.
 pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -> isize {
     if fds_ptr != 0 && nfds > 0 {
-        if crate::uaccess::validate_user_ptr(fds_ptr, nfds.min(64) * 8).is_err() { return crate::errno::EFAULT; }
+        if crate::uaccess::validate_user_ptr(fds_ptr, nfds.min(256) * 8).is_err() { return crate::errno::EFAULT; }
     }
     let timeout_ms = if timeout_ptr >= 0x10000 && timeout_ptr < 0x8000_0000_0000 {
         unsafe {
@@ -1233,7 +1237,7 @@ pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -
             let ms = sec * 1000 + nsec / 1_000_000;
             if ms > 30_000 { 30_000 } else { ms as usize }
         }
-    } else { 5_000 }; // no timeout / invalid → 5s default (responsive enough for DNS)
+    } else { 30_000 }; // NULL timeout = infinite; use 30s then re-enter from userspace
     poll(fds_ptr, nfds, timeout_ms)
 }
 
@@ -1244,8 +1248,9 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     // Console stdin uses IRQ-based ring buffer on x86_64; on aarch64 it still polls.
     // When the ring buffer has data, poll returns immediately; when empty, halt_until_interrupt
     // waits for the serial IRQ to fill it.
+    let nfds = nfds.min(256);
     let needs_blocking = unsafe {
-        (0..nfds.min(64)).any(|i| {
+        (0..nfds).any(|i| {
             let entry = (fds_ptr + i * 8) as *const u8;
             let fd = *(entry as *const i32) as usize;
             fd < rux_fs::fdtable::MAX_FDS && (
@@ -1269,7 +1274,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
 
         unsafe {
             let mut ready = 0i32;
-            for i in 0..nfds.min(64) {
+            for i in 0..nfds {
             let entry = (fds_ptr + i * 8) as *mut u8;
             let fd = *(entry as *const i32) as usize;
             let events = *((entry as usize + 4) as *const i16);
@@ -1320,8 +1325,8 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
         if ready > 0 { return ready as isize; }
         } // unsafe
 
-        // Wait for next timer tick (yields CPU, allows timer ISR to process packets)
-        unsafe { use rux_arch::HaltOps; crate::arch::Arch::halt_until_interrupt(); }
+        // Yield to scheduler if other tasks are runnable, else halt until interrupt
+        unsafe { yield_1ms(); }
     }
     0 // timeout
 }

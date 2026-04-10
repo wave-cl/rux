@@ -372,11 +372,15 @@ pub fn pread64(fd: usize, buf: usize, len: usize, offset: usize) -> isize {
 
 /// fcntl(fd, cmd, arg) — POSIX.1
 pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
+    // Validate fd for commands that require it (all except F_DUPFD which checks internally)
+    if cmd != 0 && cmd != 1030 {
+        unsafe { if fd > 2 && fdt::get_fd(fd).is_none() { return crate::errno::EBADF; } }
+    }
     match cmd {
         0 => fdt::sys_dupfd(fd, arg), // F_DUPFD
         1 => {
             // F_GETFD — return fd flags (FD_CLOEXEC)
-            unsafe { fdt::get_fd(fd).map_or(0, |f| f.fd_flags as isize) }
+            unsafe { fdt::get_fd(fd).map_or(crate::errno::EBADF, |f| f.fd_flags as isize) }
         }
         2 => {
             // F_SETFD — set fd flags (FD_CLOEXEC)
@@ -385,13 +389,23 @@ pub fn fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
         }
         3 => {
             // F_GETFL
-            unsafe { fdt::get_fd(fd).map_or(0, |f| f.flags as isize) }
+            unsafe { fdt::get_fd(fd).map_or(crate::errno::EBADF, |f| f.flags as isize) }
         }
         4 => {
             // F_SETFL — store the flags (O_NONBLOCK, O_APPEND, etc.)
             unsafe { if let Some(f) = fdt::get_fd_mut(fd) { f.flags = arg as u32; } }
             0
         }
+        // F_SETLK (6), F_SETLKW (7), F_GETLK (5) — advisory file locking
+        // Stub: succeed without enforcement (like Linux on tmpfs/procfs)
+        5 => {
+            // F_GETLK — report no conflicting lock
+            if arg != 0 && crate::uaccess::validate_user_ptr(arg, 32).is_ok() {
+                unsafe { crate::uaccess::put_user(arg + 16, 1u16); } // l_type = F_UNLCK (2 on some, 1 on musl)
+            }
+            0
+        }
+        6 | 7 => 0, // F_SETLK / F_SETLKW — succeed (advisory, no enforcement)
         1030 => {
             // F_DUPFD_CLOEXEC — like F_DUPFD but set FD_CLOEXEC on new fd
             let newfd = fdt::sys_dupfd(fd, arg);

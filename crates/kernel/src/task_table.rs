@@ -86,6 +86,7 @@ pub struct TaskSlot {
     pub wake_at: u64,           // tick count for sleep wakeup
     pub last_child_exit: i32,
     pub child_available: bool,
+    pub continued: bool,        // set by SIGCONT, cleared by waitpid(WCONTINUED)
     pub waiting_pipe_id: u8,    // pipe id when WaitingForPipe
     pub tgid: u32,              // thread group ID (what getpid returns)
     pub clone_flags: u32,       // CLONE_* flags used to create this task
@@ -134,7 +135,7 @@ impl TaskSlot {
             saved_user_sp: 0, tls: 0, asid: 0,
             tgid: 0, clone_flags: 0, clear_child_tid: 0, futex_addr: 0,
             exit_code: 0, wake_at: 0,
-            last_child_exit: 0, child_available: false,
+            last_child_exit: 0, child_available: false, continued: false,
             waiting_pipe_id: 0,
             itimer_real_deadline: 0, itimer_real_interval: 0,
             cmdline: [0; 128], cmdline_len: 0,

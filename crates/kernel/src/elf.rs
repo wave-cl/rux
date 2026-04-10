@@ -83,7 +83,21 @@ pub unsafe fn load_elf_from_inode(
                     crate::syscall::posix::exit(127);
                 }
             };
-            // Re-exec with the interpreter (it will load the script as argv[1])
+            // Save script path from current argv[0], then set argv = [interp, script, ...]
+            // Linux: argv[0]=interpreter, argv[1]=script_path, argv[2..]=original args
+            {
+                let mut script_buf = [0u8; 128];
+                let slen = unsafe {
+                    let argc = rux_proc::execargs::argc();
+                    if argc > 0 {
+                        let (buf, len) = rux_proc::execargs::get_argv0();
+                        let n = (len as usize).min(127);
+                        script_buf[..n].copy_from_slice(&buf[..n]);
+                        n
+                    } else { 0 }
+                };
+                rux_proc::execargs::set(interp_path, &script_buf[..slen]);
+            }
             load_elf_from_inode(interp_ino as u64, alloc);
         }
     }

@@ -28,6 +28,21 @@ pub fn get_cmdline() -> (&'static [u8], u8) {
     unsafe { (&*(&raw const CMDLINE_BUF), *(&raw const CMDLINE_LEN)) }
 }
 
+/// Get current argc.
+pub fn argc() -> usize {
+    unsafe { *(&raw const ARGC) }
+}
+
+/// Get argv[0] directly from the ARGV buffer.
+pub fn get_argv0() -> (&'static [u8], usize) {
+    unsafe {
+        if *(&raw const ARGC) == 0 { return (b"", 0); }
+        let len = ARGV_LENS[0].min(255);
+        let off = ARGV_OFFSETS[0];
+        (&ARGV_BUF[off..off + len], len)
+    }
+}
+
 /// Copy the last exec'd environ as null-separated KEY=VALUE pairs into buf.
 /// Returns bytes written.
 pub fn copy_environ(buf: &mut [u8]) -> usize {

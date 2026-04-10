@@ -186,10 +186,10 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 let is_stopped = t.state == TaskState::Stopped && (options & WUNTRACED != 0);
                 // WCONTINUED: report children that were continued from stopped state
                 // We detect this by checking: child is Ready and exit_code has the
-                // WCONTINUED marker (0xFFFF). SIGCONT handler sets this.
+                // WCONTINUED: SIGCONT handler sets task.continued flag.
                 let is_continued = options & WCONTINUED != 0
                     && t.state == TaskState::Ready
-                    && t.exit_code == 0xFFFF;
+                    && t.continued;
                 if !is_zombie && !is_stopped && !is_continued { continue; }
                 // pid matching: usize::MAX (-1) = any child, 0 = same process group,
                 // pid < -1 = process group abs(pid)
@@ -217,7 +217,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
 
                 // Continued child: report, clear marker
                 if is_continued {
-                    TASK_TABLE[i].exit_code = 0; // clear WCONTINUED marker
+                    TASK_TABLE[i].continued = false; // clear WCONTINUED flag
                     if wstatus_ptr != 0 {
                         crate::uaccess::put_user(wstatus_ptr, 0xFFFFu32); // WIFCONTINUED
                     }
@@ -246,8 +246,13 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 return child_pid;
             }
 
-            // WNOHANG: don't block, return 0 if no zombie yet.
-            if options & WNOHANG != 0 { return 0; }
+            // WNOHANG: return 0 if children exist but none ready, -ECHILD if none
+            if options & WNOHANG != 0 {
+                let has_children = (0..MAX_PROCS).any(|i| {
+                    TASK_TABLE[i].active && TASK_TABLE[i].ppid == my_pid
+                });
+                return if has_children { 0 } else { crate::errno::ECHILD };
+            }
 
             // Check if this process has any children at all.
             let has_children = (0..MAX_PROCS).any(|i| {
