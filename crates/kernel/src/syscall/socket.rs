@@ -8,6 +8,7 @@ const SOCK_DGRAM: u32 = 2;
 const SOCK_RAW: u32 = 3;
 const SOCK_NONBLOCK: usize = 0x800;
 const O_NONBLOCK: u32 = 0x800;
+const AF_UNIX: u32 = 1;
 
 const MAX_SOCKETS: usize = 32;
 
@@ -27,6 +28,14 @@ struct SocketSlot {
     connected: bool,
     /// Socket options
     reuse_addr: bool,
+    /// AF_UNIX support
+    is_unix: bool,
+    unix_path: [u8; 108],
+    unix_path_len: u8,
+    unix_listening: bool,
+    unix_pipe_a: u8,        // pipe for read direction (connected)
+    unix_pipe_b: u8,        // pipe for write direction (connected)
+    unix_pending: u8,       // pending connections waiting for accept
 }
 
 impl SocketSlot {
@@ -36,6 +45,9 @@ impl SocketSlot {
             smol_handle_raw: -1,
             connected_ip: [0; 4], connected_port: 0, connected: false,
             reuse_addr: false,
+            is_unix: false, unix_path: [0; 108], unix_path_len: 0,
+            unix_listening: false, unix_pipe_a: 0xFF, unix_pipe_b: 0xFF,
+            unix_pending: 0,
         }
     }
 }
@@ -81,10 +93,11 @@ unsafe fn write_sockaddr(addr_ptr: usize, port: u16, ip: [u8; 4]) {
 
 /// socket(domain, type, protocol) → fd
 pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
-    if domain as u32 != AF_INET { return crate::errno::EAFNOSUPPORT; }
+    let dom = domain as u32;
+    if dom != AF_INET && dom != AF_UNIX { return crate::errno::EAFNOSUPPORT; }
     let st = stype as u32 & 0xFF;
     let sock_nonblock = stype & SOCK_NONBLOCK != 0;
-    let sock_cloexec = stype & 0x80000 != 0; // SOCK_CLOEXEC
+    let sock_cloexec = stype & 0x80000 != 0;
     if st != SOCK_STREAM && st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
 
     unsafe {
@@ -101,30 +114,35 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
             None => return crate::errno::ENOMEM,
         };
 
-        // Allocate smoltcp socket
-        #[cfg(feature = "net")]
-        let handle_raw = {
-            let h = if st == SOCK_STREAM {
-                rux_net::tcp_alloc()
-            } else if st == SOCK_DGRAM {
-                rux_net::udp_alloc()
-            } else {
-                None // RAW — no smoltcp socket
-            };
-            match h {
-                Some(handle) => rux_net::handle_to_raw(handle) as i16,
-                None if st == SOCK_RAW => -1,
-                None => return crate::errno::ENOMEM,
+        // Allocate smoltcp socket (skip for AF_UNIX — uses pipes instead)
+        let handle_raw: i16 = if dom == AF_UNIX {
+            -1 // AF_UNIX doesn't use smoltcp
+        } else {
+            #[cfg(feature = "net")]
+            {
+                let h = if st == SOCK_STREAM {
+                    rux_net::tcp_alloc()
+                } else if st == SOCK_DGRAM {
+                    rux_net::udp_alloc()
+                } else {
+                    None
+                };
+                match h {
+                    Some(handle) => rux_net::handle_to_raw(handle) as i16,
+                    None if st == SOCK_RAW => -1,
+                    None => return crate::errno::ENOMEM,
+                }
             }
+            #[cfg(not(feature = "net"))]
+            { -1 }
         };
-        #[cfg(not(feature = "net"))]
-        let handle_raw: i16 = -1;
 
         SOCKETS[sock_idx] = SocketSlot::empty();
         SOCKETS[sock_idx].active = true;
         SOCKETS[sock_idx].ref_count = 1;
         SOCKETS[sock_idx].sock_type = st;
         SOCKETS[sock_idx].smol_handle_raw = handle_raw;
+        SOCKETS[sock_idx].is_unix = dom == AF_UNIX;
 
         fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
         fd_table[fd].active = true;
@@ -182,6 +200,22 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
     };
     if crate::uaccess::validate_user_ptr(addr_ptr, 8).is_err() { return crate::errno::EFAULT; }
     unsafe {
+        // AF_UNIX bind: store path from sockaddr_un
+        if SOCKETS[idx].is_unix {
+            let family = *(addr_ptr as *const u16);
+            if family != AF_UNIX as u16 { return crate::errno::EINVAL; }
+            let path_ptr = addr_ptr + 2;
+            let addrlen = _addrlen.min(110); // sockaddr_un = 2 + 108
+            let path_len = if addrlen > 2 { addrlen - 2 } else { 0 };
+            let path_len = path_len.min(107);
+            for i in 0..path_len {
+                let b = *((path_ptr + i) as *const u8);
+                if b == 0 { SOCKETS[idx].unix_path_len = i as u8; break; }
+                SOCKETS[idx].unix_path[i] = b;
+                SOCKETS[idx].unix_path_len = (i + 1) as u8;
+            }
+            return 0;
+        }
         let (port, _ip) = read_sockaddr(addr_ptr);
         // Check EADDRINUSE (skip if SO_REUSEADDR set on this socket)
         if port != 0 && !SOCKETS[idx].reuse_addr {
@@ -211,13 +245,60 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
         None => return crate::errno::EBADF,
     };
     unsafe {
+        // AF_UNIX connect: find listening socket by path, create pipe pair
+        if SOCKETS[idx].is_unix {
+            let family = *(addr_ptr as *const u16);
+            if family != AF_UNIX as u16 { return crate::errno::EINVAL; }
+            let path_ptr = addr_ptr + 2;
+            let mut path = [0u8; 108];
+            let mut plen = 0usize;
+            for i in 0..107 {
+                let b = *((path_ptr + i) as *const u8);
+                if b == 0 { break; }
+                path[i] = b;
+                plen = i + 1;
+            }
+            // Find matching listener
+            let listener = (0..MAX_SOCKETS).find(|&i| {
+                i != idx && SOCKETS[i].active && SOCKETS[i].is_unix
+                    && SOCKETS[i].unix_listening
+                    && SOCKETS[i].unix_path_len == plen as u8
+                    && SOCKETS[i].unix_path[..plen] == path[..plen]
+            });
+            let lis_idx = match listener {
+                Some(i) => i,
+                None => return crate::errno::ECONNREFUSED,
+            };
+            // Allocate two pipes for bidirectional communication
+            let pipe_a = match rux_ipc::pipe::alloc() { Ok(id) => id, Err(e) => return e };
+            let pipe_b = match rux_ipc::pipe::alloc() {
+                Ok(id) => id,
+                Err(_) => { rux_ipc::pipe::close(pipe_a, false); rux_ipc::pipe::close(pipe_a, true); return crate::errno::ENOMEM; }
+            };
+            // Client: reads pipe_a, writes pipe_b
+            SOCKETS[idx].unix_pipe_a = pipe_a;
+            SOCKETS[idx].unix_pipe_b = pipe_b;
+            SOCKETS[idx].connected = true;
+            // Store reverse info for the listener to pick up in accept
+            SOCKETS[lis_idx].unix_pipe_a = pipe_b; // listener reads what client writes
+            SOCKETS[lis_idx].unix_pipe_b = pipe_a; // listener writes what client reads
+            SOCKETS[lis_idx].unix_pending = SOCKETS[lis_idx].unix_pending.saturating_add(1);
+            // Set up fd as pipe-based for I/O
+            let f = &mut (*rux_fs::fdtable::fd_table())[fd];
+            f.is_pipe = true;
+            f.pipe_id = pipe_a;
+            f.pipe_write = false;
+            f.pipe_id_write = pipe_b;
+            return 0;
+        }
+
         let (dst_port, dst_ip) = read_sockaddr(addr_ptr);
         let sock = &mut SOCKETS[idx];
         sock.connected_ip = dst_ip;
         sock.connected_port = dst_port;
 
         if sock.sock_type != SOCK_STREAM {
-            sock.connected = true; // UDP connect: just store addr
+            sock.connected = true;
             return 0;
         }
         if addr_ptr == 0 { return crate::errno::EFAULT; }
@@ -406,6 +487,10 @@ pub fn sys_listen(fd: usize, _backlog: usize) -> isize {
     };
     unsafe {
         if SOCKETS[idx].sock_type != SOCK_STREAM { return crate::errno::EOPNOTSUPP; }
+        if SOCKETS[idx].is_unix {
+            SOCKETS[idx].unix_listening = true;
+            return 0;
+        }
         #[cfg(feature = "net")]
         if SOCKETS[idx].smol_handle_raw >= 0 && SOCKETS[idx].bound_port != 0 {
             let handle = to_handle(SOCKETS[idx].smol_handle_raw);
@@ -432,6 +517,50 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
     };
     unsafe {
         if SOCKETS[idx].sock_type != SOCK_STREAM { return crate::errno::EOPNOTSUPP; }
+
+        // AF_UNIX accept: wait for pending connection, return fd with pipes
+        if SOCKETS[idx].is_unix {
+            let nonblock = fd < rux_fs::fdtable::MAX_FDS && ((*rux_fs::fdtable::fd_table())[fd].flags & O_NONBLOCK) != 0;
+            let max_iters = if nonblock { 10u32 } else { 30_000u32 };
+            for _ in 0..max_iters {
+                if SOCKETS[idx].unix_pending > 0 {
+                    SOCKETS[idx].unix_pending -= 1;
+                    let pipe_a = SOCKETS[idx].unix_pipe_a;
+                    let pipe_b = SOCKETS[idx].unix_pipe_b;
+                    // Allocate new socket + fd for the accepted connection
+                    let new_sock = match (0..MAX_SOCKETS).find(|&i| !SOCKETS[i].active) {
+                        Some(i) => i, None => return crate::errno::ENOMEM,
+                    };
+                    let fd_table = &mut *rux_fs::fdtable::fd_table();
+                    let new_fd = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
+                        .find(|&f| !fd_table[f].active) {
+                        Some(f) => f, None => return crate::errno::ENOMEM,
+                    };
+                    SOCKETS[new_sock] = SocketSlot::empty();
+                    SOCKETS[new_sock].active = true;
+                    SOCKETS[new_sock].ref_count = 1;
+                    SOCKETS[new_sock].sock_type = SOCK_STREAM;
+                    SOCKETS[new_sock].is_unix = true;
+                    SOCKETS[new_sock].connected = true;
+                    SOCKETS[new_sock].unix_pipe_a = pipe_a;
+                    SOCKETS[new_sock].unix_pipe_b = pipe_b;
+                    fd_table[new_fd] = rux_fs::fdtable::EMPTY_FD;
+                    fd_table[new_fd].active = true;
+                    fd_table[new_fd].is_socket = true;
+                    fd_table[new_fd].socket_idx = new_sock as u8;
+                    // Also set up as pipe for I/O
+                    fd_table[new_fd].is_pipe = true;
+                    fd_table[new_fd].pipe_id = pipe_a;
+                    fd_table[new_fd].pipe_write = false;
+                    fd_table[new_fd].pipe_id_write = pipe_b;
+                    return new_fd as isize;
+                }
+                if nonblock { return crate::errno::EAGAIN; }
+                super::memory::yield_1ms();
+            }
+            return crate::errno::EAGAIN;
+        }
+
         let listen_port = SOCKETS[idx].bound_port;
         if listen_port == 0 { return crate::errno::EINVAL; }
 

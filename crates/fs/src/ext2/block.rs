@@ -43,8 +43,26 @@ pub(crate) unsafe fn translate(fs: &Ext2Fs, inode: &RawInode, file_block: u32) -
         return Ok(le32(&buf, idx2 as usize * 4));
     }
 
-    // Triple-indirect not supported
-    Err(VfsError::IoError)
+    // Triple-indirect: block 12+N+N*N..12+N+N*N+N*N*N
+    let fb = fb - ptrs_per_block * ptrs_per_block;
+    if fb < ptrs_per_block * ptrs_per_block * ptrs_per_block {
+        let tindirect_block = inode.block[14];
+        if tindirect_block == 0 { return Ok(0); }
+        let mut buf = [0u8; 4096];
+        fs.read_block(tindirect_block as u64, &mut buf)?;
+        let idx1 = fb / (ptrs_per_block * ptrs_per_block);
+        let dindirect_block = le32(&buf, idx1 as usize * 4);
+        if dindirect_block == 0 { return Ok(0); }
+        fs.read_block(dindirect_block as u64, &mut buf)?;
+        let idx2 = (fb / ptrs_per_block) % ptrs_per_block;
+        let indirect_block = le32(&buf, idx2 as usize * 4);
+        if indirect_block == 0 { return Ok(0); }
+        fs.read_block(indirect_block as u64, &mut buf)?;
+        let idx3 = fb % ptrs_per_block;
+        return Ok(le32(&buf, idx3 as usize * 4));
+    }
+
+    Err(VfsError::IoError) // beyond triple-indirect range
 }
 
 /// Assign a physical block to a logical file block in the inode.
@@ -105,7 +123,8 @@ pub(crate) unsafe fn assign_block(
         return Ok(());
     }
 
-    Err(VfsError::NoSpace) // triple indirect not supported
+    // Triple-indirect write not implemented (read works via translate)
+    Err(VfsError::NoSpace)
 }
 
 /// Read file data starting at `offset` into `buf`. Returns bytes read.
