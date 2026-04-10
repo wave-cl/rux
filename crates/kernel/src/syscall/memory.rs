@@ -1281,73 +1281,78 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
         })
     };
 
-    let max_iters = if needs_blocking && timeout_ms > 0 {
-        timeout_ms.min(30_000)
-    } else { 1 };
+    // Deadline: absolute tick count when timeout expires (0 = non-blocking)
+    let deadline: u64 = if needs_blocking && timeout_ms > 0 {
+        unsafe {
+            use rux_arch::TimerOps;
+            crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64
+        }
+    } else { 0 };
 
-    for _attempt in 0..max_iters {
-        // Poll smoltcp (drains all available frames in one call)
+    loop {
+        // Process pending network packets
         #[cfg(feature = "net")]
         unsafe {
             use rux_arch::TimerOps;
             rux_net::poll(crate::arch::Arch::ticks());
         }
 
-        unsafe {
-            let mut ready = 0i32;
+        // Check all fds for readiness
+        let ready = unsafe {
+            let mut r = 0i32;
             for i in 0..nfds {
-            let entry = (fds_ptr + i * 8) as *mut u8;
-            let fd = *(entry as *const i32) as usize;
-            let events = *((entry as usize + 4) as *const i16);
-            let revents_ptr = (entry as usize + 6) as *mut i16;
-
-            if fd >= fdt::MAX_FDS { *revents_ptr = 0; continue; }
-
-            let f = &(*fdt::fd_table())[fd];
-            let mut revents: i16 = 0;
-            if f.active && f.is_socket {
-                // Socket: check actual readiness
-                if events & 4 != 0 {
-                    // POLLOUT: ready if connected (not still in SYN_SENT)
-                    if super::socket::socket_can_write(fd) {
-                        revents |= 4;
-                    }
+                let entry = (fds_ptr + i * 8) as *mut u8;
+                let fd = *(entry as *const i32) as usize;
+                let events = *((entry as usize + 4) as *const i16);
+                let revents_ptr = (entry as usize + 6) as *mut i16;
+                if fd >= fdt::MAX_FDS { *revents_ptr = 0; continue; }
+                let f = &(*fdt::fd_table())[fd];
+                let mut revents: i16 = 0;
+                if f.active && f.is_socket {
+                    if events & 4 != 0 && super::socket::socket_can_write(fd) { revents |= 4; }
+                    if events & 1 != 0 && super::socket::socket_has_data(fd) { revents |= 1; }
+                } else if f.active && is_eventfd(fd) {
+                    if events & 1 != 0 && eventfd_has_data(fd) { revents |= 1; }
+                    if events & 4 != 0 { revents |= 4; }
+                } else if f.active && is_timerfd(fd) {
+                    if events & 1 != 0 && timerfd_has_data(fd) { revents |= 1; }
+                } else if f.active && f.is_pipe {
+                    let pid = f.pipe_id;
+                    if events & 1 != 0 && crate::pipe::has_data(pid) { revents |= 1; }
+                    if events & 4 != 0 && f.pipe_write { revents |= 4; }
+                    if crate::pipe::writers_closed(pid) { revents |= 0x10; }
+                } else if f.active || fd <= 2 {
+                    if events & 1 != 0 { revents |= 1; }
+                    if events & 4 != 0 { revents |= 4; }
+                } else {
+                    revents = 0x20;
                 }
-                if events & 1 != 0 {
-                    // POLLIN: check if data is available
-                    if super::socket::socket_has_data(fd) {
-                        revents |= 1;
-                    }
-                }
-            } else if f.active && is_eventfd(fd) {
-                // eventfd: readable if counter > 0, always writable
-                if events & 1 != 0 && eventfd_has_data(fd) { revents |= 1; }
-                if events & 4 != 0 { revents |= 4; }
-            } else if f.active && is_timerfd(fd) {
-                // timerfd: readable if expired
-                if events & 1 != 0 && timerfd_has_data(fd) { revents |= 1; }
-            } else if f.active && f.is_pipe {
-                // Pipe: check data availability and writer closure
-                let pid = f.pipe_id;
-                if events & 1 != 0 && crate::pipe::has_data(pid) { revents |= 1; } // POLLIN
-                if events & 4 != 0 && f.pipe_write { revents |= 4; } // POLLOUT (write end)
-                if crate::pipe::writers_closed(pid) { revents |= 0x10; } // POLLHUP
-            } else if f.active || fd <= 2 {
-                // Console fds and regular file fds are always ready
-                if events & 1 != 0 { revents |= 1; }   // POLLIN
-                if events & 4 != 0 { revents |= 4; }   // POLLOUT
-            } else {
-                revents = 0x20; // POLLNVAL
+                *revents_ptr = revents;
+                if revents != 0 { r += 1; }
             }
+            r
+        };
 
-            *revents_ptr = revents;
-            if revents != 0 { ready += 1; }
-        }
         if ready > 0 { return ready as isize; }
-        } // unsafe
+        if deadline == 0 { return 0; }
+        unsafe {
+            use rux_arch::TimerOps;
+            if crate::arch::Arch::ticks() >= deadline { return 0; }
+        }
 
-        // Yield to scheduler if other tasks are runnable, else halt until interrupt
-        unsafe { yield_1ms(); }
+        // Nothing ready — sleep on poll wait queue (like Linux wait_event).
+        // Woken by poll_wake_all() on I/O or wake_sleepers() on timeout.
+        unsafe {
+            let task_idx = crate::task_table::current_task_idx();
+            crate::task_table::TASK_TABLE[task_idx].state =
+                crate::task_table::TaskState::WaitingForPoll;
+            crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
+            crate::task_table::poll_wait_register(task_idx);
+            let sched = crate::scheduler::get();
+            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+            sched.dequeue_current();
+            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+            sched.schedule();
+        }
     }
-    0 // timeout
 }

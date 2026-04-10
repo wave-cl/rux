@@ -38,6 +38,44 @@ pub enum TaskState {
     /// Uninterruptible sleep (like Linux TASK_UNINTERRUPTIBLE).
     /// Cannot be woken by signals — used during COW and page table ops.
     Uninterruptible = 9,
+    /// Blocked in poll/ppoll/epoll/select — woken by I/O events.
+    WaitingForPoll = 10,
+}
+
+// ── Poll wait queue ────────────────────────────────────────────────
+// Tasks sleeping in poll() register here. The timer ISR checks for
+// I/O events and wakes registered tasks (like Linux wait queues).
+
+const MAX_POLL_WAITERS: usize = 16;
+static mut POLL_WAITERS: [u8; MAX_POLL_WAITERS] = [0xFF; MAX_POLL_WAITERS];
+static mut POLL_WAITER_COUNT: usize = 0;
+
+/// Register current task as waiting for poll events.
+pub unsafe fn poll_wait_register(task_idx: usize) {
+    if POLL_WAITER_COUNT < MAX_POLL_WAITERS {
+        POLL_WAITERS[POLL_WAITER_COUNT] = task_idx as u8;
+        POLL_WAITER_COUNT += 1;
+    }
+}
+
+/// Wake all tasks waiting for poll events. Called from timer ISR
+/// when network activity is detected.
+pub unsafe fn poll_wake_all() {
+    for i in 0..POLL_WAITER_COUNT {
+        let idx = POLL_WAITERS[i] as usize;
+        if idx < MAX_PROCS && TASK_TABLE[idx].active
+            && TASK_TABLE[idx].state == TaskState::WaitingForPoll
+        {
+            TASK_TABLE[idx].state = TaskState::Ready;
+            crate::scheduler::get().wake_task(idx);
+        }
+    }
+    POLL_WAITER_COUNT = 0;
+}
+
+/// Check if any tasks are waiting for poll events.
+pub unsafe fn has_poll_waiters() -> bool {
+    POLL_WAITER_COUNT > 0
 }
 
 /// Per-process state container.
@@ -306,7 +344,8 @@ pub unsafe fn wake_sleepers() {
         let t = &mut TASK_TABLE[i];
         if !t.active { continue; }
         // Wake sleeping tasks whose deadline has passed (nanosleep + futex timeout)
-        if (t.state == TaskState::Sleeping || t.state == TaskState::WaitingForFutex)
+        if (t.state == TaskState::Sleeping || t.state == TaskState::WaitingForFutex
+            || t.state == TaskState::WaitingForPoll)
             && t.wake_at > 0 && now >= t.wake_at
         {
             t.wake_at = 0;

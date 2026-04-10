@@ -29,7 +29,12 @@ pub fn handle_tick() {
         crate::task_table::wake_sleepers();
 
         #[cfg(feature = "net")]
-        if rux_net::is_configured() { rux_net::poll(TICKS.load(core::sync::atomic::Ordering::Relaxed)); }
+        if rux_net::is_configured() {
+            rux_net::poll(TICKS.load(core::sync::atomic::Ordering::Relaxed));
+            if crate::task_table::has_poll_waiters() {
+                crate::task_table::poll_wake_all();
+            }
+        }
 
         crate::scheduler::locked_tick(1_000_000);
         // ISR preemption is handled by aarch64_isr_check_preempt() in the
