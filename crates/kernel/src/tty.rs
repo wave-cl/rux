@@ -130,6 +130,17 @@ impl Tty {
                         return crate::errno::EINTR;
                     }
                 }
+                // Ctrl-\: send SIGQUIT to foreground process group
+                0x1C => {
+                    if self.isig {
+                        self.line_len = 0;
+                        if self.echo { A::write_str("^\\\n"); }
+                        crate::syscall::posix::kill(
+                            -(self.foreground_pgid as isize), 3, // SIGQUIT
+                        );
+                        return crate::errno::EINTR;
+                    }
+                }
                 // Ctrl-Z: send SIGTSTP to foreground process group
                 0x1A => {
                     if self.isig {

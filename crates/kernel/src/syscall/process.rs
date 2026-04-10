@@ -539,7 +539,13 @@ pub fn setpgid(pid: usize, pgid: usize) -> isize {
         match find_task_by_pid(target_pid) {
             Some(i) => {
                 let t = &mut TASK_TABLE[i];
+                // Can only change own pgid or child's pgid
                 if target_pid != my_pid && t.ppid != my_pid {
+                    return crate::errno::EPERM;
+                }
+                // Must be in the same session
+                let my_sid = TASK_TABLE[current_task_idx()].sid;
+                if t.sid != my_sid {
                     return crate::errno::EPERM;
                 }
                 t.pgid = new_pgid;

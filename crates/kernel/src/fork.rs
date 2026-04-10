@@ -81,9 +81,11 @@ unsafe fn init_child_slot(
     child.child_available = false;
     child.exit_code = 0;
     child.wake_at = 0;
-    // Inherit interval timers from parent (Linux behavior)
-    child.itimer_real_deadline = parent.itimer_real_deadline;
-    child.itimer_real_interval = parent.itimer_real_interval;
+    // fork: inherit interval timers. clone(CLONE_THREAD): don't.
+    if clone_flags as usize & crate::errno::CLONE_THREAD == 0 {
+        child.itimer_real_deadline = parent.itimer_real_deadline;
+        child.itimer_real_interval = parent.itimer_real_interval;
+    }
     child.clone_flags = clone_flags;
     child.clear_child_tid = clear_child_tid;
 

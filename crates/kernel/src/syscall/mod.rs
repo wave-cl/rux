@@ -1223,6 +1223,13 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 
     let path = crate::uaccess::read_user_cstr(path_ptr);
 
+    // Validate argv/envp pointers are in user space before dereferencing
+    if argv_ptr != 0 {
+        if crate::uaccess::validate_user_ptr(argv_ptr, 8).is_err() { return crate::errno::EFAULT; }
+    }
+    if envp_ptr != 0 && envp_ptr >= 0x1000 {
+        if crate::uaccess::validate_user_ptr(envp_ptr, 8).is_err() { return crate::errno::EFAULT; }
+    }
     crate::uaccess::stac();
     rux_proc::execargs::set_from_user(path, argv_ptr, envp_ptr);
     crate::uaccess::clac();

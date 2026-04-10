@@ -1,8 +1,8 @@
 /// Kernel buffer for passing exec arguments to the new process.
 /// Reads argv/envp from user memory, builds Linux-compatible stack layout.
 
-const MAX_ARGS: usize = 16;
-const MAX_STRBUF: usize = 1024;
+const MAX_ARGS: usize = 64;
+const MAX_STRBUF: usize = 8192;
 
 /// Stored argv strings (null-terminated, packed in a buffer)
 static mut ARGV_BUF: [u8; MAX_STRBUF] = [0; MAX_STRBUF];
