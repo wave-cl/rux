@@ -27,12 +27,16 @@ unsafe fn alloc_virtual_fd(flags: usize) -> isize {
 /// When only one task is active (single-process scenario), falls back to
 /// halt_until_interrupt which is more efficient (wakes on next IRQ, ~1ms).
 pub(crate) unsafe fn yield_1ms() {
-    // Count active non-zombie tasks (skip idle slot 0)
-    let active_count = crate::task_table::TASK_TABLE[1..].iter()
-        .filter(|t| t.active && t.state != crate::task_table::TaskState::Zombie)
-        .count();
+    // Count tasks that are actually READY to run (not sleeping/blocked).
+    // Only yield if another task genuinely needs CPU time.
+    let my_idx = crate::task_table::current_task_idx();
+    let others_ready = crate::task_table::TASK_TABLE[1..].iter().enumerate()
+        .any(|(i, t)| {
+            let idx = i + 1; // skip slot 0 (idle)
+            idx != my_idx && t.active && t.state == crate::task_table::TaskState::Ready
+        });
 
-    if active_count > 1 {
+    if others_ready {
         // Multiple tasks: yield via scheduler so they can run
         let task_idx = crate::task_table::current_task_idx();
         use rux_arch::TimerOps;
