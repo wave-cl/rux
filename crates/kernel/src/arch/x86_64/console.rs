@@ -22,6 +22,7 @@ pub unsafe fn init() {
     outb(COM1 + 3, 0x03); // 8 bits, no parity, 1 stop bit (8N1)
     outb(COM1 + 2, 0xC7); // Enable FIFO, clear, 14-byte threshold
     outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
+    outb(COM1 + 1, 0x01); // Enable receive data available interrupt (IER bit 0)
 }
 
 /// Write a single byte, blocking until the transmit buffer is ready.
