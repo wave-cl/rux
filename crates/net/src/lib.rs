@@ -118,13 +118,14 @@ pub unsafe fn init(
 ///
 /// # Safety
 /// Must not be called concurrently with other network functions.
-pub unsafe fn poll(timestamp_millis: u64) {
-    if !CONFIGURED.load(core::sync::atomic::Ordering::Acquire) { return; }
+/// Poll the network stack. Returns true if any socket state changed.
+pub unsafe fn poll(timestamp_millis: u64) -> bool {
+    if !CONFIGURED.load(core::sync::atomic::Ordering::Acquire) { return false; }
     let iface = (*(&raw mut IFACE)).as_mut().unwrap_unchecked();
     let sockets = (*(&raw mut SOCKETS)).as_mut().unwrap_unchecked();
     let now = Instant::from_millis(timestamp_millis as i64);
     let dev = &mut *(&raw mut DEVICE);
-    let _ = iface.poll(now, dev, sockets);
+    matches!(iface.poll(now, dev, sockets), smoltcp::iface::PollResult::SocketStateChanged)
 }
 
 pub fn is_configured() -> bool {

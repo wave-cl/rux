@@ -30,8 +30,8 @@ pub fn handle_tick() {
 
         #[cfg(feature = "net")]
         if rux_net::is_configured() {
-            rux_net::poll(TICKS.load(core::sync::atomic::Ordering::Relaxed));
-            if crate::task_table::has_poll_waiters() {
+            let activity = rux_net::poll(TICKS.load(core::sync::atomic::Ordering::Relaxed));
+            if activity && crate::task_table::has_poll_waiters() {
                 crate::task_table::poll_wake_all();
             }
         }

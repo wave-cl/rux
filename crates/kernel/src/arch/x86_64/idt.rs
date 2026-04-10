@@ -476,9 +476,9 @@ unsafe fn interrupt_dispatch_inner(vector: u64, error_code: u64, frame: *mut u8)
                 #[cfg(feature = "net")]
                 if rux_net::is_configured() {
                     use rux_arch::TimerOps;
-                    rux_net::poll(crate::arch::Arch::ticks());
-                    // Wake tasks sleeping in poll() — they'll re-check their fds
-                    if crate::task_table::has_poll_waiters() {
+                    let activity = rux_net::poll(crate::arch::Arch::ticks());
+                    // Only wake poll waiters when there's actual network activity
+                    if activity && crate::task_table::has_poll_waiters() {
                         crate::task_table::poll_wake_all();
                     }
                 }
