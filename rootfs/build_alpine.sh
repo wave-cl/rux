@@ -114,7 +114,7 @@ build_alpine() {
     # Configure for rux — busybox init starts sshd and shell
     # Both ::respawn: entries run concurrently
     cat > "$STAGING/etc/inittab" << 'CONF'
-::once:/usr/sbin/sshd -e
+::respawn:/usr/sbin/sshd -D -e 2>/dev/null
 ::respawn:/sbin/getty -n -l /bin/sh 0 console
 CONF
 
