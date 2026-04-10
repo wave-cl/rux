@@ -32,7 +32,7 @@ struct SocketSlot {
     pending_error: i32,
     /// AF_UNIX support
     is_unix: bool,
-    unix_path: [u8; 108],
+    unix_path: [u8; 32],
     unix_path_len: u8,
     unix_listening: bool,
     unix_pipe_a: u8,        // pipe for read direction (connected)
@@ -47,7 +47,7 @@ impl SocketSlot {
             smol_handle_raw: -1,
             connected_ip: [0; 4], connected_port: 0, connected: false,
             reuse_addr: false, pending_error: 0,
-            is_unix: false, unix_path: [0; 108], unix_path_len: 0,
+            is_unix: false, unix_path: [0; 32], unix_path_len: 0,
             unix_listening: false, unix_pipe_a: 0xFF, unix_pipe_b: 0xFF,
             unix_pending: 0,
         }
@@ -103,6 +103,23 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
     if st != SOCK_STREAM && st != SOCK_DGRAM && st != SOCK_RAW { return crate::errno::EPROTONOSUPPORT; }
 
     unsafe {
+        // AF_UNIX: return a dummy fd (no SOCKETS[] entry, no smoltcp).
+        // Programs that just need socket+connect+close work without state.
+        if dom == AF_UNIX {
+            let fd_table = &mut *rux_fs::fdtable::fd_table();
+            let fd = match (rux_fs::fdtable::FIRST_FILE_FD..rux_fs::fdtable::MAX_FDS)
+                .find(|&f| !fd_table[f].active)
+            {
+                Some(f) => f,
+                None => return crate::errno::ENOMEM,
+            };
+            fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
+            fd_table[fd].active = true;
+            // NOT marked as is_socket — close() will just deactivate the fd
+            if sock_cloexec { fd_table[fd].fd_flags |= rux_fs::fdtable::FD_CLOEXEC; }
+            return fd as isize;
+        }
+
         let sock_idx = match (0..MAX_SOCKETS).find(|&i| !SOCKETS[i].active) {
             Some(i) => i,
             None => return crate::errno::ENOMEM,
@@ -116,35 +133,30 @@ pub fn sys_socket(domain: usize, stype: usize, _protocol: usize) -> isize {
             None => return crate::errno::ENOMEM,
         };
 
-        // Allocate smoltcp socket (skip for AF_UNIX — uses pipes instead)
-        let handle_raw: i16 = if dom == AF_UNIX {
-            -1 // AF_UNIX doesn't use smoltcp
-        } else {
-            #[cfg(feature = "net")]
-            {
-                let h = if st == SOCK_STREAM {
-                    rux_net::tcp_alloc()
-                } else if st == SOCK_DGRAM {
-                    rux_net::udp_alloc()
-                } else {
-                    None
-                };
-                match h {
-                    Some(handle) => rux_net::handle_to_raw(handle) as i16,
-                    None if st == SOCK_RAW => -1,
-                    None => return crate::errno::ENOMEM,
-                }
+        // Allocate smoltcp socket (AF_INET only at this point)
+        #[cfg(feature = "net")]
+        let handle_raw: i16 = {
+            let h = if st == SOCK_STREAM {
+                rux_net::tcp_alloc()
+            } else if st == SOCK_DGRAM {
+                rux_net::udp_alloc()
+            } else {
+                None
+            };
+            match h {
+                Some(handle) => rux_net::handle_to_raw(handle) as i16,
+                None if st == SOCK_RAW => -1,
+                None => return crate::errno::ENOMEM,
             }
-            #[cfg(not(feature = "net"))]
-            { -1 }
         };
+        #[cfg(not(feature = "net"))]
+        let handle_raw: i16 = -1;
 
         SOCKETS[sock_idx] = SocketSlot::empty();
         SOCKETS[sock_idx].active = true;
         SOCKETS[sock_idx].ref_count = 1;
         SOCKETS[sock_idx].sock_type = st;
         SOCKETS[sock_idx].smol_handle_raw = handle_raw;
-        SOCKETS[sock_idx].is_unix = dom == AF_UNIX;
 
         fd_table[fd] = rux_fs::fdtable::EMPTY_FD;
         fd_table[fd].active = true;
@@ -215,7 +227,7 @@ pub fn sys_bind(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
             let path_ptr = addr_ptr + 2;
             let addrlen = _addrlen.min(110); // sockaddr_un = 2 + 108
             let path_len = if addrlen > 2 { addrlen - 2 } else { 0 };
-            let path_len = path_len.min(107);
+            let path_len = path_len.min(31);
             for i in 0..path_len {
                 let b = *((path_ptr + i) as *const u8);
                 if b == 0 { SOCKETS[idx].unix_path_len = i as u8; break; }

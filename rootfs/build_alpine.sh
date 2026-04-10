@@ -111,11 +111,11 @@ build_alpine() {
     echo "  Extracting..."
     tar xzf "$TARBALL" -C "$STAGING"
 
-    # Configure for rux
-    # Console on serial
+    # Configure for rux — busybox init starts sshd and shell
+    # Both ::respawn: entries run concurrently
     cat > "$STAGING/etc/inittab" << 'CONF'
-::sysinit:/sbin/rux-init
-::respawn:/sbin/getty 0 console
+::respawn:/usr/sbin/sshd -D -ddd -e
+::respawn:/sbin/getty -n -l /bin/sh 0 console
 CONF
 
     # Hostname
@@ -245,22 +245,16 @@ while True:
 TCPSH
     chmod 755 "$STAGING/usr/bin/tcp-shell"
 
-    # rux-init: mount filesystems and start sshd
-    cat > "$STAGING/sbin/rux-init" << 'INITSCRIPT'
+    # Boot script: starts sshd
+    mkdir -p "$STAGING/etc/init.d"
+    cat > "$STAGING/etc/init.d/rux-boot" << 'SCRIPT'
 #!/bin/sh
-mount -t proc proc /proc 2>/dev/null
-mount -t sysfs sys /sys 2>/dev/null
-mount -t devtmpfs dev /dev 2>/dev/null
-
-# Start sshd (OPENSSL_ia32cap is set by kernel to disable RDRAND)
-if [ -x /usr/sbin/sshd ]; then
-    /usr/sbin/sshd -e
-    echo "rux: sshd started"
-fi
-
-echo "Alpine Linux on rux — ssh root@localhost -p 2222"
-INITSCRIPT
-    chmod 755 "$STAGING/sbin/rux-init"
+mkdir -p /run /var/run
+echo "Starting sshd..." > /dev/console
+/usr/sbin/sshd -D -e &
+echo "Alpine Linux on rux — ssh root@localhost -p 2222" > /dev/console
+SCRIPT
+    chmod 755 "$STAGING/etc/init.d/rux-boot"
 
     # Test scripts for QEMU integration tests
     mkdir -p "$STAGING/usr/share/rux-tests"

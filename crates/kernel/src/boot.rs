@@ -62,6 +62,11 @@ pub unsafe fn boot(params: BootParams) -> ! {
     }
 
     // Parse kernel command line
+    if !params.cmdline.is_empty() {
+        log("rux: cmdline: ");
+        crate::arch::Arch::write_bytes(params.cmdline);
+        log("\n");
+    }
     let cmdparams = crate::cmdline::parse(params.cmdline);
 
     // Wrap ramfs in VFS (ramfs is always slot 0 initially)
@@ -117,7 +122,12 @@ pub unsafe fn boot(params: BootParams) -> ! {
     log("rux: exec ");
     crate::arch::Arch::write_bytes(init_path);
     log("\n");
-    rux_proc::execargs::set(b"/bin/sh", b"");
+    // argv[0] determines busybox behavior: "/sbin/init" = init mode (reads inittab),
+    // "/bin/sh" = shell mode (reads from stdin). Use init mode when /etc/inittab exists
+    // on the ext2 rootfs (interactive boot), shell mode otherwise (test pipe).
+    let has_inittab = rux_fs::path::resolve_path(vfs, b"/etc/inittab").is_ok();
+    let argv0 = if has_inittab && _has_disk_root { init_path } else { b"/bin/sh" as &[u8] };
+    rux_proc::execargs::set(argv0, b"");
     let init_ino = match rux_fs::path::resolve_path(vfs, init_path) {
         Ok(ino) => ino,
         Err(e) => {

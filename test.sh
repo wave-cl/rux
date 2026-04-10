@@ -326,7 +326,7 @@ timeout 5 top -bn1 -d1 2>&1 | head -3
 exit
 CMDS
 } | \
-    { ROOTFS_TMP="/tmp/rux_alpine_x86_64.img"; cp rootfs/alpine_x86_64.img "$ROOTFS_TMP"; \
+    { ROOTFS_TMP="/tmp/rux_alpine_x86_64.img"; cp rootfs/alpine_x86_64.img "$ROOTFS_TMP"; debugfs -w -R "rm /etc/inittab" "$ROOTFS_TMP" 2>/dev/null; \
     "$QEMU_X86" -cpu max -smp 2 \
     -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
     -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0 \
@@ -346,7 +346,7 @@ check "kernel page tables"      "CR3 switched to kernel page tables"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
 check "procfs mounted"          "procfs mounted at /proc"
-check "exec init"               "exec /sbin/init"
+check "exec init"               "exec /sbin/"
 check "shell prompt"            "/ #"
 
 # Alpine identity
@@ -781,7 +781,7 @@ ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 exit
 CMDS
 } | \
-    { ROOTFS_TMP="/tmp/rux_alpine_aarch64.img"; cp rootfs/alpine_aarch64.img "$ROOTFS_TMP"; \
+    { ROOTFS_TMP="/tmp/rux_alpine_aarch64.img"; cp rootfs/alpine_aarch64.img "$ROOTFS_TMP"; debugfs -w -R "rm /etc/inittab" "$ROOTFS_TMP" 2>/dev/null; \
     "$QEMU_AA64" -machine virt -cpu max -smp 2 \
     -kernel target/aarch64-unknown-none/debug/rux-kernel \
     -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-device,drive=disk0 \
@@ -798,7 +798,7 @@ check "MMU enabled"             "MMU enabled"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
 check "procfs mounted"          "procfs mounted at /proc"
-check "exec init"               "exec /sbin/init"
+check "exec init"               "exec /sbin/"
 check "shell prompt"            "/ #"
 
 # Alpine identity

@@ -41,6 +41,7 @@ exec ${QEMU} \
   ${INITRD_ARGS} \
   ${DISK_ARGS} \
   ${NET_ARGS} \
+  -append "init=/sbin/init" \
   -serial mon:stdio \
   -display none \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \

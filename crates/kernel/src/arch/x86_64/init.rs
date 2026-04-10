@@ -647,7 +647,7 @@ pub fn x86_64_init(multiboot_info: usize) {
             initrd: initrd_info,
             procfs: &mut *(&raw mut PROCFS),
             log: console::write_str,
-            cmdline: b"",     // TODO: parse multiboot command line
+            cmdline: super::multiboot::get_cmdline(multiboot_info),
             virtio_mmio_base: 0, // x86_64 virtio-mmio not yet mapped
         });
     }

@@ -10,7 +10,7 @@ struct MultibootInfo {
     mem_lower: u32,     // KB of lower memory (below 1MB)
     mem_upper: u32,     // KB of upper memory (above 1MB)
     _boot_device: u32,
-    _cmdline: u32,
+    pub cmdline: u32,
     mods_count: u32,
     mods_addr: u32,
     _syms: [u32; 4],
@@ -136,6 +136,24 @@ struct MultibootModule {
 ///
 /// # Safety
 /// `info_addr` must be a valid MultibootInfo pointer.
+/// Get the kernel command line from multiboot info.
+/// Skips the kernel filename prefix and returns only the arguments.
+pub unsafe fn get_cmdline(info_addr: usize) -> &'static [u8] {
+    let info = &*(info_addr as *const MultibootInfo);
+    if info.flags & (1 << 2) == 0 || info.cmdline == 0 { return b""; }
+    let ptr = info.cmdline as *const u8;
+    let mut len = 0;
+    while *ptr.add(len) != 0 && len < 512 { len += 1; }
+    let full = core::slice::from_raw_parts(ptr, len);
+    if let Some(pos) = full.iter().position(|&b| b == b' ') {
+        let rest = &full[pos + 1..];
+        let start = rest.iter().position(|&b| b != b' ').unwrap_or(rest.len());
+        &rest[start..]
+    } else {
+        b""
+    }
+}
+
 pub unsafe fn get_initrd(info_addr: usize) -> Option<(usize, usize)> {
     let info = &*(info_addr as *const MultibootInfo);
 

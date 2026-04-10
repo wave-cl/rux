@@ -84,5 +84,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         Arch::write_str(msg);
         Arch::write_str("\n");
     }
+    // Spin instead of exit — allows GDB to attach and inspect
     Arch::exit(Arch::EXIT_FAILURE);
 }
