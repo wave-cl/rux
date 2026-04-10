@@ -159,18 +159,7 @@ impl FileSystem for DevFs {
         match ino {
             INO_NULL => Ok(buf.len()),
             INO_FULL => Err(VfsError::NoSpace), // /dev/full: always ENOSPC
-            INO_CONSOLE | INO_TTY => {
-                // Write to serial console — devfs path for programs that
-                // open /dev/console directly (not via is_console fd flag)
-                #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-                unsafe {
-                    use rux_arch::ConsoleOps;
-                    // Can't call Arch::write_bytes from rux-fs crate, so just
-                    // return success. The is_console fd flag in the syscall
-                    // layer handles actual serial output.
-                }
-                Ok(buf.len())
-            }
+            INO_CONSOLE | INO_TTY => Ok(buf.len()),
             _ => Err(VfsError::NotSupported),
         }
     }
