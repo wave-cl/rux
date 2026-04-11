@@ -468,7 +468,7 @@ impl ProcFs {
     /// Format: size resident shared text lib data dt
     fn gen_pid_statm(&self, pid: u64, buf: &mut [u8]) -> usize {
         let info = (self.get_task_info)(pid as u32);
-        let used = if info.rss_pages > 0 { info.rss_pages as usize } else { 64 };
+        let used = if info.rss_pages > 0 && info.rss_pages <= 65536 { info.rss_pages as usize } else { 64 };
         let mut pos = 0;
         pos += fmt_u64(&mut buf[pos..], used as u64); // size
         buf[pos] = b' '; pos += 1;
@@ -484,7 +484,7 @@ impl ProcFs {
     /// Generate /proc/[pid]/status — human-readable
     fn gen_pid_status(&self, pid: u64, buf: &mut [u8]) -> usize {
         let info = (self.get_task_info)(pid as u32);
-        let used_kb = if info.rss_pages > 0 { info.rss_pages as usize * 4 } else { 256 };
+        let used_kb = if info.rss_pages > 0 && info.rss_pages <= 65536 { info.rss_pages as usize * 4 } else { 256 };
 
         // Real process name
         let mut cmdline_buf = [0u8; 128];
