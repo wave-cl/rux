@@ -301,18 +301,25 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
             return if len == 0 { 0 } else { -14 }; // -EFAULT
         }
 
-        // Try to read directly — the filesystem handles EOF via offset check.
-        // For dynamic files (procfs), the content is regenerated each read,
-        // so stat-based size checks would race and prevent EOF detection.
-        let user_buf = core::slice::from_raw_parts_mut(buf, len);
+        // Get file size
+        let mut stat = core::mem::zeroed::<InodeStat>();
+        if fs.stat(f.ino, &mut stat).is_err() {
+            return -5; // -EIO
+        }
+        let is_char_dev = stat.mode & 0xF000 == 0x2000; // S_IFCHR
+        let size = stat.size as usize;
+        if !is_char_dev && f.offset >= size {
+            return 0; // EOF (skip for character devices — they generate data)
+        }
+
+        let to_read = if is_char_dev { len } else { len.min(size - f.offset) };
+        let user_buf = core::slice::from_raw_parts_mut(buf, to_read);
         match fs.read(f.ino, f.offset as u64, user_buf) {
-            Ok(0) => 0, // EOF
             Ok(n) => {
                 f.offset += n;
                 n as isize
             }
-            Err(crate::VfsError::IsADirectory) => -21, // -EISDIR
-            Err(_) => -5, // -EIO
+            Err(_) => -5,
         }
     }
 }
