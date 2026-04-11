@@ -463,7 +463,16 @@ fn strace_log(sc: &Syscall, a0: usize, a1: usize, _a2: usize, _a3: usize, _a4: u
             // Use the serial writer directly to avoid lock contention
             let mut w = crate::tty::SerialWriter;
             if level >= 2 {
-                let _ = write!(w, "[strace] pid={} {}({:#x}, {:#x}) = {}\n", pid, name, a0, a1, result);
+                // For open/openat, print the path string on failure
+                let is_open = matches!(sc, Syscall::Open | Syscall::OpenAt);
+                if is_open && result < 0 {
+                    let path_ptr = if matches!(sc, Syscall::OpenAt) { a1 } else { a0 };
+                    let path = unsafe { crate::uaccess::read_user_cstr(path_ptr) };
+                    let pstr = core::str::from_utf8(path).unwrap_or("?");
+                    let _ = write!(w, "[strace] pid={} {}(\"{}\") = {}\n", pid, name, pstr, result);
+                } else {
+                    let _ = write!(w, "[strace] pid={} {}({:#x}, {:#x}) = {}\n", pid, name, a0, a1, result);
+                }
             } else {
                 let _ = write!(w, "[strace] pid={} {} = {}\n", pid, name, result);
             }

@@ -79,8 +79,9 @@ const PID_CWD_BASE: InodeId = 8500;   // /proc/[pid]/cwd (symlink)
 const PID_ROOT_BASE: InodeId = 8600;  // /proc/[pid]/root (symlink)
 const PID_LIMITS_BASE: InodeId = 8700; // /proc/[pid]/limits
 const PID_IO_BASE: InodeId = 8800;    // /proc/[pid]/io
+const PID_TASK_DIR_BASE: InodeId = 8900; // /proc/[pid]/task directory
 
-const PID_SUBENTRIES: [(&[u8], InodeId); 16] = [
+const PID_SUBENTRIES: [(&[u8], InodeId); 17] = [
     (b"stat", PID_STAT_BASE),
     (b"cmdline", PID_CMDLINE_BASE),
     (b"statm", PID_STATM_BASE),
@@ -97,10 +98,12 @@ const PID_SUBENTRIES: [(&[u8], InodeId); 16] = [
     (b"root", PID_ROOT_BASE),
     (b"limits", PID_LIMITS_BASE),
     (b"io", PID_IO_BASE),
+    (b"task", PID_TASK_DIR_BASE),
 ];
 
 fn is_pid_dir(ino: InodeId) -> bool { ino >= PID_DIR_BASE && ino < PID_STAT_BASE }
 fn is_pid_fd_dir(ino: InodeId) -> bool { ino >= PID_FD_DIR_BASE && ino < PID_FD_DIR_BASE + 100 }
+fn is_pid_task_dir(ino: InodeId) -> bool { ino >= PID_TASK_DIR_BASE && ino < PID_TASK_DIR_BASE + 100 }
 fn is_pid_exe(ino: InodeId) -> bool { ino >= PID_EXE_BASE && ino < PID_MAPS_BASE }
 fn is_pid_cwd(ino: InodeId) -> bool { ino >= PID_CWD_BASE && ino < PID_ROOT_BASE }
 fn is_pid_root(ino: InodeId) -> bool { ino >= PID_ROOT_BASE && ino < PID_LIMITS_BASE }
@@ -691,8 +694,9 @@ impl FileSystem for ProcFs {
             buf.size = 32;
             return Ok(());
         }
-        if ino == INO_ROOT || is_pid_dir(ino) || is_pid_fd_dir(ino) {
+        if ino == INO_ROOT || is_pid_dir(ino) || is_pid_fd_dir(ino) || is_pid_task_dir(ino) {
             let pid = if is_pid_dir(ino) { pid_from_dir(ino) }
+                     else if is_pid_task_dir(ino) { ino - PID_TASK_DIR_BASE }
                      else if is_pid_fd_dir(ino) { ino - PID_FD_DIR_BASE }
                      else { 0 };
             if (is_pid_dir(ino) || is_pid_fd_dir(ino)) && !self.pid_exists(pid) {
@@ -731,7 +735,7 @@ impl FileSystem for ProcFs {
     }
 
     fn read(&self, ino: InodeId, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError> {
-        if ino == INO_ROOT || is_pid_dir(ino) || is_pid_fd_dir(ino)
+        if ino == INO_ROOT || is_pid_dir(ino) || is_pid_fd_dir(ino) || is_pid_task_dir(ino)
             || ino == INO_SYS_DIR || ino == INO_SYS_KERNEL_DIR || ino == INO_SYS_VM_DIR
             || ino == INO_SYS_K_RANDOM_DIR || ino == INO_NET_DIR
         {
@@ -772,6 +776,17 @@ impl FileSystem for ProcFs {
             for &(entry_name, base) in &PID_SUBENTRIES {
                 if entry_name == name_bytes {
                     return Ok(base + pid);
+                }
+            }
+            return Err(VfsError::NotFound);
+        }
+
+        // /proc/[pid]/task/N — thread directories (single-threaded: only has PID itself)
+        if is_pid_task_dir(dir) {
+            let pid = dir - PID_TASK_DIR_BASE;
+            if let Some(tid) = parse_u64(name_bytes) {
+                if self.pid_exists(tid) {
+                    return Ok(PID_DIR_BASE + tid); // Reuse PID dir for thread entries
                 }
             }
             return Err(VfsError::NotFound);
@@ -872,10 +887,24 @@ impl FileSystem for ProcFs {
             buf.ino = base + pid;
             buf.kind = if base == PID_EXE_BASE || base == PID_CWD_BASE || base == PID_ROOT_BASE {
                            InodeType::Symlink
-                       } else if base == PID_FD_DIR_BASE { InodeType::Directory }
+                       } else if base == PID_FD_DIR_BASE || base == PID_TASK_DIR_BASE { InodeType::Directory }
                        else { InodeType::File };
             buf.name_len = name.len() as u8;
             buf.name[..name.len()].copy_from_slice(name);
+            return Ok(true);
+        }
+
+        // /proc/[pid]/task — list threads (single-threaded: just the PID itself)
+        if is_pid_task_dir(dir) {
+            let pid = dir - PID_TASK_DIR_BASE;
+            if !self.pid_exists(pid) { return Err(VfsError::NotFound); }
+            if offset >= 1 { return Ok(false); } // only 1 "thread"
+            buf.ino = PID_DIR_BASE + pid;
+            buf.kind = InodeType::Directory;
+            let mut name_buf = [0u8; 10];
+            let n = fmt_u64(&mut name_buf, pid);
+            buf.name_len = n as u8;
+            buf.name[..n].copy_from_slice(&name_buf[..n]);
             return Ok(true);
         }
 
