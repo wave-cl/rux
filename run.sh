@@ -42,7 +42,8 @@ exec ${QEMU} \
   ${DISK_ARGS} \
   ${NET_ARGS} \
   -append "init=/sbin/init" \
-  -serial mon:stdio \
+  -chardev stdio,id=char0,logfile=/tmp/rux_run_serial.log \
+  -serial chardev:char0 \
   -display none \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
   -no-reboot \
