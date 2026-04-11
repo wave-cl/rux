@@ -4,11 +4,11 @@ use rux_arch::ConsoleOps;
 use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 
-const O_CREAT: usize = 0x40;
-const O_EXCL: usize = 0x80;
-const O_APPEND: usize = 0x400;
+const O_CREAT: usize = rux_fs::O_CREAT as usize;
+const O_EXCL: usize = rux_fs::O_EXCL as usize;
+const O_APPEND: usize = rux_fs::O_APPEND as usize;
 #[allow(dead_code)]
-const O_NONBLOCK: usize = 0x800;
+const O_NONBLOCK: usize = rux_fs::O_NONBLOCK as usize;
 
 use rux_arch::ArchInfo;
 const O_DIRECTORY: usize = Arch::O_DIRECTORY;
@@ -120,7 +120,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
                     crate::pty::slave_read(pty_id, dst)
                 };
                 if r != crate::errno::EAGAIN { return r; }
-                if (*fdt::fd_table())[fd].flags & 0o4000 != 0 { return crate::errno::EAGAIN; }
+                if (*fdt::fd_table())[fd].flags & rux_fs::O_NONBLOCK as u32 != 0 { return crate::errno::EAGAIN; }
                 use rux_arch::TimerOps;
                 if crate::arch::Arch::ticks() >= deadline { return crate::errno::EAGAIN; }
                 // Sleep until woken (pipe write to PTY, or timeout)
@@ -822,9 +822,9 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                 unsafe {
                     if let Some(f) = fdt::get_fd_mut(_fd) {
                         if val != 0 {
-                            f.flags |= 0o4000; // O_NONBLOCK
+                            f.flags |= rux_fs::O_NONBLOCK as u32; // O_NONBLOCK
                         } else {
-                            f.flags &= !0o4000;
+                            f.flags &= !rux_fs::O_NONBLOCK as u32;
                         }
                     }
                 }

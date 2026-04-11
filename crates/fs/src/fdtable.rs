@@ -24,8 +24,8 @@ pub struct PipeFns {
     pub alloc: fn() -> Result<u8, isize>,
 }
 
-/// FD_CLOEXEC — close this fd on exec.
-pub const FD_CLOEXEC: u8 = 1;
+// Re-export FD_CLOEXEC from parent for backward compatibility.
+pub use crate::FD_CLOEXEC;
 
 #[derive(Clone, Copy)]
 pub struct OpenFile {
@@ -136,17 +136,17 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
             if !(*fd_table())[fd].active {
                 let mut offset = 0usize;
                 // O_APPEND: start at end of file
-                if flags & 0x400 != 0 {
+                if flags & crate::O_APPEND != 0 {
                     let mut stat = core::mem::zeroed::<InodeStat>();
                     if fs.stat(ino, &mut stat).is_ok() {
                         offset = stat.size as usize;
                     }
                 }
                 // O_TRUNC: truncate file to 0
-                if flags & 0x200 != 0 {
+                if flags & crate::O_TRUNC != 0 {
                     let _ = fs.truncate(ino, 0);
                 }
-                let fd_flags = if flags & 0o2000000 != 0 { FD_CLOEXEC } else { 0 }; // O_CLOEXEC
+                let fd_flags = if flags & crate::O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
                 (*fd_table())[fd] = OpenFile {
                     ino: ino as u64, offset, flags, fd_flags, active: true, is_console: false,
                     is_pipe: false, pipe_id: 0, pipe_write: false,

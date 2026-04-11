@@ -16,6 +16,20 @@ pub const PATH_MAX: usize = 4096;
 pub const NAME_MAX: usize = 255;
 pub const SYMLOOP_MAX: usize = 8;
 
+// ── Open flags (O_*) — raw u32 values for kernel code ──────────────────
+
+pub const O_RDONLY: u32     = 0;
+pub const O_WRONLY: u32     = 1;
+pub const O_RDWR: u32       = 2;
+pub const O_ACCMODE: u32    = 3;
+pub const O_CREAT: u32      = 0o100;
+pub const O_EXCL: u32       = 0o200;
+pub const O_TRUNC: u32      = 0o1000;
+pub const O_APPEND: u32     = 0o2000;
+pub const O_NONBLOCK: u32   = 0o4000;
+pub const O_CLOEXEC: u32    = 0o2000000;
+pub const FD_CLOEXEC: u8    = 1;
+
 // ── File type constants (S_IFMT) ────────────────────────────────────────
 
 pub const S_IFMT: u32   = 0o170000;
