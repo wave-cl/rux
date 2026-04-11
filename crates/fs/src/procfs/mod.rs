@@ -720,8 +720,10 @@ impl FileSystem for ProcFs {
             }
             buf.mode = S_IFREG | 0o444;
             buf.nlink = 1;
-            let mut tmp = [0u8; 1024];
-            buf.size = self.generate(ino, &mut tmp) as u64;
+            // Report a fixed size so sys_read_fd's stat-based EOF check
+            // never fires before the actual read. The read() generates
+            // content dynamically and returns Ok(0) at real EOF.
+            buf.size = 4096;
             return Ok(());
         }
 
@@ -735,18 +737,13 @@ impl FileSystem for ProcFs {
         {
             return Err(VfsError::IsADirectory);
         }
-        // Procfs files are dynamically generated. Content may vary between
-        // stat() and read() calls (ticks, process state). To prevent infinite
-        // read loops (cat never seeing EOF), we generate content at offset 0
-        // and return EOF for any nonzero offset, matching Linux seq_file behavior.
-        if offset > 0 {
-            return Ok(0);
-        }
         let mut tmp = [0u8; 2048];
         let total = self.generate(ino, &mut tmp);
         if total == 0 { return Err(VfsError::NotFound); }
-        let to_copy = total.min(buf.len());
-        buf[..to_copy].copy_from_slice(&tmp[..to_copy]);
+        let off = offset as usize;
+        if off >= total { return Ok(0); }
+        let to_copy = (total - off).min(buf.len());
+        buf[..to_copy].copy_from_slice(&tmp[off..off + to_copy]);
         Ok(to_copy)
     }
 
