@@ -32,82 +32,10 @@ pub fn sys_mount(
         // Mount based on fstype
         if fstype == b"proc" {
             // Create a new ProcFs instance
-            static mut MOUNT_PROCFS: rux_fs::procfs::ProcFs = rux_fs::procfs::ProcFs::new(
-                || {
-                    use rux_arch::TimerOps;
-                    crate::arch::Arch::ticks()
-                },
+            static mut MOUNT_PROCFS: rux_fs::procfs::ProcFs = crate::procfs_callbacks::new_procfs(
+                || { use rux_arch::TimerOps; crate::arch::Arch::ticks() },
                 || 16384,
-                || unsafe {
-                    use rux_mm::FrameAllocator;
-                    crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK)
-                },
-                |buf| unsafe {
-                    use crate::task_table::*;
-                    let mut count = 0;
-                    for i in 0..MAX_PROCS {
-                        if TASK_TABLE[i].active && TASK_TABLE[i].pid > 0
-                            && TASK_TABLE[i].state != TaskState::Free
-                            && TASK_TABLE[i].state != TaskState::Zombie
-                            && count < buf.len()
-                        {
-                            buf[count] = TASK_TABLE[i].pid;
-                            count += 1;
-                        }
-                    }
-                    count
-                },
-                || crate::task_table::current_pid(),
-                |pid, buf| unsafe {
-                    use crate::task_table::*;
-                    for i in 0..MAX_PROCS {
-                        if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                            let len = (TASK_TABLE[i].cmdline_len as usize).min(buf.len());
-                            buf[..len].copy_from_slice(&TASK_TABLE[i].cmdline[..len]);
-                            return len;
-                        }
-                    }
-                    0
-                },
-                |pid| unsafe {
-                    use crate::task_table::*;
-                    for i in 0..MAX_PROCS {
-                        if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                            return rux_fs::procfs::TaskInfo {
-                                pid: TASK_TABLE[i].pid, ppid: TASK_TABLE[i].ppid,
-                                pgid: TASK_TABLE[i].pgid, sid: TASK_TABLE[i].sid,
-                                uid: TASK_TABLE[i].uid, gid: TASK_TABLE[i].gid,
-                                state: TASK_TABLE[i].state as u8, threads: 1,
-                                rss_pages: TASK_TABLE[i].rss_pages,
-                                brk_addr: TASK_TABLE[i].program_brk,
-                            };
-                        }
-                    }
-                    rux_fs::procfs::TaskInfo::default()
-                },
-                || crate::idle::idle_ticks(),
-                |pid, buf| unsafe {
-                    use crate::task_table::*;
-                    for i in 0..MAX_PROCS {
-                        if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                            let len = TASK_TABLE[i].fs_ctx.cwd_path_len.min(buf.len());
-                            buf[..len].copy_from_slice(&TASK_TABLE[i].fs_ctx.cwd_path[..len]);
-                            return len;
-                        }
-                    }
-                    0
-                },
-                |pid, buf| unsafe {
-                    use crate::task_table::*;
-                    for i in 0..MAX_PROCS {
-                        if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                            let len = (TASK_TABLE[i].environ_len as usize).min(buf.len());
-                            buf[..len].copy_from_slice(&TASK_TABLE[i].environ[..len]);
-                            return len;
-                        }
-                    }
-                    0
-                },
+                || unsafe { use rux_mm::FrameAllocator; crate::kstate::alloc().available_frames(rux_mm::PageSize::FourK) },
             );
             let _ = vfs.mount(dir_ino, name, rux_fs::vfs::MountedFs::Proc(&raw mut MOUNT_PROCFS));
             0

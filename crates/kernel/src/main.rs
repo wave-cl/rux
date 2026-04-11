@@ -20,6 +20,7 @@ mod percpu;
 mod fork;
 mod idle;
 mod wait;
+mod procfs_callbacks;
 mod errno;
 
 #[cfg(feature = "native")]
