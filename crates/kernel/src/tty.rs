@@ -49,26 +49,6 @@ pub fn serial_has_data() -> bool {
     SERIAL_TAIL.load(Ordering::Relaxed) != SERIAL_HEAD.load(Ordering::Relaxed)
 }
 
-/// Flag set by serial IRQ when new data arrives, cleared by poll after reporting POLLIN.
-/// This prevents poll from repeatedly reporting POLLIN for the same data
-/// (e.g., terminal escape sequence responses that ncurses hasn't consumed yet).
-static SERIAL_INPUT_EVENT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-
-/// Signal that new serial input has arrived (called from serial IRQ handler).
-pub fn serial_notify_input() {
-    SERIAL_INPUT_EVENT.store(true, core::sync::atomic::Ordering::Release);
-}
-
-/// Check if new serial input has arrived since last poll, and clear the flag.
-/// Used by poll() to avoid busy-looping on stale terminal responses.
-pub fn serial_poll_check() -> bool {
-    // If new data arrived (IRQ set the flag), consume the flag and report ready.
-    if SERIAL_INPUT_EVENT.swap(false, core::sync::atomic::Ordering::AcqRel) {
-        return true;
-    }
-    // No new IRQ since last check — don't report ready even if buffer has old data.
-    false
-}
 
 /// Flush all data from the serial ring buffer.
 pub fn serial_flush() {
@@ -306,19 +286,7 @@ impl Tty {
         }
     }
 
-    /// Check if the TTY has input available for poll (event-based).
-    /// Returns true only if new data arrived since the last poll check,
-    /// preventing busy-loops on stale terminal escape sequence responses.
-    pub fn has_input_for_poll(&self) -> bool {
-        if self.line_len > 0 { return true; }
-        if serial_poll_check() { return true; }
-        #[cfg(target_arch = "aarch64")]
-        if unsafe { crate::arch::aarch64::console::hw_has_data() } { return true; }
-        false
-    }
-
-    /// Check if the TTY has input available (direct buffer check).
-    /// Used by read paths that need to know if data is in the buffer.
+    /// Check if the TTY has input available (non-blocking).
     pub fn has_input(&self) -> bool {
         if self.line_len > 0 { return true; }
         if serial_has_data() { return true; }
@@ -523,21 +491,29 @@ impl Tty {
         let vtime = t.vtime();
         let ptr = buf;
 
-        // Case 1: VMIN=0, VTIME=0 → pure non-blocking
+        // Case 1: VMIN=0, VTIME=0 → pure non-blocking, return all available
         if vmin == 0 && vtime == 0 {
-            if let Some(b) = serial_pop() {
-                let b = t.input_process(b).unwrap_or(b);
-                *ptr = b;
-                return 1;
+            let mut got = 0usize;
+            while got < len {
+                if let Some(raw) = serial_pop() {
+                    if let Some(b) = t.input_process(raw) {
+                        *ptr.add(got) = b;
+                        got += 1;
+                    }
+                } else {
+                    #[cfg(target_arch = "aarch64")]
+                    if A::has_byte() {
+                        let raw = A::read_byte();
+                        if let Some(b) = t.input_process(raw) {
+                            *ptr.add(got) = b;
+                            got += 1;
+                        }
+                        continue;
+                    }
+                    break;
+                }
             }
-            #[cfg(target_arch = "aarch64")]
-            if A::has_byte() {
-                let b = A::read_byte();
-                let b = t.input_process(b).unwrap_or(b);
-                *ptr = b;
-                return 1;
-            }
-            return 0;
+            return got as isize;
         }
 
         // Case 2: VMIN=0, VTIME>0 → deadline, return whatever collected
