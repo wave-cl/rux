@@ -506,13 +506,15 @@ impl ProcFs {
         let nlen = name.len().min(15);
         buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
         pos += nlen;
-        pos += copy_str(&mut buf[pos..], b"\nState:\t");
+        pos += copy_str(&mut buf[pos..], b"\nUmask:\t0022\nState:\t");
         pos += copy_str(&mut buf[pos..], state_str);
-        pos += copy_str(&mut buf[pos..], b"\nPid:\t");
+        pos += copy_str(&mut buf[pos..], b"\nTgid:\t");
+        pos += fmt_u64(&mut buf[pos..], pid); // Tgid = pid (no threads)
+        pos += copy_str(&mut buf[pos..], b"\nNgid:\t0\nPid:\t");
         pos += fmt_u64(&mut buf[pos..], pid);
-        pos += copy_str(&mut buf[pos..], b"\nPpid:\t");
+        pos += copy_str(&mut buf[pos..], b"\nPPid:\t"); // Note: PPid not Ppid
         pos += fmt_u64(&mut buf[pos..], info.ppid as u64);
-        pos += copy_str(&mut buf[pos..], b"\nUid:\t");
+        pos += copy_str(&mut buf[pos..], b"\nTracerPid:\t0\nUid:\t");
         pos += fmt_u64(&mut buf[pos..], info.uid as u64);
         buf[pos] = b'\t'; pos += 1;
         pos += fmt_u64(&mut buf[pos..], info.uid as u64);
@@ -520,13 +522,21 @@ impl ProcFs {
         pos += fmt_u64(&mut buf[pos..], info.gid as u64);
         buf[pos] = b'\t'; pos += 1;
         pos += fmt_u64(&mut buf[pos..], info.gid as u64);
-        pos += copy_str(&mut buf[pos..], b"\t0\t0\nVmSize:\t");
+        pos += copy_str(&mut buf[pos..], b"\t0\t0\nFDSize:\t64\nGroups:\t\nVmPeak:\t");
+        pos += fmt_u64(&mut buf[pos..], used_kb as u64);
+        pos += copy_str(&mut buf[pos..], b" kB\nVmSize:\t");
+        pos += fmt_u64(&mut buf[pos..], used_kb as u64);
+        pos += copy_str(&mut buf[pos..], b" kB\nVmLck:\t0 kB\nVmPin:\t0 kB\nVmHWM:\t");
         pos += fmt_u64(&mut buf[pos..], used_kb as u64);
         pos += copy_str(&mut buf[pos..], b" kB\nVmRSS:\t");
         pos += fmt_u64(&mut buf[pos..], used_kb as u64);
-        pos += copy_str(&mut buf[pos..], b" kB\nThreads:\t");
+        pos += copy_str(&mut buf[pos..], b" kB\nRssAnon:\t");
+        pos += fmt_u64(&mut buf[pos..], used_kb as u64);
+        pos += copy_str(&mut buf[pos..], b" kB\nRssFile:\t0 kB\nRssShmem:\t0 kB\nVmData:\t");
+        pos += fmt_u64(&mut buf[pos..], used_kb as u64);
+        pos += copy_str(&mut buf[pos..], b" kB\nVmStk:\t132 kB\nVmExe:\t4 kB\nVmLib:\t0 kB\nVmPTE:\t4 kB\nVmSwap:\t0 kB\nThreads:\t");
         pos += fmt_u64(&mut buf[pos..], info.threads.max(1) as u64);
-        pos += copy_str(&mut buf[pos..], b"\n");
+        pos += copy_str(&mut buf[pos..], b"\nSigQ:\t0/63704\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\nSigCgt:\t0000000000000000\nCapInh:\t0000000000000000\nCapPrm:\t000001ffffffffff\nCapEff:\t000001ffffffffff\nCapBnd:\t000001ffffffffff\nCapAmb:\t0000000000000000\nCpus_allowed:\tff\nCpus_allowed_list:\t0-7\nvoluntary_ctxt_switches:\t0\nnonvoluntary_ctxt_switches:\t0\n");
         pos
     }
 
