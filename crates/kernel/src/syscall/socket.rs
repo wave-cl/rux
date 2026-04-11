@@ -7,19 +7,9 @@ const AF_INET: u32 = 2;
 /// Sleep until I/O event (network activity) — like poll's WaitingForPoll.
 /// Used by blocking socket operations (connect, accept, send, recv).
 unsafe fn net_wait() {
-    let task_idx = crate::task_table::current_task_idx();
-    crate::task_table::TASK_TABLE[task_idx].state =
-        crate::task_table::TaskState::WaitingForPoll;
-    // Wake after 30s at most (timeout safety)
     use rux_arch::TimerOps;
-    crate::task_table::TASK_TABLE[task_idx].wake_at =
-        crate::arch::Arch::ticks() + 30_000;
-    crate::task_table::poll_wait_register(task_idx);
-    let sched = crate::scheduler::get();
-    sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-    sched.dequeue_current();
-    sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
-    sched.schedule();
+    let dl = crate::arch::Arch::ticks() + 30_000;
+    crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, dl);
 }
 const SOCK_STREAM: u32 = 1;
 const SOCK_DGRAM: u32 = 2;

@@ -805,17 +805,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     let delta_ms = (abs_ns - now_ns) / 1_000_000;
                     if delta_ms == 0 { return 0; }
                     let deadline = now_ticks + delta_ms;
-                    // Use scheduler sleep — idle task handles HLT
-                    let idx = crate::task_table::current_task_idx();
-                    crate::task_table::TASK_TABLE[idx].wake_at = deadline;
-                    crate::task_table::TASK_TABLE[idx].state =
-                        crate::task_table::TaskState::Sleeping;
-                    let sched = crate::scheduler::get();
-                    sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
-                    sched.dequeue_current();
-                    sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
-                    sched.schedule();
-                    if crate::arch::Arch::ticks() < deadline {
+                    if let crate::wait::WakeReason::Signal = crate::wait::block_until(
+                        crate::task_table::TaskState::Sleeping, deadline,
+                    ) {
                         return crate::errno::EINTR;
                     }
                 }
@@ -917,20 +909,11 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             // Wait for a signal from `set`. For now: sleep for the timeout duration
             // then return EAGAIN (no signal pending). This prevents busy-wait loops.
             if a2 != 0 {
-                unsafe {
+                {
                     let ms = helpers::timespec_to_ms(a2, 5000) as u64;
-                    // Sleep for the specified duration
-                    let task_idx = crate::task_table::current_task_idx();
                     use rux_arch::TimerOps;
-                    crate::task_table::TASK_TABLE[task_idx].state =
-                        crate::task_table::TaskState::Sleeping;
-                    crate::task_table::TASK_TABLE[task_idx].wake_at =
-                        crate::arch::Arch::ticks() + ms as u64;
-                    let sched = crate::scheduler::get();
-                    sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-                    sched.dequeue_current();
-                    sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
-                    sched.schedule();
+                    let dl = unsafe { crate::arch::Arch::ticks() } + ms;
+                    unsafe { crate::wait::block_until(crate::task_table::TaskState::Sleeping, dl); }
                 }
             }
             crate::errno::EAGAIN
@@ -1045,20 +1028,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         },
         Syscall::Setdomainname | Syscall::Sethostname => 0, // stubs
         Syscall::Pause => {
-            // Suspend until signal — sleep properly
-            unsafe {
-                let task_idx = crate::task_table::current_task_idx();
-                use rux_arch::TimerOps;
-                crate::task_table::TASK_TABLE[task_idx].state =
-                    crate::task_table::TaskState::Sleeping;
-                crate::task_table::TASK_TABLE[task_idx].wake_at =
-                    crate::arch::Arch::ticks() + 60_000; // 60s, then re-enter
-                let sched = crate::scheduler::get();
-                sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-                sched.dequeue_current();
-                sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
-                sched.schedule();
-            }
+            use rux_arch::TimerOps;
+            let dl = unsafe { crate::arch::Arch::ticks() } + 60_000;
+            unsafe { crate::wait::block_until(crate::task_table::TaskState::Sleeping, dl); }
             crate::errno::EINTR
         }
         Syscall::Getitimer => unsafe {

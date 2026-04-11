@@ -276,15 +276,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
             }
 
             // Block until a child exits.
-            TASK_TABLE[current_task_idx()].state = TaskState::WaitingForChild;
-            {
-                let sched = crate::scheduler::get();
-                // Mark Interruptible so schedule() doesn't re-enqueue the parent.
-                sched.tasks[current_task_idx()].entity.state = rux_sched::TaskState::Interruptible;
-                sched.dequeue_current();
-                sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
-                sched.schedule(); // returns when woken by child's exit()
-            }
+            crate::wait::block_until(TaskState::WaitingForChild, 0);
         }
     }
 }
@@ -383,25 +375,10 @@ pub fn nanosleep(req_ptr: usize) -> isize {
         if ms == 0 { return 0; }
 
         use rux_arch::TimerOps;
-        let idx = crate::task_table::current_task_idx();
         let deadline = Arch::ticks() + ms;
-
-        // Set sleep deadline and mark task as sleeping
-        crate::task_table::TASK_TABLE[idx].wake_at = deadline;
-        crate::task_table::TASK_TABLE[idx].state = crate::task_table::TaskState::Sleeping;
-
-        // Yield to scheduler — dequeue self so schedule() switches to idle.
-        // Timer ISR calls wake_sleepers() which re-enqueues us when deadline passes.
-        let sched = crate::scheduler::get();
-        sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
-        sched.dequeue_current();
-        sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
-        sched.schedule();
-
-        // Woke up — check why
-        let now = Arch::ticks();
-        if now < deadline {
-            // Woken early (by signal) — return EINTR
+        if let crate::wait::WakeReason::Signal = crate::wait::block_until(
+            crate::task_table::TaskState::Sleeping, deadline,
+        ) {
             return crate::errno::EINTR;
         }
     }

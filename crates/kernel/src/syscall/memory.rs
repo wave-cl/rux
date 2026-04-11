@@ -38,16 +38,9 @@ pub(crate) unsafe fn yield_1ms() {
 
     if others_ready {
         // Multiple tasks: yield via scheduler so they can run
-        let task_idx = crate::task_table::current_task_idx();
         use rux_arch::TimerOps;
-        let wake_at = crate::arch::Arch::ticks() + 1;
-        crate::task_table::TASK_TABLE[task_idx].state = crate::task_table::TaskState::Sleeping;
-        crate::task_table::TASK_TABLE[task_idx].wake_at = wake_at;
-        let sched = crate::scheduler::get();
-        sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-        sched.dequeue_current();
-        sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
-        sched.schedule();
+        let dl = unsafe { crate::arch::Arch::ticks() } + 1;
+        unsafe { crate::wait::block_until(crate::task_table::TaskState::Sleeping, dl); }
     } else {
         // Single task: HLT until next interrupt (~1ms timer tick)
         use rux_arch::HaltOps;
@@ -298,25 +291,13 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
             }
         }
 
-        // Sleep on poll wait queue until I/O event or timeout
-        unsafe {
-            let task_idx = crate::task_table::current_task_idx();
-            crate::task_table::TASK_TABLE[task_idx].state =
-                crate::task_table::TaskState::WaitingForPoll;
+        // Sleep until I/O, timeout, or signal.
+        {
             use rux_arch::TimerOps;
-            crate::task_table::TASK_TABLE[task_idx].wake_at =
-                crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64;
-            crate::task_table::poll_wait_register(task_idx);
-            let sched = crate::scheduler::get();
-            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-            sched.dequeue_current();
-            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
-            sched.schedule();
-
-            // Woken — check if an unblocked signal is pending (return EINTR so post_syscall delivers it)
-            let hot = &crate::task_table::TASK_TABLE[task_idx].signal_hot;
-            let deliverable = hot.pending.0 & !hot.blocked.0;
-            if deliverable != 0 {
+            let dl = unsafe { crate::arch::Arch::ticks() } + timeout_ms.min(30_000) as u64;
+            if let crate::wait::WakeReason::Signal = unsafe {
+                crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, dl)
+            } {
                 return crate::errno::EINTR;
             }
         }
@@ -1097,25 +1078,17 @@ fn futex_wait(uaddr: usize, expected: u32, timeout_ptr: usize) -> isize {
         };
 
         // Block until woken by FUTEX_WAKE or timeout
-        let idx = current_task_idx();
-        TASK_TABLE[idx].state = TaskState::WaitingForFutex;
-        TASK_TABLE[idx].futex_addr = uaddr;
-        if deadline > 0 { TASK_TABLE[idx].wake_at = deadline; }
-        let sched = crate::scheduler::get();
-        sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
-        sched.dequeue_current();
-        sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
-        sched.schedule();
-
-        // Check if we were woken by timeout (wake_sleepers sets state=Ready
-        // but doesn't clear futex_addr — check if wake_at expired)
-        if deadline > 0 {
-            use rux_arch::TimerOps;
-            if crate::arch::Arch::ticks() >= deadline {
-                return -110; // ETIMEDOUT
+        TASK_TABLE[current_task_idx()].futex_addr = uaddr;
+        match crate::wait::block_until(TaskState::WaitingForFutex, deadline) {
+            crate::wait::WakeReason::Signal => crate::errno::EINTR,
+            crate::wait::WakeReason::Completed => {
+                if deadline > 0 {
+                    use rux_arch::TimerOps;
+                    if crate::arch::Arch::ticks() >= deadline { return -110; } // ETIMEDOUT
+                }
+                0
             }
         }
-        0
     }
 }
 
@@ -1213,27 +1186,17 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
             return ready as isize;
         }
 
-        // Sleep on poll wait queue until I/O or timeout
-        unsafe {
-            let task_idx = crate::task_table::current_task_idx();
-            crate::task_table::TASK_TABLE[task_idx].state =
-                crate::task_table::TaskState::WaitingForPoll;
+        // Sleep until I/O, timeout, or signal.
+        {
             use rux_arch::TimerOps;
-            crate::task_table::TASK_TABLE[task_idx].wake_at =
-                crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64;
-            crate::task_table::poll_wait_register(task_idx);
-            let sched = crate::scheduler::get();
-            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-            sched.dequeue_current();
-            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
-            sched.schedule();
-
-            // Woken — check if an unblocked signal is pending (return EINTR)
-            let hot = &crate::task_table::TASK_TABLE[task_idx].signal_hot;
-            let deliverable = hot.pending.0 & !hot.blocked.0;
-            if deliverable != 0 {
-                if readfds_ptr != 0 { *(readfds_ptr as *mut u64) = 0; }
-                if writefds_ptr != 0 { *(writefds_ptr as *mut u64) = 0; }
+            let dl = unsafe { crate::arch::Arch::ticks() } + timeout_ms.min(30_000) as u64;
+            if let crate::wait::WakeReason::Signal = unsafe {
+                crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, dl)
+            } {
+                unsafe {
+                    if readfds_ptr != 0 { *(readfds_ptr as *mut u64) = 0; }
+                    if writefds_ptr != 0 { *(writefds_ptr as *mut u64) = 0; }
+                }
                 return crate::errno::EINTR;
             }
         }
@@ -1409,26 +1372,11 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             if crate::arch::Arch::ticks() >= deadline { return 0; }
         }
 
-        // Nothing ready — sleep on poll wait queue (like Linux wait_event).
-        // Woken by poll_wake_all() on I/O or wake_sleepers() on timeout.
-        unsafe {
-            let task_idx = crate::task_table::current_task_idx();
-            crate::task_table::TASK_TABLE[task_idx].state =
-                crate::task_table::TaskState::WaitingForPoll;
-            crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
-            crate::task_table::poll_wait_register(task_idx);
-            let sched = crate::scheduler::get();
-            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-            sched.dequeue_current();
-            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
-            sched.schedule();
-
-            // Woken — check if an unblocked signal is pending (return EINTR so post_syscall delivers it)
-            let hot = &crate::task_table::TASK_TABLE[task_idx].signal_hot;
-            let deliverable = hot.pending.0 & !hot.blocked.0;
-            if deliverable != 0 {
-                return crate::errno::EINTR;
-            }
+        // Nothing ready — sleep until I/O, timeout, or signal.
+        if let crate::wait::WakeReason::Signal = unsafe {
+            crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, deadline)
+        } {
+            return crate::errno::EINTR;
         }
     }
 }

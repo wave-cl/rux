@@ -124,16 +124,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
                 use rux_arch::TimerOps;
                 if crate::arch::Arch::ticks() >= deadline { return crate::errno::EAGAIN; }
                 // Sleep until woken (pipe write to PTY, or timeout)
-                let task_idx = crate::task_table::current_task_idx();
-                crate::task_table::TASK_TABLE[task_idx].state =
-                    crate::task_table::TaskState::WaitingForPoll;
-                crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
-                crate::task_table::poll_wait_register(task_idx);
-                let sched = crate::scheduler::get();
-                sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
-                sched.dequeue_current();
-                sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
-                sched.schedule();
+                crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, deadline);
             }
         }
     }
