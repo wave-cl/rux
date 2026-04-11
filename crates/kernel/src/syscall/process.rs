@@ -68,6 +68,26 @@ pub fn exit(status: i32) -> ! {
             let my_pid = TASK_TABLE[idx].pid;
             let my_sid = TASK_TABLE[idx].sid;
             if my_sid == my_pid { // session leader
+                // If this is the console session leader (child of init),
+                // trigger poweroff so "exit" in the shell shuts down the OS.
+                if TASK_TABLE[idx].ppid == 1 && my_sid == crate::tty::TTY.session_id {
+                    // Send SIGUSR2 to init (PID 1) = poweroff signal for busybox init
+                    for j in 0..MAX_PROCS {
+                        if TASK_TABLE[j].active && TASK_TABLE[j].pid == 1 {
+                            TASK_TABLE[j].signal_hot.pending =
+                                TASK_TABLE[j].signal_hot.pending.add(12); // SIGUSR2 = 12
+                            match TASK_TABLE[j].state {
+                                TaskState::Sleeping | TaskState::WaitingForPoll
+                                | TaskState::WaitingForChild => {
+                                    TASK_TABLE[j].state = TaskState::Ready;
+                                    crate::scheduler::get().wake_task(j);
+                                }
+                                _ => {}
+                            }
+                            break;
+                        }
+                    }
+                }
                 for j in 0..MAX_PROCS {
                     if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].sid == my_sid
                         && TASK_TABLE[j].state != TaskState::Zombie
