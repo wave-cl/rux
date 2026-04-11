@@ -321,7 +321,6 @@ git --version 2>&1
 git init /tmp/repo 2>/dev/null
 cd /tmp/repo && git config user.email "t@rux" && git config user.name "rux" && echo hello > f.txt && git add f.txt && GIT_PAGER=cat git commit -m "init" 2>&1 | grep -E 'master|create'
 cd /
-timeout 5 top -bn1 -d1 2>&1 | head -3
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
 exit
 CMDS
@@ -501,7 +500,7 @@ check "large stat size"      "100000"
 check "stat blksize"         "4096"
 check "fchdir"               "fchdir_ok"
 check "meminfo total"        "MemTotal:"
-check "proc status ppid"     "Ppid:"
+check "proc status ppid"     "PPid:"
 check "setsid"               "setsid_ok"
 check "getrandom 32"         "32"
 check "ftruncate"            "5"
@@ -945,7 +944,7 @@ check "large stat size"      "100000"
 check "stat blksize"         "4096"
 check "fchdir"               "fchdir_ok"
 check "meminfo total"        "MemTotal:"
-check "proc status ppid"     "Ppid:"
+check "proc status ppid"     "PPid:"
 check "setsid"               "setsid_ok"
 check "getrandom 32"         "32"
 check "ftruncate"            "5"
