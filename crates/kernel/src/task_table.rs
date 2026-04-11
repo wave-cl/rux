@@ -362,11 +362,14 @@ pub unsafe fn wake_sleepers() {
                 // One-shot: disarm
                 t.itimer_real_deadline = 0;
             }
-            // If the task is sleeping, wake it so SIGALRM can be delivered
-            if t.state == TaskState::Sleeping {
-                t.wake_at = 0;
-                t.state = TaskState::Ready;
-                crate::scheduler::get().wake_task(i);
+            // Wake the task so SIGALRM can be delivered
+            match t.state {
+                TaskState::Sleeping | TaskState::WaitingForPoll | TaskState::WaitingForChild => {
+                    t.wake_at = 0;
+                    t.state = TaskState::Ready;
+                    crate::scheduler::get().wake_task(i);
+                }
+                _ => {}
             }
         }
     }

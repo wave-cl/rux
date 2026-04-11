@@ -445,8 +445,11 @@ impl ProcFs {
         buf[pos] = b' '; pos += 1;
         pos += fmt_u64(&mut buf[pos..], rss as u64);
         pos += copy_str(&mut buf[pos..], b" 4294967295");
-        // remaining fields (zeros to fill 44 fields)
-        pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
+        // remaining fields 26-52 (zeros): startcode endcode startstack kstkesp kstkeip
+        // signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor
+        // rt_priority policy delayacct_blkio_ticks guest_time cguest_time start_data
+        // end_data start_brk arg_start arg_end env_start env_end exit_code
+        pos += copy_str(&mut buf[pos..], b" 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
         pos
     }
 
