@@ -94,9 +94,12 @@ pub unsafe fn serial_irq() {
         crate::tty::serial_push(inb(COM1));
         got_data = true;
     }
-    // Wake tasks sleeping in read_byte() / poll()
-    if got_data && crate::task_table::has_poll_waiters() {
-        crate::task_table::poll_wake_all();
+    if got_data {
+        crate::tty::serial_notify_input();
+        // Wake tasks sleeping in read_byte() / poll()
+        if crate::task_table::has_poll_waiters() {
+            crate::task_table::poll_wake_all();
+        }
     }
 }
 

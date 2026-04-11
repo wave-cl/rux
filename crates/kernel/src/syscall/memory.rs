@@ -249,7 +249,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         if crate::pipe::writers_closed(pid) { revents |= EPOLLHUP; }
                     } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].is_console {
                         let tty = &*(&raw const crate::tty::TTY);
-                        if tty.has_input() { revents |= EPOLLIN; }
+                        if tty.has_input_for_poll() { revents |= EPOLLIN; }
                     } else {
                         revents |= EPOLLIN;
                     }
@@ -1197,7 +1197,7 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
                     }
                 } else if fd < rux_fs::fdtable::MAX_FDS && unsafe { (*fdt::fd_table())[fd].is_console } {
                     let tty = unsafe { &*(&raw const crate::tty::TTY) };
-                    if tty.has_input() {
+                    if tty.has_input_for_poll() {
                         out_read |= bit;
                         ready += 1;
                     }
@@ -1394,14 +1394,14 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
                     // Console: check actual data availability for POLLIN
                     if events & 1 != 0 {
                         let tty = &*(&raw const crate::tty::TTY);
-                        if tty.has_input() { revents |= 1; }
+                        if tty.has_input_for_poll() { revents |= 1; }
                     }
                     if events & 4 != 0 { revents |= 4; } // always writable
                 } else if fd <= 2 {
                     // fd 0-2 not marked as console/pipe/socket — treat as console
                     if events & 1 != 0 {
                         let tty = &*(&raw const crate::tty::TTY);
-                        if tty.has_input() { revents |= 1; }
+                        if tty.has_input_for_poll() { revents |= 1; }
                     }
                     if events & 4 != 0 { revents |= 4; }
                 } else if f.active {
