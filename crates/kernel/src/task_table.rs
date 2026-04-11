@@ -319,19 +319,31 @@ pub fn find_task_by_pid(pid: u32) -> Option<usize> {
     }
 }
 
+/// Send a signal to a task and wake it if it's sleeping/blocked.
+/// Consolidates the repeated pattern of setting pending + waking across
+/// kill(), wake_sleepers() SIGALRM, notify_parent_child_exit() SIGCHLD, etc.
+#[inline]
+pub unsafe fn send_signal_to(task_idx: usize, signum: u8) {
+    TASK_TABLE[task_idx].signal_hot.pending =
+        TASK_TABLE[task_idx].signal_hot.pending.add(signum);
+    match TASK_TABLE[task_idx].state {
+        TaskState::Sleeping | TaskState::WaitingForPoll
+        | TaskState::WaitingForChild | TaskState::Stopped => {
+            TASK_TABLE[task_idx].state = TaskState::Ready;
+            crate::scheduler::get().wake_task(task_idx);
+        }
+        _ => {}
+    }
+}
+
 /// Notify a parent that a child has exited or been killed.
 /// Sends SIGCHLD, sets child_available, wakes parent if blocked in waitpid.
 #[inline]
 pub unsafe fn notify_parent_child_exit(child_ppid: u32, exit_status: i32) {
     if let Some(pi) = find_task_by_pid(child_ppid) {
-        let t = &mut TASK_TABLE[pi];
-        t.last_child_exit = exit_status;
-        t.child_available = true;
-        t.signal_hot.pending = t.signal_hot.pending.add(crate::errno::SIGCHLD);
-        if t.state == TaskState::WaitingForChild {
-            t.state = TaskState::Ready;
-            crate::scheduler::get().wake_task(pi);
-        }
+        TASK_TABLE[pi].last_child_exit = exit_status;
+        TASK_TABLE[pi].child_available = true;
+        send_signal_to(pi, crate::errno::SIGCHLD);
     }
 }
 
@@ -354,23 +366,12 @@ pub unsafe fn wake_sleepers() {
         }
         // Check ITIMER_REAL expiry → set pending SIGALRM (signal 14)
         if t.itimer_real_deadline > 0 && now >= t.itimer_real_deadline {
-            t.signal_hot.pending = t.signal_hot.pending.add(14); // SIGALRM
             if t.itimer_real_interval > 0 {
-                // Repeating timer: reload deadline
                 t.itimer_real_deadline = now + t.itimer_real_interval;
             } else {
-                // One-shot: disarm
                 t.itimer_real_deadline = 0;
             }
-            // Wake the task so SIGALRM can be delivered
-            match t.state {
-                TaskState::Sleeping | TaskState::WaitingForPoll | TaskState::WaitingForChild => {
-                    t.wake_at = 0;
-                    t.state = TaskState::Ready;
-                    crate::scheduler::get().wake_task(i);
-                }
-                _ => {}
-            }
+            send_signal_to(i, 14); // SIGALRM
         }
     }
 }

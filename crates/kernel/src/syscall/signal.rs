@@ -179,16 +179,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                     && check_kill_permission(i)
                 {
                     found = true;
-                    TASK_TABLE[i].signal_hot.pending =
-                        TASK_TABLE[i].signal_hot.pending.add(signum as u8);
-                    match TASK_TABLE[i].state {
-                        TaskState::Sleeping | TaskState::WaitingForChild
-                        | TaskState::WaitingForPoll => {
-                            TASK_TABLE[i].state = TaskState::Ready;
-                            crate::scheduler::get().wake_task(i);
-                        }
-                        _ => {}
-                    }
+                    send_signal_to(i, signum as u8);
                 }
             }
             return if found { 0 } else { crate::errno::ESRCH };
@@ -204,8 +195,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                     && TASK_TABLE[i].state != TaskState::Zombie
                     && check_kill_permission(i)
                 {
-                    TASK_TABLE[i].signal_hot.pending =
-                        TASK_TABLE[i].signal_hot.pending.add(signum as u8);
+                    send_signal_to(i, signum as u8);
                 }
             }
         }
@@ -302,35 +292,18 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                 return 0;
             }
 
-            // For other signals: set pending bit in target's signal_hot.
-            // The signal will be delivered when the target process next returns from a syscall.
-            TASK_TABLE[target_idx].signal_hot.pending =
-                TASK_TABLE[target_idx].signal_hot.pending.add(signum as u8);
-
             // SIGCONT: resume a stopped process, mark for WCONTINUED
             if sig == Signal::Cont {
-                if TASK_TABLE[target_idx].state == TaskState::Stopped {
-                    TASK_TABLE[target_idx].state = TaskState::Ready;
-                    TASK_TABLE[target_idx].continued = true; // WCONTINUED flag
-                    crate::scheduler::get().wake_task(target_idx);
-                    // Notify parent so waitpid(WCONTINUED) unblocks
-                    notify_parent_child_exit(
-                        TASK_TABLE[target_idx].ppid,
-                        0xFFFF, // continued status
-                    );
+                send_signal_to(target_idx, signum as u8);
+                if TASK_TABLE[target_idx].continued == false {
+                    TASK_TABLE[target_idx].continued = true;
+                    notify_parent_child_exit(TASK_TABLE[target_idx].ppid, 0xFFFF);
                 }
                 return 0;
             }
 
-            // If target is sleeping/waiting/stopped, wake it so it can handle the signal.
-            match TASK_TABLE[target_idx].state {
-                TaskState::Sleeping | TaskState::WaitingForChild
-                | TaskState::WaitingForPoll | TaskState::Stopped => {
-                    TASK_TABLE[target_idx].state = TaskState::Ready;
-                    crate::scheduler::get().wake_task(target_idx);
-                }
-                _ => {}
-            }
+            // For other signals: set pending and wake if blocked.
+            send_signal_to(target_idx, signum as u8);
         }
         0
     }

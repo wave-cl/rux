@@ -78,14 +78,9 @@ pub fn exit(status: i32) -> ! {
                     if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].sid == my_sid
                         && TASK_TABLE[j].state != TaskState::Zombie
                     {
-                        TASK_TABLE[j].signal_hot.pending =
-                            TASK_TABLE[j].signal_hot.pending.add(1); // SIGHUP = 1
+                        send_signal_to(j, 1); // SIGHUP
                         if TASK_TABLE[j].state == TaskState::Stopped {
-                            // Also send SIGCONT to wake stopped processes
-                            TASK_TABLE[j].signal_hot.pending =
-                                TASK_TABLE[j].signal_hot.pending.add(18); // SIGCONT = 18
-                            TASK_TABLE[j].state = TaskState::Ready;
-                            crate::scheduler::get().wake_task(j);
+                            send_signal_to(j, 18); // SIGCONT
                         }
                     }
                 }
