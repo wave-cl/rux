@@ -122,10 +122,9 @@ pub fn exit(status: i32) -> ! {
                 TASK_TABLE[idx].state = TaskState::Free;
             } else if TASK_TABLE[idx].ppid == 1 {
                 // Parent is init (PID 1): auto-reap immediately.
-                // Init doesn't explicitly waitpid for every shell pipeline
-                // child, so zombies would accumulate and exhaust slots.
-                notify_parent_child_exit(1, status);
-                // Free the child's address space (COW pages + page tables)
+                // Free slot BEFORE notifying parent to prevent a race where
+                // the parent wakes, scans TASK_TABLE, finds this child still
+                // active/Ready, sees has_children=true, and blocks forever.
                 let child_pt_root = TASK_TABLE[idx].pt_root;
                 if child_pt_root != 0 {
                     let alloc = crate::kstate::alloc();
@@ -137,6 +136,7 @@ pub fn exit(status: i32) -> ! {
                 TASK_TABLE[idx].active = false;
                 TASK_TABLE[idx].state = TaskState::Free;
                 TASK_TABLE[idx].pt_root = 0;
+                notify_parent_child_exit(1, status);
             } else {
                 TASK_TABLE[idx].state = TaskState::Zombie;
                 notify_parent_child_exit(TASK_TABLE[idx].ppid, status);
@@ -262,21 +262,23 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                     && TASK_TABLE[i].state != TaskState::Zombie
             });
             if !has_children {
-                // Also handle the legacy single-process fast path:
-                // PID 1 calls waitpid and there are no multi-process children.
+                // Auto-reaped child (ppid=1): slot already freed, use fallback.
                 if super::process().child_available {
                     super::process().child_available = false;
                     if wstatus_ptr != 0 {
                         let status = (super::process().last_child_exit as u32) << 8;
                         crate::uaccess::put_user(wstatus_ptr, status as u32);
                     }
-                    return 42; // fake child PID for vfork path
+                    return 42;
                 }
                 return crate::errno::ECHILD;
             }
 
-            // Block until a child exits.
-            crate::wait::block_until(TaskState::WaitingForChild, 0);
+            // Block briefly then re-check. Using a short deadline ensures
+            // we don't miss auto-reaped children (ppid=1 fast path).
+            use rux_arch::TimerOps;
+            let dl = unsafe { crate::arch::Arch::ticks() } + 50;
+            crate::wait::block_until(TaskState::WaitingForChild, dl);
         }
     }
 }
