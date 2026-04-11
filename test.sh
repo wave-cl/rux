@@ -321,6 +321,7 @@ git --version 2>&1
 git init /tmp/repo 2>/dev/null
 cd /tmp/repo && git config user.email "t@rux" && git config user.name "rux" && echo hello > f.txt && git add f.txt && GIT_PAGER=cat git commit -m "init" 2>&1 | grep -E 'master|create'
 cd /
+timeout 5 top -bn1 -d1 2>&1 | head -3
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
 exit
 CMDS
@@ -776,6 +777,7 @@ lua5.4 -e 'print("lua:" .. 6*7)' 2>&1
 lua5.4 -e 'function fib(n) if n<2 then return n end; return fib(n-1)+fib(n-2) end; print("lua_fib=" .. fib(20))'
 perl -e 'sub fib{$_[0]<2?$_[0]:fib($_[0]-1)+fib($_[0]-2)}; print "pl_fib=" . fib(20) . "\n"'
 git --version 2>&1
+timeout 5 top -bn1 -d1 2>&1 | head -3
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 exit
 CMDS
