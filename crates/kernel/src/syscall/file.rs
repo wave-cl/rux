@@ -781,14 +781,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                     }
                     // TCSETSW (0x5403) / TCSETSF: drain output
                     // (serial output is synchronous, so drain is a no-op for us)
-                    let was_canonical = tty.termios.is_canonical();
                     tty.termios.from_user(arg);
-                    // Flush stale input when switching to raw mode (e.g., htop startup).
-                    // Terminal escape sequence responses may be in the serial buffer.
-                    if was_canonical && !tty.termios.is_canonical() {
-                        tty.flush_input();
-                        crate::tty::serial_flush();
-                    }
                 }
             }
             0
