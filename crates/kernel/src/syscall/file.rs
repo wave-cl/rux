@@ -10,15 +10,9 @@ const O_APPEND: usize = 0x400;
 #[allow(dead_code)]
 const O_NONBLOCK: usize = 0x800;
 
-// O_DIRECTORY and O_NOFOLLOW have different values on x86_64 vs aarch64
-#[cfg(target_arch = "x86_64")]
-const O_DIRECTORY: usize = 0x10000;
-#[cfg(target_arch = "x86_64")]
-const O_NOFOLLOW: usize = 0x20000;
-#[cfg(target_arch = "aarch64")]
-const O_DIRECTORY: usize = 0x4000;
-#[cfg(target_arch = "aarch64")]
-const O_NOFOLLOW: usize = 0x8000;
+use rux_arch::ArchInfo;
+const O_DIRECTORY: usize = Arch::O_DIRECTORY;
+const O_NOFOLLOW: usize = Arch::O_NOFOLLOW;
 /// read(fd, buf, count) — POSIX.1
 /// readv(fd, iov, iovcnt) — scatter read
 pub fn readv(fd: usize, iov_ptr: usize, iovcnt: usize) -> isize {

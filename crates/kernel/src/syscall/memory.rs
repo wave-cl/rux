@@ -1147,15 +1147,7 @@ pub fn futex_wake(uaddr: usize, max_wake: usize) -> isize {
 pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds_ptr: usize, timeout_ptr: usize) -> isize {
     let nfds = nfds.min(64);
 
-    // Parse timeout
-    let timeout_ms = if timeout_ptr >= 0x10000 && timeout_ptr < 0x8000_0000_0000 {
-        unsafe {
-            let sec: u64 = crate::uaccess::get_user(timeout_ptr);
-            let nsec: u64 = crate::uaccess::get_user(timeout_ptr + 8);
-            let ms = sec * 1000 + nsec / 1_000_000;
-            if ms > 30_000 { 30_000 } else { ms as usize }
-        }
-    } else { 5_000 };
+    let timeout_ms = super::helpers::timespec_to_ms(timeout_ptr, 5_000);
 
     let read_set = if readfds_ptr != 0 && crate::uaccess::validate_user_ptr(readfds_ptr, 8).is_ok() {
         unsafe { *(readfds_ptr as *const u64) }
@@ -1319,14 +1311,7 @@ pub fn ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, _sigmask: usize) -
     if fds_ptr != 0 && nfds > 0 {
         if crate::uaccess::validate_user_ptr(fds_ptr, nfds.min(256) * 8).is_err() { return crate::errno::EFAULT; }
     }
-    let timeout_ms = if timeout_ptr >= 0x10000 && timeout_ptr < 0x8000_0000_0000 {
-        unsafe {
-            let sec: u64 = crate::uaccess::get_user(timeout_ptr);
-            let nsec: u64 = crate::uaccess::get_user(timeout_ptr + 8);
-            let ms = sec * 1000 + nsec / 1_000_000;
-            if ms > 30_000 { 30_000 } else { ms as usize }
-        }
-    } else { 30_000 }; // NULL timeout = infinite; use 30s then re-enter from userspace
+    let timeout_ms = super::helpers::timespec_to_ms(timeout_ptr, 30_000);
     poll(fds_ptr, nfds, timeout_ms)
 }
 

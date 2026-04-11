@@ -69,6 +69,8 @@ unsafe impl rux_arch::TimerControl for Aarch64 {
 
 impl rux_arch::ArchInfo for Aarch64 {
     const MACHINE_NAME: &'static [u8] = b"aarch64";
+    const O_DIRECTORY: usize = 0x4000;
+    const O_NOFOLLOW: usize = 0x8000;
 }
 
 impl rux_arch::MemoryLayout for Aarch64 {

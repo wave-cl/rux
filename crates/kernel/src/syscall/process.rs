@@ -383,11 +383,8 @@ pub fn clock_gettime(clockid: usize, tp: usize) -> isize {
 }
 
 pub fn nanosleep(req_ptr: usize) -> isize {
-    if crate::uaccess::validate_user_ptr(req_ptr, 16).is_err() { return crate::errno::EFAULT; }
+    let ms = super::helpers::timespec_to_ms(req_ptr, 30_000) as u64;
     unsafe {
-        let tv_sec: u64 = crate::uaccess::get_user(req_ptr);
-        let tv_nsec: u64 = crate::uaccess::get_user(req_ptr + 8);
-        let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
         if ms == 0 { return 0; }
 
         use rux_arch::TimerOps;

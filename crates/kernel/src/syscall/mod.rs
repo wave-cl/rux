@@ -12,6 +12,7 @@ pub(crate) mod signal;
 mod memory;
 pub(crate) mod socket;
 mod mount;
+pub(crate) mod helpers;
 
 // ── Shared process state ────────────────────────────────────────────
 
@@ -915,11 +916,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             // rt_sigtimedwait(set, info, timeout, sigsetsize)
             // Wait for a signal from `set`. For now: sleep for the timeout duration
             // then return EAGAIN (no signal pending). This prevents busy-wait loops.
-            if a2 != 0 && crate::uaccess::validate_user_ptr(a2, 16).is_ok() {
+            if a2 != 0 {
                 unsafe {
-                    let sec: u64 = crate::uaccess::get_user(a2);
-                    let nsec: u64 = crate::uaccess::get_user(a2 + 8);
-                    let ms = (sec * 1000 + nsec / 1_000_000).min(5000);
+                    let ms = helpers::timespec_to_ms(a2, 5000) as u64;
                     // Sleep for the specified duration
                     let task_idx = crate::task_table::current_task_idx();
                     use rux_arch::TimerOps;

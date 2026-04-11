@@ -88,6 +88,8 @@ unsafe impl rux_arch::TimerControl for NativeArch {
 
 impl rux_arch::ArchInfo for NativeArch {
     const MACHINE_NAME: &'static [u8] = b"native";
+    const O_DIRECTORY: usize = 0x10000; // default to x86_64 for tests
+    const O_NOFOLLOW: usize = 0x20000;
 }
 
 // ── ArchSpecificOps ───────────────────────────────────────────────────

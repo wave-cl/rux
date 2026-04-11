@@ -159,6 +159,10 @@ pub unsafe trait TimerControl {
 /// Architecture metadata (machine name for uname, etc.).
 pub trait ArchInfo {
     const MACHINE_NAME: &'static [u8];
+    /// O_DIRECTORY flag value — differs per arch (x86_64: 0x10000, aarch64: 0x4000).
+    const O_DIRECTORY: usize;
+    /// O_NOFOLLOW flag value — differs per arch (x86_64: 0x20000, aarch64: 0x8000).
+    const O_NOFOLLOW: usize;
 }
 
 /// Architecture-specific syscalls (e.g., arch_prctl on x86_64).
