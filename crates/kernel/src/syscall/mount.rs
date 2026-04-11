@@ -46,7 +46,11 @@ pub fn sys_mount(
                     use crate::task_table::*;
                     let mut count = 0;
                     for i in 0..MAX_PROCS {
-                        if TASK_TABLE[i].active && TASK_TABLE[i].state != TaskState::Free && count < buf.len() {
+                        if TASK_TABLE[i].active && TASK_TABLE[i].pid > 0
+                            && TASK_TABLE[i].state != TaskState::Free
+                            && TASK_TABLE[i].state != TaskState::Zombie
+                            && count < buf.len()
+                        {
                             buf[count] = TASK_TABLE[i].pid;
                             count += 1;
                         }

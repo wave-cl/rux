@@ -398,9 +398,9 @@ impl ProcFs {
     ///         majflt cmajflt utime stime cutime cstime priority nice threads
     ///         itrealvalue starttime vsize rss rsslim ...
     fn gen_pid_stat(&self, pid: u64, buf: &mut [u8]) -> usize {
-        let ticks = (self.get_ticks)();
         let info = (self.get_task_info)(pid as u32);
-        let rss = if info.rss_pages > 0 { info.rss_pages as usize } else { 64 };
+        // Cap rss_pages to sane limit (256MB = 65536 pages) to avoid display issues
+        let rss = if info.rss_pages > 0 && info.rss_pages <= 65536 { info.rss_pages as usize } else { 64 };
         let vsize = rss * 4096;
         let mut pos = 0;
         // pid (comm) state ppid pgrp session tty_nr tpgid flags
@@ -420,8 +420,10 @@ impl ProcFs {
         pos += nlen;
         // state ppid pgrp session tty_nr tpgid flags
         let state_ch = match info.state {
-            5 => b'Z', 8 => b'T', 3 => b'S', 6 | 7 => b'S',
-            _ => b'S',
+            1 | 2 => b'R', // Running / Ready
+            5 => b'Z',     // Zombie
+            8 => b'T',     // Stopped
+            _ => b'S',     // Sleeping (3), WaitingForChild (4), WaitingForPipe (6), WaitingForFutex (7), etc.
         };
         buf[pos] = b')'; pos += 1;
         buf[pos] = b' '; pos += 1;
@@ -434,10 +436,7 @@ impl ProcFs {
         pos += fmt_u64(&mut buf[pos..], info.sid as u64);
         pos += copy_str(&mut buf[pos..], b" 0 -1 0 ");
         // minflt cminflt majflt cmajflt utime stime cutime cstime
-        pos += copy_str(&mut buf[pos..], b"0 0 0 0 ");
-        pos += fmt_u64(&mut buf[pos..], ticks / 10); // utime in ticks (HZ=100)
-        buf[pos] = b' '; pos += 1;
-        pos += copy_str(&mut buf[pos..], b"0 0 0 ");
+        pos += copy_str(&mut buf[pos..], b"0 0 0 0 0 0 0 0 ");
         // priority nice num_threads itrealvalue starttime
         pos += copy_str(&mut buf[pos..], b"20 0 1 0 0 ");
         // vsize rss rsslim
