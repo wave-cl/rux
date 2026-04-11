@@ -1345,7 +1345,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             fd < rux_fs::fdtable::MAX_FDS && (
                 super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd)
                 || is_signalfd(fd) || (*fdt::fd_table())[fd].is_pipe
-                || (*fdt::fd_table())[fd].is_console
+                || (*fdt::fd_table())[fd].is_console || fd <= 2
             )
         })
     };
@@ -1397,7 +1397,15 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
                         if tty.has_input() { revents |= 1; }
                     }
                     if events & 4 != 0 { revents |= 4; } // always writable
-                } else if f.active || fd <= 2 {
+                } else if fd <= 2 {
+                    // fd 0-2 not marked as console/pipe/socket — treat as console
+                    if events & 1 != 0 {
+                        let tty = &*(&raw const crate::tty::TTY);
+                        if tty.has_input() { revents |= 1; }
+                    }
+                    if events & 4 != 0 { revents |= 4; }
+                } else if f.active {
+                    // Regular files are always ready
                     if events & 1 != 0 { revents |= 1; }
                     if events & 4 != 0 { revents |= 4; }
                 } else {
