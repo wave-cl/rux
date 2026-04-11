@@ -1009,7 +1009,32 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Batch 2: misc ─────────────────────────────────────────
         Syscall::Syslog => crate::errno::ENOSYS,
-        Syscall::Reboot => crate::errno::ENOSYS,
+        Syscall::Reboot => {
+            // reboot(magic, magic2, cmd, arg)
+            // Linux requires magic=0xfee1dead, magic2=one of several values
+            const LINUX_REBOOT_MAGIC1: usize = 0xfee1dead;
+            const LINUX_REBOOT_MAGIC2: usize = 672274793;  // 0x28121969
+            const LINUX_REBOOT_MAGIC2A: usize = 85072278;
+            const LINUX_REBOOT_MAGIC2B: usize = 369367448;
+            const LINUX_REBOOT_MAGIC2C: usize = 537993216;
+            if a0 != LINUX_REBOOT_MAGIC1 ||
+               (a1 != LINUX_REBOOT_MAGIC2 && a1 != LINUX_REBOOT_MAGIC2A
+                && a1 != LINUX_REBOOT_MAGIC2B && a1 != LINUX_REBOOT_MAGIC2C) {
+                crate::errno::EINVAL
+            } else {
+                const CMD_POWER_OFF: usize  = 0x4321FEDC;
+                const CMD_HALT: usize       = 0xCDEF0123;
+                const CMD_RESTART: usize    = 0x01234567;
+                match a2 {
+                    CMD_POWER_OFF | CMD_HALT | CMD_RESTART => {
+                        // Sync filesystems, then exit
+                        use rux_arch::ExitOps;
+                        crate::arch::Arch::exit(crate::arch::Arch::EXIT_SUCCESS);
+                    }
+                    _ => 0 // Other commands (CAD_ON/OFF etc.) are no-ops
+                }
+            }
+        },
         Syscall::Setdomainname | Syscall::Sethostname => 0, // stubs
         Syscall::Pause => {
             // Suspend until signal — sleep properly
