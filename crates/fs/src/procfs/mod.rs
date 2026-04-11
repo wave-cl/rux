@@ -735,7 +735,10 @@ impl FileSystem for ProcFs {
         {
             return Err(VfsError::IsADirectory);
         }
-        let mut tmp = [0u8; 1024];
+        // Procfs files are dynamically generated — content may change between
+        // reads (ticks, process state, etc.). Generate once at offset 0 and
+        // return EOF on subsequent reads, like Linux seq_file.
+        let mut tmp = [0u8; 2048];
         let total = self.generate(ino, &mut tmp);
         if total == 0 { return Err(VfsError::NotFound); }
         let off = offset as usize;
