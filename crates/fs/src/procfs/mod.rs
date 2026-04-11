@@ -110,21 +110,19 @@ fn is_pid_root(ino: InodeId) -> bool { ino >= PID_ROOT_BASE && ino < PID_LIMITS_
 fn is_pid_symlink(ino: InodeId) -> bool { is_pid_exe(ino) || is_pid_cwd(ino) || is_pid_root(ino) }
 fn is_pid_file(ino: InodeId) -> bool { ino >= PID_STAT_BASE && !is_pid_fd_dir(ino) && !is_pid_symlink(ino) }
 fn pid_from_dir(ino: InodeId) -> u64 { ino - PID_DIR_BASE }
+/// All per-PID inode bases, sorted descending for pid_from_file lookup.
+const PID_BASES: [InodeId; 15] = [
+    PID_TASK_DIR_BASE, PID_IO_BASE, PID_LIMITS_BASE, PID_ROOT_BASE,
+    PID_CWD_BASE, PID_OOM_BASE, PID_MOUNTINFO_BASE, PID_CGROUP_BASE,
+    PID_ENVIRON_BASE, PID_COMM_BASE, PID_FD_DIR_BASE, PID_MAPS_BASE,
+    PID_EXE_BASE, PID_STATUS_BASE, PID_STATM_BASE,
+];
+
 fn pid_from_file(ino: InodeId) -> u64 {
-    if ino >= PID_IO_BASE { ino - PID_IO_BASE }
-    else if ino >= PID_LIMITS_BASE { ino - PID_LIMITS_BASE }
-    else if ino >= PID_ROOT_BASE { ino - PID_ROOT_BASE }
-    else if ino >= PID_CWD_BASE { ino - PID_CWD_BASE }
-    else if ino >= PID_OOM_BASE { ino - PID_OOM_BASE }
-    else if ino >= PID_MOUNTINFO_BASE { ino - PID_MOUNTINFO_BASE }
-    else if ino >= PID_CGROUP_BASE { ino - PID_CGROUP_BASE }
-    else if ino >= PID_ENVIRON_BASE { ino - PID_ENVIRON_BASE }
-    else if ino >= PID_COMM_BASE { ino - PID_COMM_BASE }
-    else if ino >= PID_MAPS_BASE && ino < PID_FD_DIR_BASE { ino - PID_MAPS_BASE }
-    else if ino >= PID_EXE_BASE { ino - PID_EXE_BASE }
-    else if ino >= PID_STATUS_BASE { ino - PID_STATUS_BASE }
-    else if ino >= PID_STATM_BASE { ino - PID_STATM_BASE }
-    else if ino >= PID_CMDLINE_BASE { ino - PID_CMDLINE_BASE }
+    for &base in &PID_BASES {
+        if ino >= base { return ino - base; }
+    }
+    if ino >= PID_CMDLINE_BASE { ino - PID_CMDLINE_BASE }
     else { ino - PID_STAT_BASE }
 }
 
@@ -329,68 +327,7 @@ impl ProcFs {
             _ if is_pid_file(ino) => {
                 let pid = pid_from_file(ino);
                 if !self.pid_exists(pid) { return 0; }
-                if ino >= PID_IO_BASE {
-                    // /proc/[pid]/io — I/O statistics (stub: zeroes)
-                    let s = b"rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n";
-                    let len = s.len().min(buf.len());
-                    buf[..len].copy_from_slice(&s[..len]);
-                    len
-                } else if ino >= PID_LIMITS_BASE {
-                    // /proc/[pid]/limits — default resource limits
-                    let s = b"Limit                     Soft Limit           Hard Limit           Units     \nMax cpu time              unlimited            unlimited            seconds   \nMax file size             unlimited            unlimited            bytes     \nMax data size             unlimited            unlimited            bytes     \nMax stack size            8388608              unlimited            bytes     \nMax core file size        0                    unlimited            bytes     \nMax resident set          unlimited            unlimited            bytes     \nMax processes             63704                63704                processes \nMax open files            1024                 1048576              files     \nMax locked memory         8388608              8388608              bytes     \nMax address space         unlimited            unlimited            bytes     \nMax file locks            unlimited            unlimited            locks     \nMax pending signals       63704                63704                signals   \nMax msgqueue size         819200               819200               bytes     \nMax nice priority         0                    0                    \nMax realtime priority     0                    0                    \nMax realtime timeout      unlimited            unlimited            us        \n";
-                    let len = s.len().min(buf.len());
-                    buf[..len].copy_from_slice(&s[..len]);
-                    len
-                } else if ino >= PID_OOM_BASE {
-                    // /proc/[pid]/oom_score — always 0
-                    let s = b"0\n";
-                    buf[..s.len()].copy_from_slice(s);
-                    s.len()
-                } else if ino >= PID_MOUNTINFO_BASE {
-                    // /proc/[pid]/mountinfo
-                    let s = b"1 1 254:0 / / rw,relatime - ext2 /dev/vda rw\n";
-                    let len = s.len().min(buf.len());
-                    buf[..len].copy_from_slice(&s[..len]);
-                    len
-                } else if ino >= PID_CGROUP_BASE {
-                    // /proc/[pid]/cgroup — empty (no cgroup)
-                    let s = b"0::/\n";
-                    let len = s.len().min(buf.len());
-                    buf[..len].copy_from_slice(&s[..len]);
-                    len
-                } else if ino >= PID_ENVIRON_BASE {
-                    // /proc/[pid]/environ — real environment from task table
-                    let len = (self.get_task_environ)(pid as u32, buf);
-                    if len > 0 { len } else {
-                        // Fallback for processes without stored environ
-                        let s = b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0HOME=/root\0";
-                        let l = s.len().min(buf.len());
-                        buf[..l].copy_from_slice(&s[..l]);
-                        l
-                    }
-                } else if ino >= PID_COMM_BASE {
-                    // /proc/[pid]/comm — process name (basename of argv[0])
-                    let mut cmdline_buf = [0u8; 128];
-                    let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
-                    let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
-                    let argv0 = &cmdline_buf[..argv0_end];
-                    // Extract basename (after last '/')
-                    let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
-                    let name = &argv0[base_start..];
-                    let name = if name.is_empty() { b"sh" as &[u8] } else { name };
-                    let len = name.len().min(buf.len().saturating_sub(1));
-                    buf[..len].copy_from_slice(&name[..len]);
-                    buf[len] = b'\n';
-                    len + 1
-                } else if ino >= PID_STATUS_BASE && ino < PID_EXE_BASE {
-                    self.gen_pid_status(pid, buf)
-                } else if ino >= PID_STATM_BASE && ino < PID_STATUS_BASE {
-                    self.gen_pid_statm(pid, buf)
-                } else if ino >= PID_CMDLINE_BASE && ino < PID_STATM_BASE {
-                    self.gen_pid_cmdline(pid, buf)
-                } else {
-                    self.gen_pid_stat(pid, buf)
-                }
+                self.gen_pid_file(ino, pid, buf)
             }
             _ => 0,
         }
@@ -400,6 +337,65 @@ impl ProcFs {
     /// Format: pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt
     ///         majflt cmajflt utime stime cutime cstime priority nice threads
     ///         itrealvalue starttime vsize rss rsslim ...
+    /// Dispatch per-PID file content generation by inode range.
+    fn gen_pid_file(&self, ino: InodeId, pid: u64, buf: &mut [u8]) -> usize {
+        // Static content files — served from fixed byte slices
+        const STATIC_PID_FILES: &[(InodeId, &[u8])] = &[
+            (PID_IO_BASE, b"rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n"),
+            (PID_LIMITS_BASE, b"Limit                     Soft Limit           Hard Limit           Units     \nMax cpu time              unlimited            unlimited            seconds   \nMax file size             unlimited            unlimited            bytes     \nMax data size             unlimited            unlimited            bytes     \nMax stack size            8388608              unlimited            bytes     \nMax core file size        0                    unlimited            bytes     \nMax resident set          unlimited            unlimited            bytes     \nMax processes             63704                63704                processes \nMax open files            1024                 1048576              files     \nMax locked memory         8388608              8388608              bytes     \nMax address space         unlimited            unlimited            bytes     \nMax file locks            unlimited            unlimited            locks     \nMax pending signals       63704                63704                signals   \nMax msgqueue size         819200               819200               bytes     \nMax nice priority         0                    0                    \nMax realtime priority     0                    0                    \nMax realtime timeout      unlimited            unlimited            us        \n"),
+            (PID_OOM_BASE, b"0\n"),
+            (PID_MOUNTINFO_BASE, b"1 1 254:0 / / rw,relatime - ext2 /dev/vda rw\n"),
+            (PID_CGROUP_BASE, b"0::/\n"),
+        ];
+
+        // Check static files first
+        for &(base, content) in STATIC_PID_FILES {
+            if ino >= base && ino < base + 100 {
+                let len = content.len().min(buf.len());
+                buf[..len].copy_from_slice(&content[..len]);
+                return len;
+            }
+        }
+
+        // Dynamic content files
+        if ino >= PID_ENVIRON_BASE && ino < PID_COMM_BASE {
+            let len = (self.get_task_environ)(pid as u32, buf);
+            if len > 0 { return len; }
+            let s = b"PATH=/bin:/sbin:/usr/bin:/usr/sbin\0HOME=/root\0";
+            let l = s.len().min(buf.len());
+            buf[..l].copy_from_slice(&s[..l]);
+            return l;
+        }
+        if ino >= PID_COMM_BASE && ino < PID_CWD_BASE {
+            return self.gen_pid_comm(pid, buf);
+        }
+        if ino >= PID_STATUS_BASE && ino < PID_EXE_BASE {
+            return self.gen_pid_status(pid, buf);
+        }
+        if ino >= PID_STATM_BASE && ino < PID_STATUS_BASE {
+            return self.gen_pid_statm(pid, buf);
+        }
+        if ino >= PID_CMDLINE_BASE && ino < PID_STATM_BASE {
+            return self.gen_pid_cmdline(pid, buf);
+        }
+        self.gen_pid_stat(pid, buf)
+    }
+
+    /// Generate /proc/[pid]/comm — process name (basename of argv[0])
+    fn gen_pid_comm(&self, pid: u64, buf: &mut [u8]) -> usize {
+        let mut cmdline_buf = [0u8; 128];
+        let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
+        let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
+        let argv0 = &cmdline_buf[..argv0_end];
+        let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
+        let name = &argv0[base_start..];
+        let name = if name.is_empty() { b"sh" as &[u8] } else { name };
+        let len = name.len().min(buf.len().saturating_sub(1));
+        buf[..len].copy_from_slice(&name[..len]);
+        buf[len] = b'\n';
+        len + 1
+    }
+
     fn gen_pid_stat(&self, pid: u64, buf: &mut [u8]) -> usize {
         let info = (self.get_task_info)(pid as u32);
         // Cap rss_pages to sane limit (256MB = 65536 pages) to avoid display issues
