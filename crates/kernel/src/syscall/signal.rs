@@ -182,7 +182,8 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                     TASK_TABLE[i].signal_hot.pending =
                         TASK_TABLE[i].signal_hot.pending.add(signum as u8);
                     match TASK_TABLE[i].state {
-                        TaskState::Sleeping | TaskState::WaitingForChild => {
+                        TaskState::Sleeping | TaskState::WaitingForChild
+                        | TaskState::WaitingForPoll => {
                             TASK_TABLE[i].state = TaskState::Ready;
                             crate::scheduler::get().wake_task(i);
                         }
@@ -323,7 +324,8 @@ pub fn kill(pid: isize, signum: usize) -> isize {
 
             // If target is sleeping/waiting/stopped, wake it so it can handle the signal.
             match TASK_TABLE[target_idx].state {
-                TaskState::Sleeping | TaskState::WaitingForChild | TaskState::Stopped => {
+                TaskState::Sleeping | TaskState::WaitingForChild
+                | TaskState::WaitingForPoll | TaskState::Stopped => {
                     TASK_TABLE[target_idx].state = TaskState::Ready;
                     crate::scheduler::get().wake_task(target_idx);
                 }
