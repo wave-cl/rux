@@ -312,6 +312,13 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
             sched.dequeue_current();
             sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
             sched.schedule();
+
+            // Woken — check if an unblocked signal is pending (return EINTR so post_syscall delivers it)
+            let hot = &crate::task_table::TASK_TABLE[task_idx].signal_hot;
+            let deliverable = hot.pending.0 & !hot.blocked.0;
+            if deliverable != 0 {
+                return crate::errno::EINTR;
+            }
         }
     }
 }
@@ -1403,6 +1410,13 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             sched.dequeue_current();
             sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
             sched.schedule();
+
+            // Woken — check if an unblocked signal is pending (return EINTR so post_syscall delivers it)
+            let hot = &crate::task_table::TASK_TABLE[task_idx].signal_hot;
+            let deliverable = hot.pending.0 & !hot.blocked.0;
+            if deliverable != 0 {
+                return crate::errno::EINTR;
+            }
         }
     }
 }
