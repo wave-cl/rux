@@ -21,6 +21,7 @@ mod fork;
 mod idle;
 mod wait;
 mod procfs_callbacks;
+mod line_discipline;
 mod errno;
 
 #[cfg(feature = "native")]

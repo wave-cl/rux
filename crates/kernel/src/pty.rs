@@ -33,9 +33,8 @@ pub struct PtyPair {
     pub session_id: u32,
     pub winsize: [u16; 4], // rows, cols, xpixel, ypixel
     pub col: usize, // output column tracking
-    // Line buffer for canonical mode
-    line_buf: [u8; 256],
-    line_len: usize,
+    // Shared canonical-mode line buffer
+    pub line: crate::line_discipline::LineBuffer,
 }
 
 impl PtyPair {
@@ -51,13 +50,13 @@ impl PtyPair {
             foreground_pgid: 0, session_id: 0,
             winsize: [24, 80, 0, 0],
             col: 0,
-            line_buf: [0; 256], line_len: 0,
+            line: crate::line_discipline::LineBuffer::new(),
         }
     }
 
     /// Flush input queues (for TCSETSF).
     pub fn flush_input(&mut self) {
-        self.line_len = 0;
+        self.line.reset();
         self.input_count = 0;
         self.input_head = 0;
         self.input_tail = 0;
@@ -173,62 +172,33 @@ pub unsafe fn master_write(id: u8, data: &[u8]) -> isize {
     }
 
     if p.termios.is_canonical() {
-        // Canonical mode: buffer in line_buf, deliver on newline
+        // Canonical mode: use shared line discipline
+        use crate::line_discipline::LineEvent;
         for &raw in data {
-            // Apply input processing
-            let b = match p.termios.input_process(raw) {
-                Some(b) => b,
-                None => continue,
-            };
-
-            // Signal characters
-            if p.termios.isig_enabled() {
-                if b == p.termios.cc(crate::tty::VINTR) {
+            let (event, _echo) = p.line.process(raw, &p.termios);
+            // PTY echo is handled separately (already written to output above)
+            match event {
+                LineEvent::Signal(signum) => {
                     if p.foreground_pgid > 0 {
-                        crate::syscall::posix::kill(-(p.foreground_pgid as isize), 2);
-                    }
-                    p.line_len = 0;
-                    continue;
-                }
-                if b == p.termios.cc(crate::tty::VSUSP) {
-                    if p.foreground_pgid > 0 {
-                        crate::syscall::posix::kill(-(p.foreground_pgid as isize), 20);
-                    }
-                    p.line_len = 0;
-                    continue;
-                }
-            }
-
-            match b {
-                b'\r' | b'\n' => {
-                    if p.line_len > 0 {
-                        let line = &p.line_buf[..p.line_len];
-                        ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, line);
-                    }
-                    ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, b"\n");
-                    p.line_len = 0;
-                }
-                _ if b == p.termios.cc(crate::tty::VERASE) || b == 0x08 => {
-                    if p.line_len > 0 { p.line_len -= 1; }
-                }
-                _ if b == p.termios.cc(crate::tty::VEOF) => {
-                    if p.line_len > 0 {
-                        let line = &p.line_buf[..p.line_len];
-                        ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, line);
-                        p.line_len = 0;
-                    } else {
-                        ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, b"\x04");
+                        crate::syscall::posix::kill(-(p.foreground_pgid as isize), signum as usize);
                     }
                 }
-                _ if b == p.termios.cc(crate::tty::VKILL) => {
-                    p.line_len = 0;
+                LineEvent::Complete => {
+                    // Line complete — deliver buffered content to slave input
+                    let content = &p.line.buf[..p.line.len];
+                    ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, content);
+                    p.line.len = 0;
                 }
-                _ => {
-                    if p.line_len < 255 {
-                        p.line_buf[p.line_len] = b;
-                        p.line_len += 1;
-                    }
+                LineEvent::EofFlush => {
+                    let content = &p.line.buf[..p.line.len];
+                    ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, content);
+                    p.line.len = 0;
                 }
+                LineEvent::Eof => {
+                    // Empty EOF marker
+                    ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, b"\x04");
+                }
+                LineEvent::Continue => {}
             }
         }
         data.len() as isize

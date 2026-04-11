@@ -307,8 +307,8 @@ impl Termios {
 pub static mut TTY: Tty = Tty::new();
 
 pub struct Tty {
-    line_buf: [u8; LINE_BUF_SIZE],
-    line_len: usize,
+    /// Shared canonical-mode line buffer (editing, signals, EOF).
+    pub line: crate::line_discipline::LineBuffer,
     /// Linux termios settings.
     pub termios: Termios,
     /// Foreground process group for SIGINT delivery.
@@ -319,208 +319,81 @@ pub struct Tty {
     pub winsize: [u16; 4],
     /// Current output column (for ONOCR/ONLRET tracking).
     pub col: usize,
-    /// VLNEXT: next byte is literal (Ctrl-V pressed).
-    literal_next: bool,
 }
 
 impl Tty {
     pub const fn new() -> Self {
         Self {
-            line_buf: [0; LINE_BUF_SIZE],
-            line_len: 0,
+            line: crate::line_discipline::LineBuffer::new(),
             termios: Termios::default_cooked(),
             foreground_pgid: 1,
             session_id: 1, // PID 1's session owns the console
             winsize: [24, 80, 0, 0],
             col: 0,
-            literal_next: false,
         }
     }
 
     /// Check if the TTY has input available (non-blocking).
     pub fn has_input(&self) -> bool {
-        if self.line_len > 0 { return true; }
+        if self.line.len > 0 { return true; }
         if serial_has_data() { return true; }
         #[cfg(target_arch = "aarch64")]
         if unsafe { crate::arch::aarch64::console::hw_has_data() } { return true; }
         false
     }
 
-    /// Echo a control character as ^X if ECHOCTL is set.
-    fn echo_ctrl<A: ConsoleOps>(&self, b: u8) {
-        if self.termios.echo_enabled() && self.termios.echoctl_enabled() {
-            A::write_byte(b'^');
-            A::write_byte(b + 0x40);
+    /// Perform echo for a line discipline echo action.
+    fn do_echo<A: ConsoleOps>(&self, echo: crate::line_discipline::Echo) {
+        use crate::line_discipline::Echo;
+        match echo {
+            Echo::None => {}
+            Echo::Byte(b) => A::write_byte(b),
+            Echo::Ctrl(b) => { A::write_byte(b'^'); A::write_byte(b + 0x40); }
+            Echo::Erase => { A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08); }
+            Echo::EraseN(n) => {
+                for _ in 0..n { A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08); }
+            }
+            Echo::Str(s) => A::write_bytes(s),
+            Echo::Reprint => {
+                A::write_bytes(b"^R\n");
+                A::write_bytes(self.line.content());
+            }
         }
     }
 
     /// Read from terminal in canonical mode.
-    /// Buffers input, handles editing, returns on newline or Ctrl-D.
+    /// Uses the shared LineBuffer for editing, signals, and EOF.
     pub unsafe fn read_canonical<A: ConsoleOps>(
         &mut self, buf: *mut u8, len: usize,
     ) -> isize {
-        let t = &self.termios;
-        // Fill line buffer until we get a newline
+        use crate::line_discipline::LineEvent;
         loop {
             let raw = A::read_byte();
+            let (event, echo) = self.line.process(raw, &self.termios);
+            self.do_echo::<A>(echo);
 
-            // VLNEXT (Ctrl-V): literal next character
-            if self.literal_next {
-                self.literal_next = false;
-                if self.line_len < LINE_BUF_SIZE {
-                    self.line_buf[self.line_len] = raw;
-                    self.line_len += 1;
-                    if t.echo_enabled() {
-                        if raw < 0x20 {
-                            self.echo_ctrl::<A>(raw);
-                        } else {
-                            A::write_byte(raw);
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // Apply input processing (c_iflag)
-            let b = match t.input_process(raw) {
-                Some(b) => b,
-                None => continue, // IGNCR: discard
-            };
-
-            // Signal characters (ISIG)
-            if t.isig_enabled() {
-                if b == t.cc(VINTR) {
-                    self.line_len = 0;
-                    if t.echo_enabled() { A::write_str("^C\n"); }
-                    crate::syscall::posix::kill(
-                        -(self.foreground_pgid as isize), 2, // SIGINT
-                    );
+            match event {
+                LineEvent::Signal(signum) => {
+                    crate::syscall::posix::kill(-(self.foreground_pgid as isize), signum as usize);
                     return crate::errno::EINTR;
                 }
-                if b == t.cc(VQUIT) {
-                    self.line_len = 0;
-                    if t.echo_enabled() { A::write_str("^\\\n"); }
-                    crate::syscall::posix::kill(
-                        -(self.foreground_pgid as isize), 3, // SIGQUIT
-                    );
-                    return crate::errno::EINTR;
-                }
-                if b == t.cc(VSUSP) {
-                    self.line_len = 0;
-                    if t.echo_enabled() { A::write_str("^Z\n"); }
-                    crate::syscall::posix::kill(
-                        -(self.foreground_pgid as isize), 20, // SIGTSTP
-                    );
-                    return crate::errno::EINTR;
-                }
-            }
-
-            // EOF (Ctrl-D)
-            if b == t.cc(VEOF) {
-                if self.line_len == 0 {
-                    return 0; // EOF
-                }
-                // Return what we have without adding newline
-                break;
-            }
-
-            // VLNEXT (Ctrl-V): set literal_next flag
-            if t.iexten_enabled() && b == t.cc(VLNEXT) {
-                self.literal_next = true;
-                if t.echo_enabled() { A::write_str("^V"); }
-                continue;
-            }
-
-            // VWERASE (Ctrl-W): erase word
-            if t.iexten_enabled() && b == t.cc(VWERASE) {
-                // Erase trailing spaces
-                while self.line_len > 0 && self.line_buf[self.line_len - 1] == b' ' {
-                    self.line_len -= 1;
-                    if t.echo_enabled() {
-                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
-                    }
-                }
-                // Erase word
-                while self.line_len > 0 && self.line_buf[self.line_len - 1] != b' ' {
-                    self.line_len -= 1;
-                    if t.echo_enabled() {
-                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
-                    }
-                }
-                continue;
-            }
-
-            // VREPRINT (Ctrl-R): reprint line
-            if t.iexten_enabled() && b == t.cc(VREPRINT) {
-                if t.echo_enabled() {
-                    A::write_str("^R\n");
-                    for i in 0..self.line_len {
-                        A::write_byte(self.line_buf[i]);
-                    }
-                }
-                continue;
-            }
-
-            // Kill line (Ctrl-U)
-            if b == t.cc(VKILL) {
-                if t.echo_enabled() {
-                    for _ in 0..self.line_len {
-                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
-                    }
-                }
-                self.line_len = 0;
-                continue;
-            }
-
-            // Erase (Backspace/DEL)
-            if b == t.cc(VERASE) || b == 0x08 {
-                if self.line_len > 0 {
-                    self.line_len -= 1;
-                    if t.echo_enabled() {
-                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
-                    }
-                }
-                continue;
-            }
-
-            // Newline or carriage return → deliver line
-            if b == b'\n' || b == b'\r' {
-                if self.line_len < LINE_BUF_SIZE {
-                    self.line_buf[self.line_len] = b'\n';
-                    self.line_len += 1;
-                }
-                if t.echo_enabled() || (t.c_lflag & ECHONL != 0) {
-                    A::write_byte(b'\n');
-                }
-                break;
-            }
-
-            // Regular character
-            if self.line_len < LINE_BUF_SIZE {
-                self.line_buf[self.line_len] = b;
-                self.line_len += 1;
-                if t.echo_enabled() {
-                    if b < 0x20 && t.echoctl_enabled() {
-                        A::write_byte(b'^');
-                        A::write_byte(b + 0x40);
-                    } else {
-                        A::write_byte(b);
-                    }
-                }
+                LineEvent::Eof => return 0,
+                LineEvent::EofFlush | LineEvent::Complete => break,
+                LineEvent::Continue => continue,
             }
         }
 
         // Copy from line buffer to user buffer
-        let n = len.min(self.line_len);
-        core::ptr::copy_nonoverlapping(self.line_buf.as_ptr(), buf, n);
+        let n = len.min(self.line.len);
+        core::ptr::copy_nonoverlapping(self.line.buf.as_ptr(), buf, n);
 
-        // Shift remaining data (if user asked for less than a full line)
-        if n < self.line_len {
-            let remaining = self.line_len - n;
-            core::ptr::copy(self.line_buf.as_ptr().add(n), self.line_buf.as_mut_ptr(), remaining);
-            self.line_len = remaining;
+        // Shift remaining data
+        if n < self.line.len {
+            let remaining = self.line.len - n;
+            core::ptr::copy(self.line.buf.as_ptr().add(n), self.line.buf.as_mut_ptr(), remaining);
+            self.line.len = remaining;
         } else {
-            self.line_len = 0;
+            self.line.len = 0;
         }
 
         n as isize
@@ -658,7 +531,6 @@ impl Tty {
 
     /// Flush the line buffer (for TCSETSF).
     pub fn flush_input(&mut self) {
-        self.line_len = 0;
-        self.literal_next = false;
+        self.line.reset();
     }
 }
