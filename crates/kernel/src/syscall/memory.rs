@@ -1164,13 +1164,15 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
         unsafe { *(writefds_ptr as *const u64) }
     } else { 0 };
 
-    let has_sockets = (0..nfds).any(|fd| {
+    let needs_blocking = (0..nfds).any(|fd| {
         ((read_set | write_set) & (1u64 << fd)) != 0
             && fd < rux_fs::fdtable::MAX_FDS
-            && super::socket::is_socket(fd)
+            && (super::socket::is_socket(fd)
+                || unsafe { (*fdt::fd_table())[fd].is_console })
     });
+    let has_sockets = needs_blocking; // for net poll below
 
-    let max_iters = if has_sockets && timeout_ms > 0 { timeout_ms.min(30_000) } else { 1 };
+    let max_iters = if needs_blocking && timeout_ms > 0 { timeout_ms.min(30_000) } else { 1 };
 
     for _ in 0..max_iters {
         #[cfg(feature = "net")]
@@ -1188,11 +1190,19 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
         for fd in 0..nfds {
             let bit = 1u64 << fd;
             if read_set & bit != 0 {
-                if fd <= 2 || !super::socket::is_socket(fd) {
-                    // Console/file FDs are always ready
-                    out_read |= bit;
-                    ready += 1;
-                } else if super::socket::socket_has_data(fd) {
+                if super::socket::is_socket(fd) {
+                    if super::socket::socket_has_data(fd) {
+                        out_read |= bit;
+                        ready += 1;
+                    }
+                } else if fd < rux_fs::fdtable::MAX_FDS && unsafe { (*fdt::fd_table())[fd].is_console } {
+                    let tty = unsafe { &*(&raw const crate::tty::TTY) };
+                    if tty.has_input() {
+                        out_read |= bit;
+                        ready += 1;
+                    }
+                } else {
+                    // Regular files/pipes are always ready
                     out_read |= bit;
                     ready += 1;
                 }
@@ -1225,6 +1235,15 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
             sched.dequeue_current();
             sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
             sched.schedule();
+
+            // Woken — check if an unblocked signal is pending (return EINTR)
+            let hot = &crate::task_table::TASK_TABLE[task_idx].signal_hot;
+            let deliverable = hot.pending.0 & !hot.blocked.0;
+            if deliverable != 0 {
+                if readfds_ptr != 0 { *(readfds_ptr as *mut u64) = 0; }
+                if writefds_ptr != 0 { *(writefds_ptr as *mut u64) = 0; }
+                return crate::errno::EINTR;
+            }
         }
     }
 
