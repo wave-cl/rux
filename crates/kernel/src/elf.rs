@@ -290,10 +290,6 @@ unsafe fn load_dynamic_interp(
     let mut plen = path_len;
     while plen > 0 && interp_path[plen - 1] == 0 { plen -= 1; }
 
-    crate::arch::Arch::write_str("rux: dynamic: interp=");
-    crate::arch::Arch::write_bytes(&interp_path[..plen]);
-    crate::arch::Arch::write_str("\n");
-
     // 2. Resolve interpreter in VFS
     let interp_ino = match rux_fs::path::resolve_path(fs, &interp_path[..plen]) {
         Ok(ino) => ino,
