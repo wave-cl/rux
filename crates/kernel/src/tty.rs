@@ -49,6 +49,12 @@ pub fn serial_has_data() -> bool {
     SERIAL_TAIL.load(Ordering::Relaxed) != SERIAL_HEAD.load(Ordering::Relaxed)
 }
 
+/// Flush all data from the serial ring buffer.
+pub fn serial_flush() {
+    use core::sync::atomic::Ordering;
+    SERIAL_TAIL.store(SERIAL_HEAD.load(Ordering::Relaxed), Ordering::Release);
+}
+
 /// Minimal `core::fmt::Write` adapter for serial console output.
 /// Used by strace and kernel debug logging.
 pub struct SerialWriter;
@@ -56,8 +62,192 @@ pub struct SerialWriter;
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         use rux_arch::ConsoleOps;
-        crate::arch::Arch::write_bytes(s.as_bytes());
+        // Kernel output: raw CRLF, bypass termios
+        for &b in s.as_bytes() {
+            if b == b'\n' { crate::arch::Arch::write_byte(b'\r'); }
+            crate::arch::Arch::write_byte(b);
+        }
         Ok(())
+    }
+}
+
+// ── Linux termios constants ───────────────────────────────────────────
+
+// c_iflag bits
+pub const IGNBRK: u32  = 0o000001;
+pub const BRKINT: u32  = 0o000002;
+pub const IGNPAR: u32  = 0o000004;
+pub const PARMRK: u32  = 0o000010;
+pub const INPCK: u32   = 0o000020;
+pub const ISTRIP: u32  = 0o000040;
+pub const INLCR: u32   = 0o000100;
+pub const IGNCR: u32   = 0o000200;
+pub const ICRNL: u32   = 0o000400;
+pub const IXON: u32    = 0o002000;
+pub const IXOFF: u32   = 0o010000;
+
+// c_oflag bits
+pub const OPOST: u32   = 0o000001;
+pub const ONLCR: u32   = 0o000004;
+pub const OCRNL: u32   = 0o000010;
+pub const ONOCR: u32   = 0o000020;
+pub const ONLRET: u32  = 0o000040;
+
+// c_lflag bits
+pub const ISIG: u32    = 0o000001;
+pub const ICANON: u32  = 0o000002;
+pub const ECHO: u32    = 0o000010;
+pub const ECHOE: u32   = 0o000020;
+pub const ECHOK: u32   = 0o000040;
+pub const ECHONL: u32  = 0o000100;
+pub const NOFLSH: u32  = 0o000200;
+pub const ECHOCTL: u32 = 0o001000;
+pub const ECHOKE: u32  = 0o004000;
+pub const IEXTEN: u32  = 0o100000;
+
+// c_cc indices
+pub const VINTR: usize    = 0;
+pub const VQUIT: usize    = 1;
+pub const VERASE: usize   = 2;
+pub const VKILL: usize    = 3;
+pub const VEOF: usize     = 4;
+pub const VTIME: usize    = 5;
+pub const VMIN: usize     = 6;
+pub const VSWTC: usize    = 7;
+pub const VSTART: usize   = 8;
+pub const VSTOP: usize    = 9;
+pub const VSUSP: usize    = 10;
+pub const VEOL: usize     = 11;
+pub const VREPRINT: usize = 12;
+pub const VDISCARD: usize = 13;
+pub const VWERASE: usize  = 14;
+pub const VLNEXT: usize   = 15;
+pub const VEOL2: usize    = 16;
+pub const NCCS: usize     = 32;
+
+// ── Termios struct matching Linux musl x86_64 layout (60 bytes) ───────
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct Termios {
+    pub c_iflag: u32,
+    pub c_oflag: u32,
+    pub c_cflag: u32,
+    pub c_lflag: u32,
+    pub c_line: u8,
+    pub c_cc: [u8; NCCS],
+    pub c_ispeed: u32,
+    pub c_ospeed: u32,
+}
+
+impl Termios {
+    /// Default cooked terminal settings matching Linux defaults.
+    pub const fn default_cooked() -> Self {
+        let mut cc = [0u8; NCCS];
+        cc[VINTR]    = 0x03; // Ctrl-C
+        cc[VQUIT]    = 0x1C; // Ctrl-backslash
+        cc[VERASE]   = 0x7F; // DEL
+        cc[VKILL]    = 0x15; // Ctrl-U
+        cc[VEOF]     = 0x04; // Ctrl-D
+        cc[VTIME]    = 0;
+        cc[VMIN]     = 1;
+        cc[VSWTC]    = 0;
+        cc[VSTART]   = 0x11; // Ctrl-Q
+        cc[VSTOP]    = 0x13; // Ctrl-S
+        cc[VSUSP]    = 0x1A; // Ctrl-Z
+        cc[VEOL]     = 0;
+        cc[VREPRINT] = 0x12; // Ctrl-R
+        cc[VDISCARD] = 0x0F; // Ctrl-O
+        cc[VWERASE]  = 0x17; // Ctrl-W
+        cc[VLNEXT]   = 0x16; // Ctrl-V
+        cc[VEOL2]    = 0;
+        Self {
+            c_iflag: ICRNL | IXON,           // 0x500
+            c_oflag: OPOST | ONLCR,          // 0x5
+            c_cflag: 0xBF,                   // B38400 | CS8 | CREAD | HUPCL
+            c_lflag: ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL | ECHOKE | IEXTEN, // 0x8A3B
+            c_line: 0,
+            c_cc: cc,
+            c_ispeed: 0,
+            c_ospeed: 0,
+        }
+    }
+
+    #[inline] pub fn is_canonical(&self) -> bool { self.c_lflag & ICANON != 0 }
+    #[inline] pub fn echo_enabled(&self) -> bool { self.c_lflag & ECHO != 0 }
+    #[inline] pub fn isig_enabled(&self) -> bool { self.c_lflag & ISIG != 0 }
+    #[inline] pub fn echoe_enabled(&self) -> bool { self.c_lflag & ECHOE != 0 }
+    #[inline] pub fn echoctl_enabled(&self) -> bool { self.c_lflag & ECHOCTL != 0 }
+    #[inline] pub fn iexten_enabled(&self) -> bool { self.c_lflag & IEXTEN != 0 }
+    #[inline] pub fn cc(&self, idx: usize) -> u8 { self.c_cc[idx] }
+    #[inline] pub fn vmin(&self) -> u8 { self.c_cc[VMIN] }
+    #[inline] pub fn vtime(&self) -> u8 { self.c_cc[VTIME] }
+
+    /// Copy raw bytes from user pointer into this struct.
+    /// # Safety: ptr must be valid and readable for 60 bytes.
+    pub unsafe fn from_user(&mut self, ptr: usize) {
+        let src = ptr as *const Termios;
+        *self = *src;
+    }
+
+    /// Copy this struct to user pointer.
+    /// # Safety: ptr must be valid and writable for 60 bytes.
+    pub unsafe fn to_user(&self, ptr: usize) {
+        let dst = ptr as *mut Termios;
+        *dst = *self;
+    }
+
+    /// Process an input byte through c_iflag flags.
+    /// Returns None if byte should be discarded (IGNCR).
+    pub fn input_process(&self, b: u8) -> Option<u8> {
+        let mut b = b;
+        if self.c_iflag & ISTRIP != 0 { b &= 0x7F; }
+        if b == b'\r' {
+            if self.c_iflag & IGNCR != 0 { return None; }
+            if self.c_iflag & ICRNL != 0 { b = b'\n'; }
+        } else if b == b'\n' {
+            if self.c_iflag & INLCR != 0 { b = b'\r'; }
+        }
+        Some(b)
+    }
+
+    /// Process an output byte through c_oflag flags.
+    /// Returns (byte1, optional_byte2). If ONLCR, \n becomes \r\n.
+    pub fn output_process(&self, b: u8, col: &mut usize) -> (u8, Option<u8>) {
+        if self.c_oflag & OPOST == 0 {
+            // Raw output — no processing
+            if b == b'\n' { *col = 0; }
+            else if b == b'\r' { *col = 0; }
+            else if b >= 0x20 { *col += 1; }
+            return (b, None);
+        }
+        match b {
+            b'\n' => {
+                if self.c_oflag & ONLRET != 0 { *col = 0; }
+                if self.c_oflag & ONLCR != 0 {
+                    *col = 0;
+                    return (b'\r', Some(b'\n'));
+                }
+                (b'\n', None)
+            }
+            b'\r' => {
+                if self.c_oflag & ONOCR != 0 && *col == 0 {
+                    // Suppress CR at column 0
+                    return (b'\r', None); // We'll handle suppression at caller
+                }
+                if self.c_oflag & OCRNL != 0 {
+                    *col = 0;
+                    return (b'\n', None);
+                }
+                *col = 0;
+                (b'\r', None)
+            }
+            _ => {
+                if b >= 0x20 && b < 0x7F { *col += 1; }
+                else if b == 0x08 && *col > 0 { *col -= 1; } // backspace
+                (b, None)
+            }
+        }
     }
 }
 
@@ -67,20 +257,18 @@ pub static mut TTY: Tty = Tty::new();
 pub struct Tty {
     line_buf: [u8; LINE_BUF_SIZE],
     line_len: usize,
-    /// ICANON — canonical (cooked) mode.
-    pub cooked: bool,
-    /// ECHO — echo input back to terminal.
-    pub echo: bool,
-    /// ISIG — generate signals on Ctrl-C/Ctrl-Z.
-    pub isig: bool,
+    /// Linux termios settings.
+    pub termios: Termios,
     /// Foreground process group for SIGINT delivery.
     pub foreground_pgid: u32,
     /// Session ID that owns this controlling terminal (0 = no session).
     pub session_id: u32,
-    /// VMIN — minimum bytes for raw read (0 = non-blocking).
-    pub vmin: u8,
-    /// VTIME — timeout in deciseconds for raw read (0 = no timeout).
-    pub vtime: u8,
+    /// Window size [rows, cols, xpixel, ypixel].
+    pub winsize: [u16; 4],
+    /// Current output column (for ONOCR/ONLRET tracking).
+    pub col: usize,
+    /// VLNEXT: next byte is literal (Ctrl-V pressed).
+    literal_next: bool,
 }
 
 impl Tty {
@@ -88,13 +276,12 @@ impl Tty {
         Self {
             line_buf: [0; LINE_BUF_SIZE],
             line_len: 0,
-            cooked: true,
-            echo: true,
-            isig: true,
+            termios: Termios::default_cooked(),
             foreground_pgid: 1,
             session_id: 1, // PID 1's session owns the console
-            vmin: 1,
-            vtime: 0,
+            winsize: [24, 80, 0, 0],
+            col: 0,
+            literal_next: false,
         }
     }
 
@@ -109,94 +296,165 @@ impl Tty {
         false
     }
 
+    /// Echo a control character as ^X if ECHOCTL is set.
+    fn echo_ctrl<A: ConsoleOps>(&self, b: u8) {
+        if self.termios.echo_enabled() && self.termios.echoctl_enabled() {
+            A::write_byte(b'^');
+            A::write_byte(b + 0x40);
+        }
+    }
+
     /// Read from terminal in canonical mode.
     /// Buffers input, handles editing, returns on newline or Ctrl-D.
     pub unsafe fn read_canonical<A: ConsoleOps>(
         &mut self, buf: *mut u8, len: usize,
     ) -> isize {
+        let t = &self.termios;
         // Fill line buffer until we get a newline
         loop {
-            let b = A::read_byte();
+            let raw = A::read_byte();
 
-            match b {
-                // Ctrl-C: send SIGINT to foreground process group
-                0x03 => {
-                    if self.isig {
-                        self.line_len = 0;
-                        if self.echo { A::write_str("^C\n"); }
-                        crate::syscall::posix::kill(
-                            -(self.foreground_pgid as isize), 2, // SIGINT
-                        );
-                        return crate::errno::EINTR;
-                    }
-                }
-                // Ctrl-\: send SIGQUIT to foreground process group
-                0x1C => {
-                    if self.isig {
-                        self.line_len = 0;
-                        if self.echo { A::write_str("^\\\n"); }
-                        crate::syscall::posix::kill(
-                            -(self.foreground_pgid as isize), 3, // SIGQUIT
-                        );
-                        return crate::errno::EINTR;
-                    }
-                }
-                // Ctrl-Z: send SIGTSTP to foreground process group
-                0x1A => {
-                    if self.isig {
-                        self.line_len = 0;
-                        if self.echo { A::write_str("^Z\n"); }
-                        crate::syscall::posix::kill(
-                            -(self.foreground_pgid as isize), 20, // SIGTSTP
-                        );
-                        return crate::errno::EINTR;
-                    }
-                }
-                // Ctrl-D: EOF — return buffered data or 0
-                0x04 => {
-                    if self.line_len == 0 {
-                        return 0; // EOF
-                    }
-                    // Return what we have without adding newline
-                    break;
-                }
-                // Ctrl-U: kill line
-                0x15 => {
-                    if self.echo {
-                        for _ in 0..self.line_len {
-                            A::write_byte(0x08); // backspace
-                            A::write_byte(b' ');
-                            A::write_byte(0x08);
+            // VLNEXT (Ctrl-V): literal next character
+            if self.literal_next {
+                self.literal_next = false;
+                if self.line_len < LINE_BUF_SIZE {
+                    self.line_buf[self.line_len] = raw;
+                    self.line_len += 1;
+                    if t.echo_enabled() {
+                        if raw < 0x20 {
+                            self.echo_ctrl::<A>(raw);
+                        } else {
+                            A::write_byte(raw);
                         }
                     }
+                }
+                continue;
+            }
+
+            // Apply input processing (c_iflag)
+            let b = match t.input_process(raw) {
+                Some(b) => b,
+                None => continue, // IGNCR: discard
+            };
+
+            // Signal characters (ISIG)
+            if t.isig_enabled() {
+                if b == t.cc(VINTR) {
                     self.line_len = 0;
+                    if t.echo_enabled() { A::write_str("^C\n"); }
+                    crate::syscall::posix::kill(
+                        -(self.foreground_pgid as isize), 2, // SIGINT
+                    );
+                    return crate::errno::EINTR;
                 }
-                // Backspace or DEL
-                0x08 | 0x7f => {
-                    if self.line_len > 0 {
-                        self.line_len -= 1;
-                        if self.echo {
-                            A::write_byte(0x08);
-                            A::write_byte(b' ');
-                            A::write_byte(0x08);
-                        }
+                if b == t.cc(VQUIT) {
+                    self.line_len = 0;
+                    if t.echo_enabled() { A::write_str("^\\\n"); }
+                    crate::syscall::posix::kill(
+                        -(self.foreground_pgid as isize), 3, // SIGQUIT
+                    );
+                    return crate::errno::EINTR;
+                }
+                if b == t.cc(VSUSP) {
+                    self.line_len = 0;
+                    if t.echo_enabled() { A::write_str("^Z\n"); }
+                    crate::syscall::posix::kill(
+                        -(self.foreground_pgid as isize), 20, // SIGTSTP
+                    );
+                    return crate::errno::EINTR;
+                }
+            }
+
+            // EOF (Ctrl-D)
+            if b == t.cc(VEOF) {
+                if self.line_len == 0 {
+                    return 0; // EOF
+                }
+                // Return what we have without adding newline
+                break;
+            }
+
+            // VLNEXT (Ctrl-V): set literal_next flag
+            if t.iexten_enabled() && b == t.cc(VLNEXT) {
+                self.literal_next = true;
+                if t.echo_enabled() { A::write_str("^V"); }
+                continue;
+            }
+
+            // VWERASE (Ctrl-W): erase word
+            if t.iexten_enabled() && b == t.cc(VWERASE) {
+                // Erase trailing spaces
+                while self.line_len > 0 && self.line_buf[self.line_len - 1] == b' ' {
+                    self.line_len -= 1;
+                    if t.echo_enabled() {
+                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
                     }
                 }
-                // Newline or carriage return
-                b'\n' | b'\r' => {
-                    if self.line_len < LINE_BUF_SIZE {
-                        self.line_buf[self.line_len] = b'\n';
-                        self.line_len += 1;
+                // Erase word
+                while self.line_len > 0 && self.line_buf[self.line_len - 1] != b' ' {
+                    self.line_len -= 1;
+                    if t.echo_enabled() {
+                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
                     }
-                    if self.echo { A::write_byte(b'\n'); }
-                    break;
                 }
-                // Printable character
-                _ => {
-                    if self.line_len < LINE_BUF_SIZE {
-                        self.line_buf[self.line_len] = b;
-                        self.line_len += 1;
-                        if self.echo { A::write_byte(b); }
+                continue;
+            }
+
+            // VREPRINT (Ctrl-R): reprint line
+            if t.iexten_enabled() && b == t.cc(VREPRINT) {
+                if t.echo_enabled() {
+                    A::write_str("^R\n");
+                    for i in 0..self.line_len {
+                        A::write_byte(self.line_buf[i]);
+                    }
+                }
+                continue;
+            }
+
+            // Kill line (Ctrl-U)
+            if b == t.cc(VKILL) {
+                if t.echo_enabled() {
+                    for _ in 0..self.line_len {
+                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
+                    }
+                }
+                self.line_len = 0;
+                continue;
+            }
+
+            // Erase (Backspace/DEL)
+            if b == t.cc(VERASE) || b == 0x08 {
+                if self.line_len > 0 {
+                    self.line_len -= 1;
+                    if t.echo_enabled() {
+                        A::write_byte(0x08); A::write_byte(b' '); A::write_byte(0x08);
+                    }
+                }
+                continue;
+            }
+
+            // Newline or carriage return → deliver line
+            if b == b'\n' || b == b'\r' {
+                if self.line_len < LINE_BUF_SIZE {
+                    self.line_buf[self.line_len] = b'\n';
+                    self.line_len += 1;
+                }
+                if t.echo_enabled() || (t.c_lflag & ECHONL != 0) {
+                    A::write_byte(b'\n');
+                }
+                break;
+            }
+
+            // Regular character
+            if self.line_len < LINE_BUF_SIZE {
+                self.line_buf[self.line_len] = b;
+                self.line_len += 1;
+                if t.echo_enabled() {
+                    if b < 0x20 && t.echoctl_enabled() {
+                        A::write_byte(b'^');
+                        A::write_byte(b + 0x40);
+                    } else {
+                        A::write_byte(b);
                     }
                 }
             }
@@ -221,34 +479,128 @@ impl Tty {
     /// Read from terminal in raw mode — respects VMIN/VTIME.
     ///
     /// VMIN=1, VTIME=0 (default): block until 1 byte, return it immediately.
-    /// VMIN=0, VTIME=0: non-blocking, return what's available.
+    /// VMIN=0, VTIME=0: non-blocking, return what's available (0 if nothing).
     /// VMIN>0, VTIME=0: block until VMIN bytes.
     /// VMIN=0, VTIME>0: wait up to VTIME*100ms, return what arrives.
+    /// VMIN>0, VTIME>0: inter-byte timeout after first byte.
     pub unsafe fn read_raw<A: ConsoleOps>(
         &mut self, buf: *mut u8, len: usize,
     ) -> isize {
         if len == 0 { return 0; }
-        let vmin = (self.vmin as usize).min(len);
+        let t = &self.termios;
+        let vmin = (t.vmin() as usize).min(len);
+        let vtime = t.vtime();
         let ptr = buf;
 
-        if vmin == 0 && self.vtime == 0 {
-            // Pure non-blocking: try one byte
-            // For now, just read one byte (QEMU serial is blocking)
-            let b = A::read_byte();
-            *ptr = b;
-            return 1;
+        // Case 1: VMIN=0, VTIME=0 → pure non-blocking
+        if vmin == 0 && vtime == 0 {
+            if let Some(b) = serial_pop() {
+                let b = t.input_process(b).unwrap_or(b);
+                *ptr = b;
+                return 1;
+            }
+            #[cfg(target_arch = "aarch64")]
+            if A::has_byte() {
+                let b = A::read_byte();
+                let b = t.input_process(b).unwrap_or(b);
+                *ptr = b;
+                return 1;
+            }
+            return 0;
         }
 
-        // Read up to min(vmin, len) bytes, or len if vmin==0
-        let target = if vmin > 0 { vmin } else { 1 };
+        // Case 2: VMIN=0, VTIME>0 → deadline, return whatever collected
+        if vmin == 0 && vtime > 0 {
+            let deadline = {
+                use rux_arch::TimerOps;
+                crate::arch::Arch::ticks() + (vtime as u64) * 100
+            };
+            let mut got = 0usize;
+            loop {
+                if let Some(raw) = serial_pop() {
+                    if let Some(b) = t.input_process(raw) {
+                        *ptr.add(got) = b;
+                        got += 1;
+                        if got >= len { break; }
+                    }
+                } else {
+                    use rux_arch::TimerOps;
+                    if crate::arch::Arch::ticks() >= deadline { break; }
+                    // Sleep briefly
+                    let task_idx = crate::task_table::current_task_idx();
+                    crate::task_table::TASK_TABLE[task_idx].state =
+                        crate::task_table::TaskState::WaitingForPoll;
+                    crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
+                    crate::task_table::poll_wait_register(task_idx);
+                    let sched = crate::scheduler::get();
+                    sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+                    sched.dequeue_current();
+                    sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+                    sched.schedule();
+                }
+            }
+            return got as isize;
+        }
+
+        // Case 3: VMIN>0, VTIME=0 → block until VMIN bytes
+        // Case 4: VMIN>0, VTIME>0 → block for first byte, then inter-byte timeout
+        let target = vmin.min(len);
         let mut got = 0usize;
-        while got < target.min(len) {
-            let mut b = A::read_byte();
-            // ICRNL: convert CR to LF (c_iflag & ICRNL is always set)
-            if b == b'\r' { b = b'\n'; }
-            *ptr.add(got) = b;
-            got += 1;
+        while got < target {
+            let raw = A::read_byte();
+            if let Some(b) = t.input_process(raw) {
+                *ptr.add(got) = b;
+                got += 1;
+                // Case 4: after first byte, apply inter-byte timeout
+                if got > 0 && got < target && vtime > 0 {
+                    let deadline = {
+                        use rux_arch::TimerOps;
+                        crate::arch::Arch::ticks() + (vtime as u64) * 100
+                    };
+                    // Collect remaining bytes with timeout
+                    while got < target {
+                        if let Some(raw2) = serial_pop() {
+                            if let Some(b2) = t.input_process(raw2) {
+                                *ptr.add(got) = b2;
+                                got += 1;
+                            }
+                        } else {
+                            use rux_arch::TimerOps;
+                            if crate::arch::Arch::ticks() >= deadline { break; }
+                            let task_idx = crate::task_table::current_task_idx();
+                            crate::task_table::TASK_TABLE[task_idx].state =
+                                crate::task_table::TaskState::WaitingForPoll;
+                            crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
+                            crate::task_table::poll_wait_register(task_idx);
+                            let sched = crate::scheduler::get();
+                            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+                            sched.dequeue_current();
+                            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+                            sched.schedule();
+                        }
+                    }
+                    break;
+                }
+            }
         }
         got as isize
+    }
+
+    /// Write bytes to the console with output processing (c_oflag).
+    /// Called for userspace writes to stdout/stderr on the console.
+    pub fn write_processed<A: ConsoleOps>(&mut self, data: &[u8]) {
+        for &b in data {
+            let (b1, b2) = self.termios.output_process(b, &mut self.col);
+            A::write_byte(b1);
+            if let Some(b2) = b2 {
+                A::write_byte(b2);
+            }
+        }
+    }
+
+    /// Flush the line buffer (for TCSETSF).
+    pub fn flush_input(&mut self) {
+        self.line_len = 0;
+        self.literal_next = false;
     }
 }

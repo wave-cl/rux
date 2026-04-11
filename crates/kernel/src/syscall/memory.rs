@@ -247,6 +247,9 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
                         let pid = (*fdt::fd_table())[fd].pipe_id;
                         if crate::pipe::has_data(pid) { revents |= EPOLLIN; }
                         if crate::pipe::writers_closed(pid) { revents |= EPOLLHUP; }
+                    } else if fd < rux_fs::fdtable::MAX_FDS && (*fdt::fd_table())[fd].is_console {
+                        let tty = &*(&raw const crate::tty::TTY);
+                        if tty.has_input() { revents |= EPOLLIN; }
                     } else {
                         revents |= EPOLLIN;
                     }
@@ -1316,6 +1319,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
             fd < rux_fs::fdtable::MAX_FDS && (
                 super::socket::is_socket(fd) || is_eventfd(fd) || is_timerfd(fd)
                 || is_signalfd(fd) || (*fdt::fd_table())[fd].is_pipe
+                || (*fdt::fd_table())[fd].is_console
             )
         })
     };
@@ -1360,6 +1364,13 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
                     if events & 1 != 0 && crate::pipe::has_data(pid) { revents |= 1; }
                     if events & 4 != 0 && f.pipe_write { revents |= 4; }
                     if crate::pipe::writers_closed(pid) { revents |= 0x10; }
+                } else if f.active && f.is_console {
+                    // Console: check actual data availability for POLLIN
+                    if events & 1 != 0 {
+                        let tty = &*(&raw const crate::tty::TTY);
+                        if tty.has_input() { revents |= 1; }
+                    }
+                    if events & 4 != 0 { revents |= 4; } // always writable
                 } else if f.active || fd <= 2 {
                     if events & 1 != 0 { revents |= 1; }
                     if events & 4 != 0 { revents |= 4; }

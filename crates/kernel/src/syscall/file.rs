@@ -147,7 +147,7 @@ pub fn read(fd: usize, buf: usize, len: usize) -> isize {
         unsafe {
             let tty = &mut *(&raw mut crate::tty::TTY);
             let ptr = buf as *mut u8;
-            return if tty.cooked {
+            return if tty.termios.is_canonical() {
                 tty.read_canonical::<Arch>(ptr, len)
             } else {
                 tty.read_raw::<Arch>(ptr, len)
@@ -201,8 +201,9 @@ pub fn write(fd: usize, buf: usize, len: usize) -> isize {
         let write_len = len.min(65536);
         if crate::uaccess::validate_user_ptr(buf, write_len).is_err() { return crate::errno::EFAULT; }
         unsafe {
+            let tty = &mut *(&raw mut crate::tty::TTY);
             let slice = core::slice::from_raw_parts(buf as *const u8, write_len);
-            Arch::write_bytes(slice);
+            tty.write_processed::<Arch>(slice);
         }
         return write_len as isize;
     }
@@ -677,7 +678,15 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                     // TIOCSWINSZ: set window size
                     if let Some(p) = crate::pty::get_mut(pty_id) {
                         if arg != 0 && crate::uaccess::validate_user_ptr(arg, 8).is_ok() {
-                            p.winsize = *(arg as *const [u16; 4]);
+                            let new = *(arg as *const [u16; 4]);
+                            if new != p.winsize {
+                                p.winsize = new;
+                                if p.foreground_pgid > 0 {
+                                    crate::syscall::posix::kill(
+                                        -(p.foreground_pgid as isize), 28,
+                                    );
+                                }
+                            }
                         }
                     }
                     return 0;
@@ -705,24 +714,9 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                     return 0;
                 }
                 TCGETS => {
-                    // Return termios for slave
                     if let Some(p) = crate::pty::get_mut(pty_id) {
                         if arg != 0 && crate::uaccess::validate_user_ptr(arg, 60).is_ok() {
-                            let ptr = arg as *mut u8;
-                            for i in 0..60 { *ptr.add(i) = 0; }
-                            *(arg as *mut u32) = 0x500; // c_iflag: ICRNL | IXON
-                            *((arg + 4) as *mut u32) = 0x5; // c_oflag: OPOST | ONLCR
-                            *((arg + 8) as *mut u32) = 0xBF; // c_cflag
-                            let mut lflag: u32 = 0;
-                            if p.cooked { lflag |= 0x2; }
-                            if p.echo { lflag |= 0x8; }
-                            if p.isig { lflag |= 0x1; }
-                            lflag |= 0x8A30;
-                            *((arg + 12) as *mut u32) = lflag;
-                            let cc = (arg + 17) as *mut u8;
-                            *cc.add(0) = 0x03; *cc.add(1) = 0x1C;
-                            *cc.add(2) = 0x7F; *cc.add(3) = 0x15;
-                            *cc.add(4) = 0x04; *cc.add(10) = 0x1A;
+                            p.termios.to_user(arg);
                         }
                     }
                     return 0;
@@ -731,10 +725,10 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                     // TCSETS/TCSETSW/TCSETSF
                     if let Some(p) = crate::pty::get_mut(pty_id) {
                         if arg != 0 && crate::uaccess::validate_user_ptr(arg, 60).is_ok() {
-                            let lflag = *((arg + 12) as *const u32);
-                            p.cooked = lflag & 0x2 != 0;
-                            p.echo = lflag & 0x8 != 0;
-                            p.isig = lflag & 0x1 != 0;
+                            if request == 0x5404 {
+                                p.flush_input();
+                            }
+                            p.termios.from_user(arg);
                         }
                     }
                     return 0;
@@ -754,7 +748,27 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
             if !is_tty { return crate::errno::ENOTTY; }
             if arg != 0 {
                 if crate::uaccess::validate_user_ptr(arg, 8).is_err() { return crate::errno::EFAULT; }
-                unsafe { *(arg as *mut [u16; 4]) = [24, 80, 0, 0]; }
+                unsafe { *(arg as *mut [u16; 4]) = crate::tty::TTY.winsize; }
+            }
+            0
+        }
+        // TIOCSWINSZ: set window size
+        0x5414 if is_tty => {
+            if arg != 0 {
+                if crate::uaccess::validate_user_ptr(arg, 8).is_err() { return crate::errno::EFAULT; }
+                unsafe {
+                    let tty = &mut *(&raw mut crate::tty::TTY);
+                    let new = *(arg as *const [u16; 4]);
+                    if new != tty.winsize {
+                        tty.winsize = new;
+                        // Send SIGWINCH to foreground process group
+                        if tty.foreground_pgid > 0 {
+                            crate::syscall::posix::kill(
+                                -(tty.foreground_pgid as isize), 28, // SIGWINCH
+                            );
+                        }
+                    }
+                }
             }
             0
         }
@@ -764,28 +778,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                 if crate::uaccess::validate_user_ptr(arg, 60).is_err() { return crate::errno::EFAULT; }
                 unsafe {
                     let tty = &*(&raw const crate::tty::TTY);
-                    let ptr = arg as *mut u8;
-                    for i in 0..60 { *ptr.add(i) = 0; }
-                    *(arg as *mut u32) = 0x500; // c_iflag: ICRNL | IXON
-                    *((arg + 4) as *mut u32) = 0x5; // c_oflag: OPOST | ONLCR
-                    *((arg + 8) as *mut u32) = 0xBF; // c_cflag
-                    // c_lflag: build from actual TTY state
-                    let mut lflag: u32 = 0;
-                    if tty.cooked { lflag |= 0x2; }   // ICANON
-                    if tty.echo   { lflag |= 0x8; }   // ECHO
-                    if tty.isig   { lflag |= 0x1; }   // ISIG
-                    lflag |= 0x8A30; // ECHOE | ECHOK | IEXTEN | ECHOCTL
-                    *((arg + 12) as *mut u32) = lflag;
-                    // c_cc control characters (offset 17 on Linux/musl)
-                    let cc = (arg + 17) as *mut u8;
-                    *cc.add(0) = 0x03;  // VINTR = Ctrl-C
-                    *cc.add(1) = 0x1C;  // VQUIT = Ctrl-\
-                    *cc.add(2) = 0x7F;  // VERASE = DEL
-                    *cc.add(3) = 0x15;  // VKILL = Ctrl-U
-                    *cc.add(4) = 0x04;  // VEOF = Ctrl-D
-                    *cc.add(5) = 0x00;  // VTIME
-                    *cc.add(6) = 0x01;  // VMIN
-                    *cc.add(10) = 0x1A; // VSUSP = Ctrl-Z
+                    tty.termios.to_user(arg);
                 }
             }
             0
@@ -796,14 +789,14 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                 if crate::uaccess::validate_user_ptr(arg, 60).is_err() { return crate::errno::EFAULT; }
                 unsafe {
                     let tty = &mut *(&raw mut crate::tty::TTY);
-                    let lflag = *((arg + 12) as *const u32);
-                    tty.cooked = lflag & 0x2 != 0; // ICANON
-                    tty.echo   = lflag & 0x8 != 0; // ECHO
-                    tty.isig   = lflag & 0x1 != 0; // ISIG
-                    // c_cc: VTIME at offset 5, VMIN at offset 6
-                    let cc = (arg + 17) as *const u8;
-                    tty.vtime = *cc.add(5);
-                    tty.vmin  = *cc.add(6);
+                    // TCSETSF (0x5404): flush input first
+                    if request == 0x5404 {
+                        tty.flush_input();
+                        crate::tty::serial_flush();
+                    }
+                    // TCSETSW (0x5403) / TCSETSF: drain output
+                    // (serial output is synchronous, so drain is a no-op for us)
+                    tty.termios.from_user(arg);
                 }
             }
             0

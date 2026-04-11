@@ -27,13 +27,12 @@ pub struct PtyPair {
     output_head: usize,
     output_tail: usize,
     output_count: usize,
-    // Slave terminal state (like Tty struct)
-    pub cooked: bool,
-    pub echo: bool,
-    pub isig: bool,
+    // Slave terminal state
+    pub termios: crate::tty::Termios,
     pub foreground_pgid: u32,
     pub session_id: u32,
     pub winsize: [u16; 4], // rows, cols, xpixel, ypixel
+    pub col: usize, // output column tracking
     // Line buffer for canonical mode
     line_buf: [u8; 256],
     line_len: usize,
@@ -48,11 +47,20 @@ impl PtyPair {
             input_head: 0, input_tail: 0, input_count: 0,
             output: [0; PTY_BUF_SIZE],
             output_head: 0, output_tail: 0, output_count: 0,
-            cooked: true, echo: true, isig: true,
+            termios: crate::tty::Termios::default_cooked(),
             foreground_pgid: 0, session_id: 0,
             winsize: [24, 80, 0, 0],
+            col: 0,
             line_buf: [0; 256], line_len: 0,
         }
+    }
+
+    /// Flush input queues (for TCSETSF).
+    pub fn flush_input(&mut self) {
+        self.line_len = 0;
+        self.input_count = 0;
+        self.input_head = 0;
+        self.input_tail = 0;
     }
 }
 
@@ -159,17 +167,40 @@ pub unsafe fn master_write(id: u8, data: &[u8]) -> isize {
     if PTYS[i].slave_refs == 0 { return crate::errno::EIO; }
     let p = &mut PTYS[i];
 
-    if p.echo {
+    if p.termios.echo_enabled() {
         // Echo: also write to output queue so master sees what was typed
         ring_write(&mut p.output, &mut p.output_head, &mut p.output_count, data);
     }
 
-    if p.cooked {
+    if p.termios.is_canonical() {
         // Canonical mode: buffer in line_buf, deliver on newline
-        for &b in data {
+        for &raw in data {
+            // Apply input processing
+            let b = match p.termios.input_process(raw) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            // Signal characters
+            if p.termios.isig_enabled() {
+                if b == p.termios.cc(crate::tty::VINTR) {
+                    if p.foreground_pgid > 0 {
+                        crate::syscall::posix::kill(-(p.foreground_pgid as isize), 2);
+                    }
+                    p.line_len = 0;
+                    continue;
+                }
+                if b == p.termios.cc(crate::tty::VSUSP) {
+                    if p.foreground_pgid > 0 {
+                        crate::syscall::posix::kill(-(p.foreground_pgid as isize), 20);
+                    }
+                    p.line_len = 0;
+                    continue;
+                }
+            }
+
             match b {
                 b'\r' | b'\n' => {
-                    // Deliver line to input queue
                     if p.line_len > 0 {
                         let line = &p.line_buf[..p.line_len];
                         ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, line);
@@ -177,33 +208,19 @@ pub unsafe fn master_write(id: u8, data: &[u8]) -> isize {
                     ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, b"\n");
                     p.line_len = 0;
                 }
-                0x7F | 0x08 => {
-                    // Backspace
+                _ if b == p.termios.cc(crate::tty::VERASE) || b == 0x08 => {
                     if p.line_len > 0 { p.line_len -= 1; }
                 }
-                0x03 => {
-                    // Ctrl-C: send SIGINT
-                    if p.isig && p.foreground_pgid > 0 {
-                        crate::syscall::posix::kill(-(p.foreground_pgid as isize), 2);
-                    }
-                    p.line_len = 0;
-                }
-                0x04 => {
-                    // Ctrl-D: deliver current buffer (EOF if empty)
+                _ if b == p.termios.cc(crate::tty::VEOF) => {
                     if p.line_len > 0 {
                         let line = &p.line_buf[..p.line_len];
                         ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, line);
                         p.line_len = 0;
                     } else {
-                        // Empty → EOF marker (0-byte read)
                         ring_write(&mut p.input, &mut p.input_head, &mut p.input_count, b"\x04");
                     }
                 }
-                0x1A => {
-                    // Ctrl-Z: SIGTSTP
-                    if p.isig && p.foreground_pgid > 0 {
-                        crate::syscall::posix::kill(-(p.foreground_pgid as isize), 20);
-                    }
+                _ if b == p.termios.cc(crate::tty::VKILL) => {
                     p.line_len = 0;
                 }
                 _ => {
@@ -233,13 +250,21 @@ pub unsafe fn master_read(id: u8, dst: &mut [u8]) -> isize {
     ring_read(&p.output, &mut p.output_tail, &mut p.output_count, dst) as isize
 }
 
-/// Slave write: put bytes into the master's output queue.
+/// Slave write: put bytes into the master's output queue (with output processing).
 pub unsafe fn slave_write(id: u8, data: &[u8]) -> isize {
     let i = id as usize;
     if i >= MAX_PTYS || !PTYS[i].active { return crate::errno::EIO; }
     if PTYS[i].master_refs == 0 { return crate::errno::EIO; }
     let p = &mut PTYS[i];
-    ring_write(&mut p.output, &mut p.output_head, &mut p.output_count, data) as isize
+    // Apply output processing (c_oflag)
+    for &b in data {
+        let (b1, b2) = p.termios.output_process(b, &mut p.col);
+        ring_write(&mut p.output, &mut p.output_head, &mut p.output_count, &[b1]);
+        if let Some(b2) = b2 {
+            ring_write(&mut p.output, &mut p.output_head, &mut p.output_count, &[b2]);
+        }
+    }
+    data.len() as isize
 }
 
 /// Slave read: get bytes from the master's input queue.

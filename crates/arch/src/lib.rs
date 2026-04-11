@@ -75,9 +75,16 @@ pub unsafe trait ConsoleOps {
     fn read_byte() -> u8;
     /// Check if a byte is available to read without blocking.
     fn has_byte() -> bool;
+    /// Write raw bytes with CRLF conversion (for kernel logging).
     fn write_bytes(buf: &[u8]) {
         for &b in buf {
             if b == b'\n' { Self::write_byte(b'\r'); }
+            Self::write_byte(b);
+        }
+    }
+    /// Write raw bytes without any conversion.
+    fn write_bytes_raw(buf: &[u8]) {
+        for &b in buf {
             Self::write_byte(b);
         }
     }
