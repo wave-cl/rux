@@ -221,6 +221,8 @@ pub unsafe fn load_elf_from_inode(
     };
 
     // Write exec args to user stack (needs stac for SMAP — user pages)
+    use rux_arch::ArchInfo;
+    rux_proc::execargs::set_hwcap(crate::arch::Arch::AT_HWCAP);
     crate::uaccess::stac();
     let user_sp = rux_proc::execargs::write_to_stack(stack_top as usize);
     crate::uaccess::clac();

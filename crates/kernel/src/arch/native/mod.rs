@@ -91,6 +91,7 @@ impl rux_arch::ArchInfo for NativeArch {
     const O_DIRECTORY: usize = 0x10000;
     const O_NOFOLLOW: usize = 0x20000;
     const SMP_FORK: bool = false;
+    const AT_HWCAP: u64 = 0;
 }
 
 // ── ArchSpecificOps ───────────────────────────────────────────────────

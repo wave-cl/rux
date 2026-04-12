@@ -83,6 +83,8 @@ impl rux_arch::ArchInfo for X86_64 {
     const O_DIRECTORY: usize = 0x10000;
     const O_NOFOLLOW: usize = 0x20000;
     const SMP_FORK: bool = true;
+    const AT_HWCAP: u64 = 0;
+    // x86_64: unified I/D cache, no sync needed
 }
 
 impl rux_arch::MemoryLayout for X86_64 {

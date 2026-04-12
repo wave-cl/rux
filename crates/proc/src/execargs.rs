@@ -67,8 +67,11 @@ static mut AUXV_PHENT: usize = 0;  // AT_PHENT: size of one program header entry
 static mut AUXV_PHNUM: usize = 0;  // AT_PHNUM: number of program headers
 static mut AUXV_ENTRY: usize = 0;  // AT_ENTRY: binary's original entry point
 static mut AUXV_BASE: usize = 0;   // AT_BASE: base address of dynamic linker
+static mut AUXV_HWCAP: usize = 0;  // AT_HWCAP: architecture feature flags
 
 /// Set dynamic linking auxv values (called before write_to_stack for dynamic binaries).
+pub unsafe fn set_hwcap(hwcap: u64) { AUXV_HWCAP = hwcap as usize; }
+
 pub unsafe fn set_dynamic_auxv(phdr: usize, phent: usize, phnum: usize, entry: usize, base: usize) {
     AUXV_PHDR = phdr;
     AUXV_PHENT = phent;
@@ -291,12 +294,7 @@ pub unsafe fn write_to_stack(stack_top: usize) -> usize {
     (*auxv.add(ai)) = [12, 0];              ai += 1; // AT_EUID (was 23=AT_SECURE)
     (*auxv.add(ai)) = [13, 0];              ai += 1; // AT_GID
     (*auxv.add(ai)) = [14, 0];              ai += 1; // AT_EGID
-    // AT_HWCAP: advertise FP+ASIMD (mandatory on ARMv8), plus common features.
-    // Without these, musl/libc may use slow fallback paths.
-    #[cfg(target_arch = "aarch64")]
-    { (*auxv.add(ai)) = [16, 0xFF]; ai += 1; } // FP|ASIMD|EVTSTRM|AES|PMULL|SHA1|SHA2|CRC32
-    #[cfg(not(target_arch = "aarch64"))]
-    { (*auxv.add(ai)) = [16, 0];   ai += 1; } // AT_HWCAP
+    (*auxv.add(ai)) = [16, AUXV_HWCAP]; ai += 1; // AT_HWCAP
     (*auxv.add(ai)) = [25, random_base];    ai += 1; // AT_RANDOM (16 random bytes)
 
     // Dynamic linking entries (only if set)

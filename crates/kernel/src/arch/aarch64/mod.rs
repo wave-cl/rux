@@ -72,6 +72,26 @@ impl rux_arch::ArchInfo for Aarch64 {
     const O_DIRECTORY: usize = 0x4000;
     const O_NOFOLLOW: usize = 0x8000;
     const SMP_FORK: bool = false;
+    const AT_HWCAP: u64 = 0xFF; // FP|ASIMD|EVTSTRM|AES|PMULL|SHA1|SHA2|CRC32
+
+    unsafe fn sync_icache(va: usize, len: usize) {
+        let ctr: u64;
+        core::arch::asm!("mrs {}, ctr_el0", out(reg) ctr, options(nostack));
+        let dline = 4 << ((ctr >> 16) & 0xF);
+        let iline = 4 << (ctr & 0xF);
+        let mut addr = va & !(dline - 1);
+        while addr < va + len {
+            core::arch::asm!("dc cvau, {}", in(reg) addr, options(nostack));
+            addr += dline;
+        }
+        core::arch::asm!("dsb ish", options(nostack));
+        addr = va & !(iline - 1);
+        while addr < va + len {
+            core::arch::asm!("ic ivau, {}", in(reg) addr, options(nostack));
+            addr += iline;
+        }
+        core::arch::asm!("dsb ish", "isb", options(nostack));
+    }
 }
 
 impl rux_arch::MemoryLayout for Aarch64 {

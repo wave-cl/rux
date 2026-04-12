@@ -165,6 +165,10 @@ pub trait ArchInfo {
     const O_NOFOLLOW: usize;
     /// Whether this arch supports SMP fork distribution.
     const SMP_FORK: bool;
+    /// AT_HWCAP auxv value for ELF loading (0xFF on aarch64 for NEON/crypto, 0 on x86_64).
+    const AT_HWCAP: u64;
+    /// Synchronize I-cache after writing executable data (no-op on x86_64, required on aarch64).
+    unsafe fn sync_icache(_va: usize, _len: usize) {}
 }
 
 /// Architecture-specific syscalls (e.g., arch_prctl on x86_64).
