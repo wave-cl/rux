@@ -35,8 +35,14 @@ NET_ARGS="-netdev user,id=net0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netd
 INITRD_ARGS=""
 [ -n "${INITRD}" ] && INITRD_ARGS="-initrd ${INITRD}"
 
+# Use KVM if available for ~10x speedup over TCG
+ACCEL=""
+if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
+  ACCEL="-accel kvm"
+fi
+
 exec ${QEMU} \
-  -cpu max -smp 1 \
+  ${ACCEL} -cpu max -smp 1 \
   -kernel ${KERNEL}.elf32 \
   ${INITRD_ARGS} \
   ${DISK_ARGS} \
