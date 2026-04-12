@@ -30,6 +30,17 @@ pub const O_NONBLOCK: u32   = 0o4000;
 pub const O_CLOEXEC: u32    = 0o2000000;
 pub const FD_CLOEXEC: u8    = 1;
 
+// ── Errno constants (negative returns from fdtable/syscall) ────────────
+
+pub const EBADF: isize  = -9;   // Bad file descriptor
+pub const EIO: isize    = -5;   // I/O error
+pub const EFAULT: isize = -14;  // Bad address
+pub const EISDIR: isize = -21;  // Is a directory
+pub const EINVAL: isize = -22;  // Invalid argument
+pub const EMFILE: isize = -24;  // Too many open files
+pub const ESPIPE: isize = -29;  // Illegal seek
+pub const EPIPE: isize  = -32;  // Broken pipe
+
 // ── File type constants (S_IFMT) ────────────────────────────────────────
 
 pub const S_IFMT: u32   = 0o170000;

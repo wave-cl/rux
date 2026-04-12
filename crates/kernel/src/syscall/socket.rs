@@ -403,7 +403,7 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr:
                         if flags & MSG_NOSIGNAL == 0 {
                             (*super::process()).signal_hot.pending.0 |= 1u64 << 12; // SIGPIPE=13
                         }
-                        return -32;
+                        return crate::errno::EPIPE;
                     }
                     match rux_net::tcp_send(handle, &kbuf[..send_len]) {
                         Ok(n) => {

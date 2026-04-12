@@ -156,37 +156,37 @@ pub fn sys_open_ino<F: FileSystem>(ino: crate::InodeId, flags: u32, fs: &mut F) 
                 return fd as isize;
             }
         }
-        -24 // -EMFILE
+        crate::EMFILE
     }
 }
 
 /// Duplicate a file descriptor to the lowest available fd (>= 3).
 pub fn sys_dup(oldfd: usize) -> isize {
-    if oldfd >= MAX_FDS { return -9; }
+    if oldfd >= MAX_FDS { return crate::EBADF; }
     unsafe {
-        if oldfd > 2 && !(*fd_table())[oldfd].active { return -9; }
+        if oldfd > 2 && !(*fd_table())[oldfd].active { return crate::EBADF; }
         for newfd in FIRST_FILE_FD..MAX_FDS {
             if !(*fd_table())[newfd].active {
                 return sys_dup2_inner(oldfd, newfd, None);
             }
         }
-        -24 // -EMFILE
+        crate::EMFILE
     }
 }
 
 /// Duplicate a file descriptor to the lowest available fd >= minfd.
 /// Used by fcntl(F_DUPFD).
 pub fn sys_dupfd(oldfd: usize, minfd: usize) -> isize {
-    if oldfd >= MAX_FDS { return -9; }
+    if oldfd >= MAX_FDS { return crate::EBADF; }
     unsafe {
-        if oldfd > 2 && !(*fd_table())[oldfd].active { return -9; }
+        if oldfd > 2 && !(*fd_table())[oldfd].active { return crate::EBADF; }
         let start = minfd.max(FIRST_FILE_FD);
         for newfd in start..MAX_FDS {
             if !(*fd_table())[newfd].active {
                 return sys_dup2_inner(oldfd, newfd, None);
             }
         }
-        -24 // -EMFILE
+        crate::EMFILE
     }
 }
 
@@ -196,9 +196,9 @@ pub fn sys_dup2(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize {
 }
 
 fn sys_dup2_inner(oldfd: usize, newfd: usize, pipes: Option<&PipeFns>) -> isize {
-    if oldfd >= MAX_FDS || newfd >= MAX_FDS { return -9; }
+    if oldfd >= MAX_FDS || newfd >= MAX_FDS { return crate::EBADF; }
     unsafe {
-        if oldfd > 2 && !(*fd_table())[oldfd].active { return -9; }
+        if oldfd > 2 && !(*fd_table())[oldfd].active { return crate::EBADF; }
         // POSIX: if oldfd == newfd, return newfd without closing/reopening
         if oldfd == newfd { return newfd as isize; }
         // Close newfd if it's currently open (including pipe/socket cleanup)
@@ -252,7 +252,7 @@ pub fn sys_close(fd: usize, pipes: Option<&PipeFns>) -> isize {
                 // Console fds 0-2: closing an already-closed console fd is harmless.
                 // Programs like git call close(1) then fclose(stdout) which closes again.
                 if fd <= 2 { return 0; }
-                return -9;
+                return crate::EBADF;
             }
         };
         if f.is_pipe {
@@ -283,7 +283,7 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
                 return Ok(fd as isize);
             }
         }
-        Err(-24) // -EMFILE
+        Err(crate::EMFILE) // -EMFILE
     }
 }
 
@@ -292,19 +292,19 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
     unsafe {
         let f = match get_fd_mut(fd) {
             Some(f) => f,
-            None => return -9,
+            None => return crate::EBADF,
         };
         if f.is_pipe {
             return (pipes.read)(f.pipe_id, buf, len);
         }
         if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
-            return if len == 0 { 0 } else { -14 }; // -EFAULT
+            return if len == 0 { 0 } else { crate::EFAULT }; // -EFAULT
         }
 
         // Get file size
         let mut stat = core::mem::zeroed::<InodeStat>();
         if fs.stat(f.ino, &mut stat).is_err() {
-            return -5; // -EIO
+            return crate::EIO; // -EIO
         }
         let is_char_dev = stat.mode & 0xF000 == 0x2000; // S_IFCHR
         let size = stat.size as usize;
@@ -319,7 +319,7 @@ pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut 
                 f.offset += n;
                 n as isize
             }
-            Err(_) => -5,
+            Err(_) => crate::EIO,
         }
     }
 }
@@ -329,14 +329,14 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
     unsafe {
         let f = match get_fd_mut(fd) {
             Some(f) => f,
-            None => return -9,
+            None => return crate::EBADF,
         };
         if f.is_pipe {
             return (pipes.write)(f.pipe_id, buf, len);
         }
         // Validate user buffer pointer
         if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
-            return if len == 0 { 0 } else { -14 }; // -EFAULT
+            return if len == 0 { 0 } else { crate::EFAULT }; // -EFAULT
         }
 
         let user_buf = core::slice::from_raw_parts(buf, len);
@@ -345,20 +345,20 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
                 f.offset += n;
                 n as isize
             }
-            Err(_) => -5,
+            Err(_) => crate::EIO,
         }
     }
 }
 
 /// Seek on a file descriptor. Returns new offset, negative on error.
 pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> isize {
-    if fd < FIRST_FILE_FD { return -29; } // ESPIPE: console/pipe fds are not seekable
+    if fd < FIRST_FILE_FD { return crate::ESPIPE; } // ESPIPE: console/pipe fds are not seekable
     unsafe {
         let f = match get_fd_mut(fd) {
             Some(f) => f,
-            None => return -9,
+            None => return crate::EBADF,
         };
-        if f.is_pipe { return -29; } // ESPIPE: pipes are not seekable
+        if f.is_pipe { return crate::ESPIPE; } // ESPIPE: pipes are not seekable
         let new_off: i64 = match whence {
             0 => offset, // SEEK_SET
             1 => f.offset as i64 + offset, // SEEK_CUR
@@ -366,14 +366,14 @@ pub fn sys_lseek<F: FileSystem>(fd: usize, offset: i64, whence: u32, fs: &F) -> 
                 // SEEK_END: need file size
                 let mut stat = core::mem::zeroed::<InodeStat>();
                 if fs.stat(f.ino, &mut stat).is_err() {
-                    return -5;
+                    return crate::EIO;
                 }
                 stat.size as i64 + offset
             }
-            _ => return -22, // -EINVAL
+            _ => return crate::EINVAL, // -EINVAL
         };
         if new_off < 0 {
-            return -22; // -EINVAL
+            return crate::EINVAL; // -EINVAL
         }
         f.offset = new_off as usize;
         new_off as isize
