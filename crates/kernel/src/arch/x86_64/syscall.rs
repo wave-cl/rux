@@ -6,15 +6,6 @@ use super::console;
 
 // ── SYSCALL instruction setup (Linux x86_64 ABI) ───────────────────
 
-/// Points to the top of the current task's kernel stack.
-/// Each task uses KSTACKS[idx]; this global is updated on context switch.
-/// Used by SignalOps, VforkContext, and the RIP-relative syscall entry path.
-
-/// Per-CPU IRQ stack top. Interrupt handlers run on this stack to avoid
-/// corrupting the task kernel stack during context_switch from IRQ context.
-pub static mut CURRENT_IRQ_STACK_TOP: u64 = 0;
-
-
 
 /// Initialize the SYSCALL/SYSRET MSRs.
 pub unsafe fn init_syscall_msrs() {
@@ -42,9 +33,8 @@ pub unsafe fn init_syscall_msrs() {
 }
 
 /// SWAPGS-based syscall entry — matches Linux.
-/// Uses swapgs + gs:[offset] for per-CPU state.
-/// Dual-writes to both gs:[offset] and RIP-relative globals so Rust code
-/// (VforkContext, SignalOps) that reads SAVED_USER_RSP directly still works.
+/// Uses swapgs + gs:[offset] for per-CPU state. All kernel code
+/// reads from this_cpu() — no legacy globals.
 #[unsafe(naked)]
 unsafe extern "C" fn syscall_entry_gs() {
     core::arch::naked_asm!(

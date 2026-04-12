@@ -151,9 +151,8 @@ pub fn x86_64_init(multiboot_info: usize) {
     // Set GS-base AFTER GDT init (GDT init zeros GS segment, clearing hidden base)
     unsafe {
         crate::percpu::init_this_cpu(0);
-        // Per-CPU IRQ stack for BSP (Linux call_on_irq_stack approach).
-        // -8 to leave room for the saved RSP at the top (Linux convention).
-        super::syscall::CURRENT_IRQ_STACK_TOP =
+        // Per-CPU IRQ stack for BSP (use cpu(0) not this_cpu() — FSGSBASE not yet enabled)
+        crate::percpu::cpu(0).irq_stack_top =
             crate::task_table::IRQ_STACKS.0[0].as_ptr() as u64
             + crate::task_table::IRQ_STACK_SIZE as u64 - 8;
     }

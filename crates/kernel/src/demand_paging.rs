@@ -57,9 +57,6 @@ const MAX_STACK_PAGES: usize = 2048;
 
 /// Stack base: lowest address of the initial stack mapping.
 /// ELF loader maps 32 pages below stack_top (typically 0x80000000).
-#[cfg(target_arch = "x86_64")]
-const STACK_TOP: usize = 0x80000000;
-#[cfg(target_arch = "aarch64")]
 const STACK_TOP: usize = 0x80000000;
 #[allow(dead_code)]
 const INITIAL_STACK_PAGES: usize = 32;
