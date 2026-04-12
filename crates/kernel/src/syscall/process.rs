@@ -32,6 +32,72 @@ unsafe fn close_all_sockets() {
     }
 }
 
+/// Restore fds 0-2 as console after a child corrupted them.
+unsafe fn restore_console_fds() {
+    for i in 0..3 {
+        if !(*rux_fs::fdtable::fd_table())[i].is_pipe
+            && !(*rux_fs::fdtable::fd_table())[i].is_socket
+        {
+            (*rux_fs::fdtable::fd_table())[i] = rux_fs::fdtable::OpenFile {
+                ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: true,
+                is_pipe: false, pipe_id: 0, pipe_write: false,
+                is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
+                is_pty: false, pty_id: 0, pty_master: false,
+            };
+        }
+    }
+}
+
+/// Session leader exit: send SIGHUP+SIGCONT to session, shutdown if console leader.
+unsafe fn exit_session_leader(idx: usize, my_pid: u32, my_sid: u32) {
+    use crate::task_table::*;
+    // Console session leader → shut down the OS
+    if TASK_TABLE[idx].ppid == 1 && my_sid == crate::tty::TTY.session_id {
+        use rux_arch::ExitOps;
+        crate::arch::Arch::exit(crate::arch::Arch::EXIT_SUCCESS);
+    }
+    // Send SIGHUP to all session members
+    for j in 0..MAX_PROCS {
+        if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].sid == my_sid
+            && TASK_TABLE[j].state != TaskState::Zombie
+        {
+            send_signal_to(j, 1); // SIGHUP
+            if TASK_TABLE[j].state == TaskState::Stopped {
+                send_signal_to(j, 18); // SIGCONT
+            }
+        }
+    }
+}
+
+/// Reparent orphaned children to init (PID 1), auto-reap zombies.
+unsafe fn reparent_children(idx: usize, my_pid: u32) {
+    use crate::task_table::*;
+    for j in 0..MAX_PROCS {
+        if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].ppid == my_pid {
+            TASK_TABLE[j].ppid = 1;
+            if TASK_TABLE[j].state == TaskState::Zombie {
+                free_task_address_space(j);
+                TASK_TABLE[j].active = false;
+                TASK_TABLE[j].state = TaskState::Free;
+                TASK_TABLE[j].pt_root = 0;
+            }
+        }
+    }
+}
+
+/// Free a task's user address space (COW pages + page tables).
+unsafe fn free_task_address_space(idx: usize) {
+    use crate::task_table::TASK_TABLE;
+    let pt_root = TASK_TABLE[idx].pt_root;
+    if pt_root != 0 {
+        let alloc = crate::kstate::alloc();
+        let pt = crate::arch::PageTable::from_root(
+            rux_klib::PhysAddr::new(pt_root as usize)
+        );
+        pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
+    }
+}
+
 /// _exit(status) — POSIX.1
 pub fn exit(status: i32) -> ! {
     unsafe { super::process().last_child_exit = status; }
@@ -41,98 +107,35 @@ pub fn exit(status: i32) -> ! {
         use crate::task_table::*;
         let idx = current_task_idx();
         if TASK_TABLE[idx].active && TASK_TABLE[idx].pid != 1 {
-            // Close all pipe and socket FDs so refcounts drop correctly.
             close_all_pipes();
             close_all_sockets();
-
-            // Restore fd 0-2 as console if they were corrupted by the child.
-            // The global FD_TABLE is shared, so a child that dup2'd a file onto
-            // fd 1 (e.g., apk redirecting stdout) leaves is_console=false after exit.
-            for i in 0..3 {
-                if !(*rux_fs::fdtable::fd_table())[i].is_pipe
-                    && !(*rux_fs::fdtable::fd_table())[i].is_socket
-                {
-                    (*rux_fs::fdtable::fd_table())[i] = rux_fs::fdtable::OpenFile {
-                        ino: 0, offset: 0, flags: 0, fd_flags: 0, active: true, is_console: true,
-                        is_pipe: false, pipe_id: 0, pipe_write: false,
-                        is_socket: false, socket_idx: 0, pipe_id_write: 0xFF,
-                        is_pty: false, pty_id: 0, pty_master: false,
-                    };
-                }
-            }
+            restore_console_fds();
 
             TASK_TABLE[idx].exit_code = status;
-
-            // Session leader exit: send SIGHUP to all processes in the session
-            // (Linux: disassociate_ctty → kill_pgrp(SIGHUP) → kill_pgrp(SIGCONT))
             let my_pid = TASK_TABLE[idx].pid;
             let my_sid = TASK_TABLE[idx].sid;
-            if my_sid == my_pid { // session leader
-                // If this is the console session leader (child of init),
-                // shut down the OS directly so "exit" in the shell works.
-                if TASK_TABLE[idx].ppid == 1 && my_sid == crate::tty::TTY.session_id {
-                    use rux_arch::ExitOps;
-                    crate::arch::Arch::exit(crate::arch::Arch::EXIT_SUCCESS);
-                }
-                for j in 0..MAX_PROCS {
-                    if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].sid == my_sid
-                        && TASK_TABLE[j].state != TaskState::Zombie
-                    {
-                        send_signal_to(j, 1); // SIGHUP
-                        if TASK_TABLE[j].state == TaskState::Stopped {
-                            send_signal_to(j, 18); // SIGCONT
-                        }
-                    }
-                }
+
+            // Session leader: SIGHUP to session, possible OS shutdown
+            if my_sid == my_pid {
+                exit_session_leader(idx, my_pid, my_sid);
             }
 
-            // Reparent children to init (PID 1). Linux does this so orphaned
-            // children can be reaped by init instead of becoming unreachable zombies.
-            for j in 0..MAX_PROCS {
-                if j != idx && TASK_TABLE[j].active && TASK_TABLE[j].ppid == my_pid {
-                    TASK_TABLE[j].ppid = 1;
-                    // Auto-reap if already zombie (init won't explicitly wait)
-                    if TASK_TABLE[j].state == TaskState::Zombie {
-                        let child_pt_root = TASK_TABLE[j].pt_root;
-                        if child_pt_root != 0 {
-                            let alloc = crate::kstate::alloc();
-                            let child_pt = crate::arch::PageTable::from_root(
-                                rux_klib::PhysAddr::new(child_pt_root as usize)
-                            );
-                            child_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
-                        }
-                        TASK_TABLE[j].active = false;
-                        TASK_TABLE[j].state = TaskState::Free;
-                        TASK_TABLE[j].pt_root = 0;
-                    }
-                }
-            }
+            // Reparent orphaned children to init (PID 1)
+            reparent_children(idx, my_pid);
 
-            // CLONE_THREAD: thread exit — write 0 to clear_child_tid, skip zombie.
+            // Determine exit disposition: thread, init-child (auto-reap), or zombie
             let is_thread = TASK_TABLE[idx].clone_flags as usize & crate::errno::CLONE_THREAD != 0;
             if is_thread {
-                // clear_child_tid: write 0 to user address (for pthread_join / futex)
                 let ctid = TASK_TABLE[idx].clear_child_tid;
                 if ctid != 0 {
                     crate::uaccess::put_user(ctid, 0u32);
                     super::posix::futex_wake(ctid, 1);
                 }
-                // Thread doesn't become zombie — just free the slot
                 TASK_TABLE[idx].active = false;
                 TASK_TABLE[idx].state = TaskState::Free;
             } else if TASK_TABLE[idx].ppid == 1 {
-                // Parent is init (PID 1): auto-reap immediately.
-                // Free slot BEFORE notifying parent to prevent a race where
-                // the parent wakes, scans TASK_TABLE, finds this child still
-                // active/Ready, sees has_children=true, and blocks forever.
-                let child_pt_root = TASK_TABLE[idx].pt_root;
-                if child_pt_root != 0 {
-                    let alloc = crate::kstate::alloc();
-                    let child_pt = crate::arch::PageTable::from_root(
-                        rux_klib::PhysAddr::new(child_pt_root as usize)
-                    );
-                    child_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
-                }
+                // Auto-reap: free slot before notify to avoid race
+                free_task_address_space(idx);
                 TASK_TABLE[idx].active = false;
                 TASK_TABLE[idx].state = TaskState::Free;
                 TASK_TABLE[idx].pt_root = 0;
