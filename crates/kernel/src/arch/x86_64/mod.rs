@@ -45,7 +45,7 @@ unsafe impl rux_arch::PerCpuOps for X86_64 {
 impl rux_arch::SyscallArgOps for X86_64 {
     #[inline(always)]
     fn saved_syscall_arg5() -> usize {
-        unsafe { syscall::SAVED_SYSCALL_A5 as usize }
+        unsafe { crate::percpu::this_cpu().saved_syscall_a5 as usize }
     }
 }
 
@@ -82,11 +82,13 @@ impl rux_arch::ArchInfo for X86_64 {
     const MACHINE_NAME: &'static [u8] = b"x86_64";
     const O_DIRECTORY: usize = 0x10000;
     const O_NOFOLLOW: usize = 0x20000;
+    const SMP_FORK: bool = true;
 }
 
 impl rux_arch::MemoryLayout for X86_64 {
     const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000; // 128 TiB
     const INTERP_BASE: u64 = 0x40000000; // 1 GiB (above identity map)
+    const PIE_BASE: u64 = 0x8000000;
 }
 
 impl super::StatLayout for X86_64 {

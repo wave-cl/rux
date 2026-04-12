@@ -71,11 +71,13 @@ impl rux_arch::ArchInfo for Aarch64 {
     const MACHINE_NAME: &'static [u8] = b"aarch64";
     const O_DIRECTORY: usize = 0x4000;
     const O_NOFOLLOW: usize = 0x8000;
+    const SMP_FORK: bool = false;
 }
 
 impl rux_arch::MemoryLayout for Aarch64 {
     const USER_ADDR_LIMIT: u64 = 0x0001_0000_0000; // 4 GiB (full TTBR0 range)
     const INTERP_BASE: u64 = 0x20000000; // 512 MiB (avoids aarch64 identity map)
+    const PIE_BASE: u64 = 0x400000;
 }
 
 impl super::StatLayout for Aarch64 {

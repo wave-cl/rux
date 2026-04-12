@@ -6,7 +6,7 @@ unsafe impl rux_arch::ForkOps for super::X86_64 {
         tls: &mut u64,
         pt_root: &mut u64,
     ) {
-        *saved_user_sp = super::syscall::SAVED_USER_RSP as usize;
+        *saved_user_sp = crate::percpu::this_cpu().saved_user_rsp as usize;
         // Read IA32_FS_BASE (0xC0000100) — user TLS register
         let lo: u32;
         let hi: u32;
@@ -32,7 +32,7 @@ unsafe impl rux_arch::ForkOps for super::X86_64 {
         // CURRENT_KSTACK_TOP points to the top; the SYSCALL entry pushed
         // 15 values below it: rcx, r11, rbx, rbp, r12, r13, r14, r15,
         // rax, rdi, rsi, rdx, r10, r8, r9
-        let kstack_val = super::syscall::CURRENT_KSTACK_TOP;
+        let kstack_val = crate::percpu::this_cpu().syscall_kstack_top;
 
         // Push syscall frame so fork_child_sysret can pop it correctly.
         // fork_child_sysret pops: r9, r8, r10, rdx, rsi, rdi, rax, r15..rbx, r11, rcx

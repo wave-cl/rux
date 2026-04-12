@@ -6,13 +6,12 @@ unsafe impl rux_arch::TaskSwitchOps for super::X86_64 {
     }
 
     unsafe fn init_pid1_hw(kstack_top: usize) {
-        super::syscall::CURRENT_KSTACK_TOP = kstack_top as u64;
         crate::percpu::this_cpu().syscall_kstack_top = kstack_top as u64;
     }
 
     #[inline(always)]
     unsafe fn save_task_hw(saved_user_sp: &mut usize, tls: &mut u64) {
-        *saved_user_sp = super::syscall::SAVED_USER_RSP as usize;
+        *saved_user_sp = crate::percpu::this_cpu().saved_user_rsp as usize;
         // Read IA32_FS_BASE (0xC0000100) — user TLS register
         let lo: u32;
         let hi: u32;
@@ -39,12 +38,10 @@ unsafe impl rux_arch::TaskSwitchOps for super::X86_64 {
             );
         }
 
-        // Update per-CPU syscall state + legacy globals (VforkContext reads them)
+        // Update per-CPU syscall state
         let pc = crate::percpu::this_cpu();
         pc.saved_user_rsp = saved_user_sp as u64;
         pc.syscall_kstack_top = kstack_top as u64;
-        super::syscall::SAVED_USER_RSP = saved_user_sp as u64;
-        super::syscall::CURRENT_KSTACK_TOP = kstack_top as u64;
         // Update TSS.rsp0 so interrupts from user mode use this task's kernel stack
         super::gdt::set_rsp0(kstack_top as u64);
         // Write IA32_FS_BASE (0xC0000100) — user TLS register

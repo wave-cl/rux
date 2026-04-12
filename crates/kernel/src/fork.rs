@@ -110,14 +110,8 @@ unsafe fn enqueue_child(child_idx: usize) {
     use rux_sched::SchedClassOps;
     let my_cpu = crate::percpu::cpu_id() as u32;
     // SMP fork distribution: place child on least-loaded CPU.
-    // Only active with GS-based per-CPU syscall entry (KVM/real HW).
-    // On TCG, shared globals prevent cross-CPU task execution.
-    // SMP fork distribution requires per-CPU syscall globals.
-    // x86_64: GS-based path (KVM only). aarch64: not yet implemented.
-    #[cfg(target_arch = "x86_64")]
-    let smp_ok = true;
-    #[cfg(target_arch = "aarch64")]
-    let smp_ok = false; // aarch64 TCG: AP timer ISR interferes with BSP (same as x86_64 TCG)
+    use rux_arch::ArchInfo;
+    let smp_ok = crate::arch::Arch::SMP_FORK; // aarch64 TCG: AP timer ISR interferes with BSP (same as x86_64 TCG)
     let target_cpu = if !smp_ok || crate::percpu::online_cpus() <= 1 {
         my_cpu
     } else {

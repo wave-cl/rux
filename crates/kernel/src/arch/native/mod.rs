@@ -88,8 +88,9 @@ unsafe impl rux_arch::TimerControl for NativeArch {
 
 impl rux_arch::ArchInfo for NativeArch {
     const MACHINE_NAME: &'static [u8] = b"native";
-    const O_DIRECTORY: usize = 0x10000; // default to x86_64 for tests
+    const O_DIRECTORY: usize = 0x10000;
     const O_NOFOLLOW: usize = 0x20000;
+    const SMP_FORK: bool = false;
 }
 
 // ── ArchSpecificOps ───────────────────────────────────────────────────
@@ -287,8 +288,9 @@ impl FlatPageTable {
 // ── MemoryLayout ─────────────────────────────────────────────────────
 
 impl rux_arch::MemoryLayout for NativeArch {
-    const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000; // Match x86_64 for tests
+    const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000;
     const INTERP_BASE: u64 = 0x40000000;
+    const PIE_BASE: u64 = 0x8000000;
 }
 
 // ── Device probe stubs ───────────────────────────────────────────────

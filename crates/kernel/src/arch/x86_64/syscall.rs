@@ -9,17 +9,11 @@ use super::console;
 /// Points to the top of the current task's kernel stack.
 /// Each task uses KSTACKS[idx]; this global is updated on context switch.
 /// Used by SignalOps, VforkContext, and the RIP-relative syscall entry path.
-pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 
 /// Per-CPU IRQ stack top. Interrupt handlers run on this stack to avoid
 /// corrupting the task kernel stack during context_switch from IRQ context.
 pub static mut CURRENT_IRQ_STACK_TOP: u64 = 0;
 
-/// Legacy globals — kept for VforkContext and SyscallArgOps compatibility.
-/// Signal delivery and task switch use per-CPU data via this_cpu().
-#[no_mangle]
-pub static mut SAVED_USER_RSP: u64 = 0;
-pub static mut SAVED_SYSCALL_A5: u64 = 0;
 
 
 /// Initialize the SYSCALL/SYSRET MSRs.
@@ -61,14 +55,6 @@ unsafe extern "C" fn syscall_entry_gs() {
         "mov gs:[0], rsp",          // percpu.saved_user_rsp
         "mov gs:[8], r9",           // percpu.saved_syscall_a5
         "mov rsp, gs:[16]",         // percpu.syscall_kstack_top
-
-        // Sync to legacy globals (VforkContext + SyscallArgOps read these)
-        "push rax",
-        "mov rax, gs:[0]",
-        "mov [rip + {saved_user_rsp}], rax",
-        "mov rax, gs:[8]",
-        "mov [rip + {saved_a5}], rax",
-        "pop rax",
 
         // Save callee-saved + syscall-specific regs
         "push rcx",      // user RIP
@@ -123,8 +109,6 @@ unsafe extern "C" fn syscall_entry_gs() {
         "swapgs",
         "sysretq",
 
-        saved_user_rsp = sym SAVED_USER_RSP,
-        saved_a5 = sym SAVED_SYSCALL_A5,
         handler = sym syscall_dispatch_linux,
     );
 }
@@ -227,8 +211,6 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
     unsafe fn sig_write_user_sp(sp: usize) {
         let pc = crate::percpu::this_cpu();
         pc.saved_user_rsp = sp as u64;
-        // Keep global in sync for dual-path compatibility
-        SAVED_USER_RSP = sp as u64;
     }
 
     unsafe fn sig_write_frame(
@@ -272,10 +254,9 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         let saved_mask = (*frame).saved_mask;
         let orig_user_sp = (*frame).orig_user_sp;
 
-        // Restore user RSP to both per-CPU and global
+        // Restore user RSP to per-CPU
         let pc = crate::percpu::this_cpu();
         pc.saved_user_rsp = orig_user_sp;
-        SAVED_USER_RSP = orig_user_sp;
 
         // Restore RCX (user RIP) and R11 (RFLAGS) on kernel stack
         let kt = pc.syscall_kstack_top as usize;
@@ -495,7 +476,6 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let a3 = *regs.add(5);    // R10
         let a4 = *regs.add(7);    // R8
         let a5 = *regs.add(6);    // R9
-        SAVED_SYSCALL_A5 = a5;
 
         let result = syscall_dispatch_linux(nr, a0, a1, a2, a3, a4);
         *regs.add(14) = result as u64;
@@ -621,15 +601,19 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
     const CHILD_STACK_VA: usize = 0x7FFE_0000;
 
     unsafe fn save_regs() {
-        let kt = CURRENT_KSTACK_TOP as usize;
+        let kt = crate::percpu::this_cpu().syscall_kstack_top as usize;
         for i in 0..15 {
             VFORK_PARENT_REGS[i] = core::ptr::read_volatile((kt - (i + 1) * 8) as *const u64);
         }
     }
 
-    unsafe fn save_user_sp() -> usize { SAVED_USER_RSP as usize }
+    unsafe fn save_user_sp() -> usize {
+        crate::percpu::this_cpu().saved_user_rsp as usize
+    }
 
-    unsafe fn set_user_sp(sp: usize) { SAVED_USER_RSP = sp as u64; }
+    unsafe fn set_user_sp(sp: usize) {
+        crate::percpu::this_cpu().saved_user_rsp = sp as u64;
+    }
 
     unsafe fn save_tls() -> u64 {
         let lo: u32;
@@ -666,13 +650,14 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
 
     unsafe fn restore_and_return_to_user(return_val: isize, user_sp: usize) -> ! {
         // Write saved regs back to kernel stack
-        let kt = CURRENT_KSTACK_TOP as usize;
+        let kt = crate::percpu::this_cpu().syscall_kstack_top as usize;
         for i in 0..15 {
             core::ptr::write_volatile((kt - (i + 1) * 8) as *mut u64, VFORK_PARENT_REGS[i]);
         }
         // Override RAX slot with child PID (return value)
         core::ptr::write_volatile((kt - 9 * 8) as *mut u64, return_val as u64);
-        SAVED_USER_RSP = user_sp as u64;
+        // Store user SP in per-CPU for gs:[0] restore
+        crate::percpu::this_cpu().saved_user_rsp = user_sp as u64;
 
         let pop_rsp = (kt - 15 * 8) as u64;
         core::arch::asm!(
@@ -680,10 +665,10 @@ unsafe impl rux_arch::VforkContext for super::X86_64 {
             "pop r9", "pop r8", "pop r10", "pop rdx", "pop rsi", "pop rdi", "pop rax",
             "pop r15", "pop r14", "pop r13", "pop r12", "pop rbp", "pop rbx",
             "pop r11", "pop rcx",
-            "mov rsp, [{saved_user_rsp}]",
+            "mov rsp, gs:[0]",  // restore user RSP from per-CPU
+            "swapgs",
             "sysretq",
             rsp = in(reg) pop_rsp,
-            saved_user_rsp = sym SAVED_USER_RSP,
             options(noreturn)
         );
     }

@@ -134,15 +134,8 @@ pub unsafe fn load_elf_from_inode(
     // so it doesn't collide with the null guard page at VA 0.
     let is_pie = elf_info.e_type == 3 && elf_info.segments.iter()
         .any(|s| s.vaddr == 0);
-    // PIE base: above identity map, below mmap_base/INTERP_BASE.
-    // x86_64: identity maps 0-128MB, kernel BSS reaches ~0x400000. Use 128MB.
-    // aarch64: MMIO at 0x08000000, RAM at 0x40000000. Use 4MB (safe gap).
-    #[cfg(target_arch = "x86_64")]
-    let pie_base: u64 = if is_pie { 0x8000000 } else { 0 };
-    #[cfg(target_arch = "aarch64")]
-    let pie_base: u64 = if is_pie { 0x400000 } else { 0 };
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    let pie_base: u64 = if is_pie { 0x400000 } else { 0 };
+    use rux_arch::MemoryLayout;
+    let pie_base: u64 = if is_pie { crate::arch::Arch::PIE_BASE } else { 0 };
 
     let (stack_top, max_end) = if is_pie {
         let end = rux_elf::load_elf_to_pt_at_base(

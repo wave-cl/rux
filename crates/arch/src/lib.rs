@@ -163,6 +163,8 @@ pub trait ArchInfo {
     const O_DIRECTORY: usize;
     /// O_NOFOLLOW flag value — differs per arch (x86_64: 0x20000, aarch64: 0x8000).
     const O_NOFOLLOW: usize;
+    /// Whether this arch supports SMP fork distribution.
+    const SMP_FORK: bool;
 }
 
 /// Architecture-specific syscalls (e.g., arch_prctl on x86_64).
@@ -460,4 +462,7 @@ pub trait MemoryLayout {
     /// Base virtual address for the dynamic linker (ld.so).
     /// Must not overlap kernel identity map or user binary.
     const INTERP_BASE: u64;
+    /// Base address for PIE (position-independent) executables.
+    /// x86_64: 0x8000000, aarch64: 0x400000. 0 for non-PIE.
+    const PIE_BASE: u64;
 }
