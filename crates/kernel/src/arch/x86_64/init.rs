@@ -213,10 +213,10 @@ pub fn x86_64_init(multiboot_info: usize) {
         }
     }
 
-    // Detect KVM and enable per-CPU GS-based syscall entry
+    // SWAPGS per-CPU syscall entry on all platforms (like Linux)
     unsafe {
+        super::syscall::GS_PERCPU_ACTIVE = true;
         if detect_kvm() {
-            super::syscall::GS_PERCPU_ACTIVE = true;
             console::write_str("rux: KVM detected, using gs-based syscall entry\n");
 
             // Enable SMAP in CR4 on KVM (stac/clac work reliably)
@@ -527,7 +527,13 @@ pub fn x86_64_init(multiboot_info: usize) {
 
         // Try up to 4 APs (QEMU -smp N, max N=4 for reasonable boot time).
         // Each failed SIPI costs ~50ms timeout. Larger N needs MADT detection.
-        let max_aps = 4usize.min(crate::percpu::MAX_CPUS);
+        // Boot APs on KVM (true SMP). Skip on TCG — the second vCPU's
+        // timer ticks interfere with BSP serial I/O timing on QEMU TCG.
+        let max_aps = if detect_kvm() {
+            4usize.min(crate::percpu::MAX_CPUS)
+        } else {
+            1 // TCG: single CPU with SWAPGS
+        };
         for ap_id in 1..max_aps {
             *data.add(0) = cr3;
             *data.add(1) = crate::task_table::KSTACKS.0[ap_id].as_ptr() as u64
