@@ -1,6 +1,5 @@
 //! File I/O syscalls (POSIX.1 Section 2).
 
-use rux_arch::ConsoleOps;
 use rux_fs::fdtable as fdt;
 type Arch = crate::arch::Arch;
 

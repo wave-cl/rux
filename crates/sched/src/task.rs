@@ -11,6 +11,7 @@ pub enum TaskState {
     /// Sleeping — waiting on I/O, lock, futex, etc.
     Interruptible = 2,
     /// Sleeping — cannot be woken by signals
+    #[allow(dead_code)]
     Uninterruptible = 3,
     /// Terminated, waiting for parent to reap
     Zombie = 4,

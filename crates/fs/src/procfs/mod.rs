@@ -779,7 +779,7 @@ impl FileSystem for ProcFs {
 
         // /proc/[pid]/task/N — thread directories (single-threaded: only has PID itself)
         if is_pid_task_dir(dir) {
-            let pid = dir - PID_TASK_DIR_BASE;
+            let _pid = dir - PID_TASK_DIR_BASE;
             if let Some(tid) = parse_u64(name_bytes) {
                 if self.pid_exists(tid) {
                     return Ok(PID_DIR_BASE + tid); // Reuse PID dir for thread entries
@@ -1074,6 +1074,7 @@ fn parse_u64(s: &[u8]) -> Option<u64> {
     Some(n)
 }
 
+#[allow(dead_code)]
 fn fmt_uptime(buf: &mut [u8], secs: u64, centisecs: u64) -> usize {
     let mut pos = 0;
     pos += fmt_u64(&mut buf[pos..], secs);

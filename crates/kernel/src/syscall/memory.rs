@@ -26,6 +26,7 @@ unsafe fn alloc_virtual_fd(flags: usize) -> isize {
 ///
 /// When only one task is active (single-process scenario), falls back to
 /// halt_until_interrupt which is more efficient (wakes on next IRQ, ~1ms).
+#[allow(dead_code)]
 pub(crate) unsafe fn yield_1ms() {
     // Count tasks that are actually READY to run (not sleeping/blocked).
     // Only yield if another task genuinely needs CPU time.
@@ -39,7 +40,7 @@ pub(crate) unsafe fn yield_1ms() {
     if others_ready {
         // Multiple tasks: yield via scheduler so they can run
         use rux_arch::TimerOps;
-        let dl = unsafe { crate::arch::Arch::ticks() } + 1;
+        let dl = crate::arch::Arch::ticks() + 1;
         unsafe { crate::wait::block_until(crate::task_table::TaskState::Sleeping, dl); }
     } else {
         // Single task: HLT until next interrupt (~1ms timer tick)
@@ -286,7 +287,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
         // Check deadline
         if deadline > 0 {
             use rux_arch::TimerOps;
-            if unsafe { crate::arch::Arch::ticks() } >= deadline {
+            if crate::arch::Arch::ticks() >= deadline {
                 return 0; // timeout expired, no events
             }
         }
@@ -294,7 +295,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
         // Sleep until I/O, timeout, or signal.
         {
             use rux_arch::TimerOps;
-            let dl = unsafe { crate::arch::Arch::ticks() } + timeout_ms.min(30_000) as u64;
+            let dl = crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64;
             if let crate::wait::WakeReason::Signal = unsafe {
                 crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, dl)
             } {
@@ -1189,7 +1190,7 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
         // Sleep until I/O, timeout, or signal.
         {
             use rux_arch::TimerOps;
-            let dl = unsafe { crate::arch::Arch::ticks() } + timeout_ms.min(30_000) as u64;
+            let dl = crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64;
             if let crate::wait::WakeReason::Signal = unsafe {
                 crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, dl)
             } {

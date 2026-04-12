@@ -61,6 +61,7 @@ const MAX_STACK_PAGES: usize = 2048;
 const STACK_TOP: usize = 0x80000000;
 #[cfg(target_arch = "aarch64")]
 const STACK_TOP: usize = 0x80000000;
+#[allow(dead_code)]
 const INITIAL_STACK_PAGES: usize = 32;
 const STACK_FLOOR: usize = STACK_TOP - MAX_STACK_PAGES * 4096;
 

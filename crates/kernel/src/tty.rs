@@ -8,6 +8,7 @@
 
 use rux_arch::ConsoleOps;
 
+#[allow(dead_code)] // Used by LineBuffer in line_discipline.rs
 const LINE_BUF_SIZE: usize = 4096;
 
 /// Serial input ring buffer — filled by the UART receive interrupt handler.
@@ -123,19 +124,26 @@ impl core::fmt::Write for SerialWriter {
     }
 }
 
-// ── Linux termios constants ───────────────────────────────────────────
+// ── Linux termios constants (full API surface) ───────────────────────
 
 // c_iflag bits
+#[allow(dead_code)]
+#[allow(dead_code)]
 pub const IGNBRK: u32  = 0o000001;
+#[allow(dead_code)]
 pub const BRKINT: u32  = 0o000002;
+#[allow(dead_code)]
 pub const IGNPAR: u32  = 0o000004;
+#[allow(dead_code)]
 pub const PARMRK: u32  = 0o000010;
+#[allow(dead_code)]
 pub const INPCK: u32   = 0o000020;
 pub const ISTRIP: u32  = 0o000040;
 pub const INLCR: u32   = 0o000100;
 pub const IGNCR: u32   = 0o000200;
 pub const ICRNL: u32   = 0o000400;
 pub const IXON: u32    = 0o002000;
+#[allow(dead_code)]
 pub const IXOFF: u32   = 0o010000;
 
 // c_oflag bits
@@ -152,6 +160,7 @@ pub const ECHO: u32    = 0o000010;
 pub const ECHOE: u32   = 0o000020;
 pub const ECHOK: u32   = 0o000040;
 pub const ECHONL: u32  = 0o000100;
+#[allow(dead_code)]
 pub const NOFLSH: u32  = 0o000200;
 pub const ECHOCTL: u32 = 0o001000;
 pub const ECHOKE: u32  = 0o004000;
@@ -228,6 +237,7 @@ impl Termios {
     #[inline] pub fn is_canonical(&self) -> bool { self.c_lflag & ICANON != 0 }
     #[inline] pub fn echo_enabled(&self) -> bool { self.c_lflag & ECHO != 0 }
     #[inline] pub fn isig_enabled(&self) -> bool { self.c_lflag & ISIG != 0 }
+    #[allow(dead_code)]
     #[inline] pub fn echoe_enabled(&self) -> bool { self.c_lflag & ECHOE != 0 }
     #[inline] pub fn echoctl_enabled(&self) -> bool { self.c_lflag & ECHOCTL != 0 }
     #[inline] pub fn iexten_enabled(&self) -> bool { self.c_lflag & IEXTEN != 0 }

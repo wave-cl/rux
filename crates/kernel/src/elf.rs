@@ -87,7 +87,7 @@ pub unsafe fn load_elf_from_inode(
             // Linux: argv[0]=interpreter, argv[1]=script_path, argv[2..]=original args
             {
                 let mut script_buf = [0u8; 128];
-                let slen = unsafe {
+                let slen = {
                     let argc = rux_proc::execargs::argc();
                     if argc > 0 {
                         let (buf, len) = rux_proc::execargs::get_argv0();

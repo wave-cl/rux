@@ -91,6 +91,7 @@ fn ring_read(buf: &[u8; PTY_BUF_SIZE], tail: &mut usize, count: &mut usize, dst:
     n
 }
 
+#[allow(dead_code)]
 fn ring_has_data(count: usize) -> bool { count > 0 }
 
 // ── Public API ─────────────────────────────────────────────────────
@@ -253,12 +254,14 @@ pub unsafe fn slave_read(id: u8, dst: &mut [u8]) -> isize {
 }
 
 /// Check if master has data to read.
+#[allow(dead_code)]
 pub unsafe fn master_has_data(id: u8) -> bool {
     let i = id as usize;
     i < MAX_PTYS && PTYS[i].active && ring_has_data(PTYS[i].output_count)
 }
 
 /// Check if slave has data to read.
+#[allow(dead_code)]
 pub unsafe fn slave_has_data(id: u8) -> bool {
     let i = id as usize;
     i < MAX_PTYS && PTYS[i].active && ring_has_data(PTYS[i].input_count)

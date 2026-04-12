@@ -49,7 +49,7 @@ unsafe fn restore_console_fds() {
 }
 
 /// Session leader exit: send SIGHUP+SIGCONT to session, shutdown if console leader.
-unsafe fn exit_session_leader(idx: usize, my_pid: u32, my_sid: u32) {
+unsafe fn exit_session_leader(idx: usize, _my_pid: u32, my_sid: u32) {
     use crate::task_table::*;
     // Console session leader → shut down the OS
     if TASK_TABLE[idx].ppid == 1 && my_sid == crate::tty::TTY.session_id {
@@ -280,7 +280,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
             // Block briefly then re-check. Using a short deadline ensures
             // we don't miss auto-reaped children (ppid=1 fast path).
             use rux_arch::TimerOps;
-            let dl = unsafe { crate::arch::Arch::ticks() } + 50;
+            let dl = crate::arch::Arch::ticks() + 50;
             crate::wait::block_until(TaskState::WaitingForChild, dl);
         }
     }

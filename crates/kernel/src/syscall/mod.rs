@@ -442,7 +442,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
 fn strace_enter(sc: &Syscall, a0: usize, a1: usize) {
     use core::fmt::Write;
     let name = sc.name();
-    let pid = unsafe { crate::task_table::current_pid() };
+    let pid = crate::task_table::current_pid();
     let mut w = crate::tty::SerialWriter;
     let _ = write!(w, "[strace] pid={} >> {}({:#x}, {:#x})\n", pid, name, a0, a1);
 }
@@ -451,7 +451,7 @@ fn strace_enter(sc: &Syscall, a0: usize, a1: usize) {
 fn strace_log(sc: &Syscall, a0: usize, a1: usize, _a2: usize, _a3: usize, _a4: usize, result: isize) {
     use core::fmt::Write;
     let name = sc.name();
-    let pid = unsafe { crate::task_table::current_pid() };
+    let pid = crate::task_table::current_pid();
     // Quiet the noisy ones unless level >= 2
     let level = unsafe { STRACE_ENABLED };
     match sc {
@@ -912,7 +912,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                 {
                     let ms = helpers::timespec_to_ms(a2, 5000) as u64;
                     use rux_arch::TimerOps;
-                    let dl = unsafe { crate::arch::Arch::ticks() } + ms;
+                    let dl = crate::arch::Arch::ticks() + ms;
                     unsafe { crate::wait::block_until(crate::task_table::TaskState::Sleeping, dl); }
                 }
             }
@@ -1029,7 +1029,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Setdomainname | Syscall::Sethostname => 0, // stubs
         Syscall::Pause => {
             use rux_arch::TimerOps;
-            let dl = unsafe { crate::arch::Arch::ticks() } + 60_000;
+            let dl = crate::arch::Arch::ticks() + 60_000;
             unsafe { crate::wait::block_until(crate::task_table::TaskState::Sleeping, dl); }
             crate::errno::EINTR
         }
@@ -1241,7 +1241,6 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(_path_ptr: usize, _argv_pt
 
 #[cfg(not(feature = "native"))]
 pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr: usize, envp_ptr: usize) -> isize {
-    use rux_arch::ConsoleOps;
 
     let fs = crate::kstate::fs();
     let alloc = crate::kstate::alloc();

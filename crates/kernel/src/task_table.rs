@@ -37,6 +37,7 @@ pub enum TaskState {
     Stopped = 8,
     /// Uninterruptible sleep (like Linux TASK_UNINTERRUPTIBLE).
     /// Cannot be woken by signals — used during COW and page table ops.
+    #[allow(dead_code)]
     Uninterruptible = 9,
     /// Blocked in poll/ppoll/epoll/select — woken by I/O events.
     WaitingForPoll = 10,
