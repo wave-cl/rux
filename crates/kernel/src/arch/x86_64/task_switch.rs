@@ -39,11 +39,10 @@ unsafe impl rux_arch::TaskSwitchOps for super::X86_64 {
             );
         }
 
-        // Update per-CPU syscall state
+        // Update per-CPU syscall state + legacy globals (VforkContext reads them)
         let pc = crate::percpu::this_cpu();
         pc.saved_user_rsp = saved_user_sp as u64;
         pc.syscall_kstack_top = kstack_top as u64;
-        // Keep legacy globals in sync for compatibility
         super::syscall::SAVED_USER_RSP = saved_user_sp as u64;
         super::syscall::CURRENT_KSTACK_TOP = kstack_top as u64;
         // Update TSS.rsp0 so interrupts from user mode use this task's kernel stack

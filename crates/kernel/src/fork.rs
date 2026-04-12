@@ -115,7 +115,7 @@ unsafe fn enqueue_child(child_idx: usize) {
     // SMP fork distribution requires per-CPU syscall globals.
     // x86_64: GS-based path (KVM only). aarch64: not yet implemented.
     #[cfg(target_arch = "x86_64")]
-    let smp_ok = crate::arch::x86_64::syscall::GS_PERCPU_ACTIVE;
+    let smp_ok = true;
     #[cfg(target_arch = "aarch64")]
     let smp_ok = false; // aarch64 TCG: AP timer ISR interferes with BSP (same as x86_64 TCG)
     let target_cpu = if !smp_ok || crate::percpu::online_cpus() <= 1 {

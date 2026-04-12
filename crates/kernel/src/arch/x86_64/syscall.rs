@@ -15,15 +15,11 @@ pub static mut CURRENT_KSTACK_TOP: u64 = 0;
 /// corrupting the task kernel stack during context_switch from IRQ context.
 pub static mut CURRENT_IRQ_STACK_TOP: u64 = 0;
 
-/// Saved user RSP during syscall (single-process, no swapgs needed).
+/// Legacy globals — kept for VforkContext and SyscallArgOps compatibility.
+/// Signal delivery and task switch use per-CPU data via this_cpu().
 #[no_mangle]
 pub static mut SAVED_USER_RSP: u64 = 0;
-/// 6th syscall argument (r9) — saved by syscall_entry for mmap offset.
 pub static mut SAVED_SYSCALL_A5: u64 = 0;
-
-/// Whether to use swapgs + gs:[offset] for per-CPU syscall entry.
-/// Set to true when running on KVM or real hardware (not QEMU TCG).
-pub static mut GS_PERCPU_ACTIVE: bool = false;
 
 
 /// Initialize the SYSCALL/SYSRET MSRs.
@@ -34,13 +30,8 @@ pub unsafe fn init_syscall_msrs() {
     let star: u64 = (0x0010u64 << 48) | (0x0008u64 << 32);
     core::arch::asm!("wrmsr", in("ecx") 0xC0000081u32, in("eax") star as u32, in("edx") (star >> 32) as u32);
 
-    // IA32_LSTAR (0xC0000082): syscall entry point
-    // Select gs-based entry on KVM/real hardware, RIP-relative on QEMU TCG
-    let lstar = if GS_PERCPU_ACTIVE {
-        syscall_entry_gs as *const () as u64
-    } else {
-        syscall_entry as *const () as u64
-    };
+    // IA32_LSTAR (0xC0000082): SWAPGS-based syscall entry (like Linux)
+    let lstar = syscall_entry_gs as *const () as u64;
     core::arch::asm!("wrmsr", in("ecx") 0xC0000082u32, in("eax") lstar as u32, in("edx") (lstar >> 32) as u32);
 
     // IA32_SFMASK (0xC0000084): clear IF (bit 9) on syscall entry
@@ -56,91 +47,8 @@ pub unsafe fn init_syscall_msrs() {
     console::write_str("rux: SYSCALL MSRs initialized\n");
 }
 
-/// Assembly entry point for the SYSCALL instruction.
-/// On entry: RCX=user_RIP, R11=user_RFLAGS, RAX=syscall_nr
-/// Args: RDI, RSI, RDX, R10 (not RCX!), R8, R9
-#[unsafe(naked)]
-unsafe extern "C" fn syscall_entry() {
-    core::arch::naked_asm!(
-        // SMAP: on KVM/real hardware with CR4.SMAP, stac/clac are handled
-        // at the Rust level via dispatch() and uaccess helpers.
-        // Switch to per-task kernel stack (save user RSP).
-        "mov [rip + {saved_user_rsp}], rsp",
-        "mov [rip + {saved_a5}], r9",
-        "mov rsp, [rip + {current_kstack_top}]",
-
-        // Save callee-saved + syscall-specific regs
-        "push rcx",      // user RIP
-        "push r11",      // user RFLAGS
-        "push rbx",
-        "push rbp",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-
-        // Save args for the Rust handler
-        // Linux syscall ABI: rax=nr, rdi=a0, rsi=a1, rdx=a2, r10=a3, r8=a4, r9=a5
-        // Save 6th arg (r9) to static for mmap offset
-        "mov [rip + {saved_a5}], r9",
-
-        "push rax",       // syscall number
-        "push rdi",       // arg0
-        "push rsi",       // arg1
-        "push rdx",       // arg2
-        "push r10",       // arg3
-        "push r8",        // arg4
-        "push r9",        // arg5
-
-        // Call Rust handler: syscall_dispatch_linux(nr, a0, a1, a2, a3, a4)
-        // Return value in RAX
-        "mov rdi, rax",   // nr
-        "mov rsi, [rsp + 40]", // arg0 (rdi was pushed at offset 5*8=40)
-        "mov rdx, [rsp + 32]", // arg1 (rsi at 4*8=32)
-        "mov rcx, [rsp + 24]", // arg2 (rdx at 3*8=24)
-        "mov r8, [rsp + 16]",  // arg3 (r10 at 2*8=16)
-        "mov r9, [rsp + 8]",   // arg4 (r8 at 1*8=8)
-
-        "call {handler}",
-
-        // RAX has the syscall return value.
-        // Restore ALL caller-saved registers except RAX (which has return value).
-        // Linux syscall ABI: only RCX and R11 are clobbered. All others preserved.
-        // Stack: r9(sp), r8(sp+8), r10(sp+16), rdx(sp+24), rsi(sp+32), rdi(sp+40), rax(sp+48)
-        "mov [rsp + 48], rax", // store return value where rax was saved
-        "pop r9",
-        "pop r8",
-        "pop r10",
-        "pop rdx",
-        "pop rsi",
-        "pop rdi",
-        "pop rax",        // return value (we wrote it above)
-
-        // Restore callee-saved
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbp",
-        "pop rbx",
-        "pop r11",        // user RFLAGS
-        "pop rcx",        // user RIP
-
-        // Restore user stack
-        "mov rsp, [rip + {saved_user_rsp}]",
-
-        // Return to user mode
-        "sysretq",
-
-        saved_user_rsp = sym SAVED_USER_RSP,
-        saved_a5 = sym SAVED_SYSCALL_A5,
-        current_kstack_top = sym CURRENT_KSTACK_TOP,
-        handler = sym syscall_dispatch_linux,
-    );
-}
-
-/// GS-based syscall entry for KVM/real hardware.
-/// Uses swapgs + gs:[offset] for per-CPU state instead of RIP-relative globals.
+/// SWAPGS-based syscall entry — matches Linux.
+/// Uses swapgs + gs:[offset] for per-CPU state.
 /// Dual-writes to both gs:[offset] and RIP-relative globals so Rust code
 /// (VforkContext, SignalOps) that reads SAVED_USER_RSP directly still works.
 #[unsafe(naked)]
@@ -149,22 +57,20 @@ unsafe extern "C" fn syscall_entry_gs() {
         // swapgs: swap IA32_GS_BASE (user) ↔ IA32_KERNEL_GS_BASE (kernel percpu)
         "swapgs",
 
-        // Save user RSP + 6th arg via GS-relative per-CPU struct
+        // Save user RSP + 6th arg to per-CPU struct
         "mov gs:[0], rsp",          // percpu.saved_user_rsp
         "mov gs:[8], r9",           // percpu.saved_syscall_a5
         "mov rsp, gs:[16]",         // percpu.syscall_kstack_top
 
-        // Dual-write to RIP-relative globals for Rust code compatibility
-        "mov [rip + {saved_user_rsp}], rsp",  // NOTE: rsp is NOW the kstack, but
-        // we need the USER rsp. Read it back from gs:[0].
-        "push rax",                 // temp save
-        "mov rax, gs:[0]",          // user rsp from percpu
+        // Sync to legacy globals (VforkContext + SyscallArgOps read these)
+        "push rax",
+        "mov rax, gs:[0]",
         "mov [rip + {saved_user_rsp}], rax",
-        "mov rax, gs:[8]",          // saved_a5 from percpu
+        "mov rax, gs:[8]",
         "mov [rip + {saved_a5}], rax",
-        "pop rax",                  // restore syscall number
+        "pop rax",
 
-        // Save callee-saved + syscall-specific regs (same layout as syscall_entry)
+        // Save callee-saved + syscall-specific regs
         "push rcx",      // user RIP
         "push r11",      // user RFLAGS
         "push rbx",
@@ -223,33 +129,9 @@ unsafe extern "C" fn syscall_entry_gs() {
     );
 }
 
-// Fork child return trampoline.
+// Fork child return trampoline (SWAPGS-based).
 // context_switch retq's here. The child's kernel stack has a full
-// syscall register frame (same layout as syscall_entry pushes).
-// Pops all saved regs (with RAX=0 for fork return), then sysretq.
-core::arch::global_asm!(r#"
-.global fork_child_sysret
-fork_child_sysret:
-    popq %r9
-    popq %r8
-    popq %r10
-    popq %rdx
-    popq %rsi
-    popq %rdi
-    popq %rax
-    popq %r15
-    popq %r14
-    popq %r13
-    popq %r12
-    popq %rbp
-    popq %rbx
-    popq %r11
-    popq %rcx
-    movq SAVED_USER_RSP(%rip), %rsp
-    sysretq
-"#, options(att_syntax));
-
-// GS-based fork child return trampoline (for KVM/real hardware).
+// syscall register frame. Pops all saved regs (RAX=0), then sysretq.
 core::arch::global_asm!(r#"
 .global fork_child_sysret_gs
 fork_child_sysret_gs:
@@ -274,7 +156,6 @@ fork_child_sysret_gs:
 "#, options(att_syntax));
 
 extern "C" {
-    pub fn fork_child_sysret();
     pub fn fork_child_sysret_gs();
 }
 

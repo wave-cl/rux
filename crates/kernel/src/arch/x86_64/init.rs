@@ -41,11 +41,9 @@ pub extern "C" fn ap_entry(cpu_id: u32) -> ! {
         pc.irq_stack_top = crate::task_table::IRQ_STACKS.0[cpu_id as usize].as_ptr() as u64
             + crate::task_table::IRQ_STACK_SIZE as u64 - 8;
 
-        // 6. Enable LAPIC. Timer only on KVM (TCG shared globals prevent AP scheduling).
+        // 6. LAPIC + timer
         super::apic::enable_lapic();
-        if super::syscall::GS_PERCPU_ACTIVE {
-            super::apic::init_timer(48, 100_000);
-        }
+        super::apic::init_timer(48, 100_000);
 
         // 6. Enable interrupts and enter scheduler loop
         // After each timer interrupt (vector 48), check if the scheduler
@@ -213,22 +211,18 @@ pub fn x86_64_init(multiboot_info: usize) {
         }
     }
 
-    // SWAPGS per-CPU syscall entry on all platforms (like Linux)
+    // Detect KVM and enable SMAP
     unsafe {
-        super::syscall::GS_PERCPU_ACTIVE = true;
         if detect_kvm() {
-            console::write_str("rux: KVM detected, using gs-based syscall entry\n");
-
-            // Enable SMAP in CR4 on KVM (stac/clac work reliably)
+            console::write_str("rux: KVM detected\n");
             if rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::SMAP) {
                 let mut cr4: u64;
                 core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack));
                 cr4 |= 1 << 21;
                 core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
-                console::write_str("rux: SMAP enforced (KVM)\n");
+                console::write_str("rux: SMAP enforced\n");
             }
         } else {
-            console::write_str("rux: TCG mode, using RIP-relative syscall entry\n");
             if rux_arch::cpu::cpu_features().has(rux_arch::x86_64::cpu::SMAP) {
                 console::write_str("rux: SMAP detected (TCG: CR4 deferred, guards active)\n");
             }
@@ -240,7 +234,6 @@ pub fn x86_64_init(multiboot_info: usize) {
     console::write_str("rux: IDT loaded\n");
 
     // Initialize SYSCALL/SYSRET MSRs for Linux ABI
-    // (selects syscall_entry vs syscall_entry_gs based on GS_PERCPU_ACTIVE)
     unsafe { super::syscall::init_syscall_msrs(); }
 
     // Read hardware RTC for wall-clock time
