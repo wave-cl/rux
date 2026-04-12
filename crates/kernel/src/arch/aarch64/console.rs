@@ -20,11 +20,13 @@ unsafe fn mmio_read(addr: usize) -> u32 {
     core::ptr::read_volatile(addr as *const u32)
 }
 
-/// Initialize PL011. On QEMU virt, the UART is pre-configured.
+/// Initialize PL011: enable RX interrupt so serial_irq() fires on input.
 pub unsafe fn init() {
-    // QEMU firmware pre-configures PL011. No setup needed for basic TX/RX.
-    // UART RX interrupt support is prepared (serial_irq, GIC UART_IRQ) but
-    // not enabled — the IRQ routing needs debugging on some QEMU configs.
+    // Enable PL011 RX interrupt (RXIM = bit 4 of UARTIMSC).
+    // The GIC already has UART_IRQ 33 enabled and routed to CPU 0.
+    let imsc = mmio_read(UARTIMSC);
+    // Enable RX interrupt (bit 4) and RX timeout interrupt (bit 6)
+    mmio_write(UARTIMSC, imsc | (1 << 4) | (1 << 6));
 }
 
 /// Spinlock for serializing UART output across CPUs.
@@ -72,23 +74,43 @@ pub fn write_str(s: &str) {
     write_bytes(s.as_bytes());
 }
 
-/// Read a single byte from the serial ring buffer, blocking until data arrives.
-/// The ring buffer is filled by the UART RX interrupt handler (GIC IRQ 33).
 /// Check PL011 hardware FIFO for data (non-blocking).
 pub unsafe fn hw_has_data() -> bool {
     mmio_read(UARTFR) & UARTFR_RXFE == 0
 }
 
 /// Read a single byte, blocking until data is available.
-/// Uses direct hardware polling (WFI between checks).
+/// Uses the serial ring buffer (filled by UART RX interrupt) with fallback
+/// to direct FIFO read. Sleeps in WaitingForPoll state between checks,
+/// matching the x86_64 pattern for efficient serial input.
 pub fn read_byte() -> u8 {
     unsafe {
+        // Check ring buffer first (filled by serial IRQ)
+        if let Some(b) = crate::tty::serial_pop() {
+            return b;
+        }
         loop {
+            // Direct hardware FIFO check (safety net for missed IRQ)
             if mmio_read(UARTFR) & UARTFR_RXFE == 0 {
                 return mmio_read(UARTDR) as u8;
             }
-            use rux_arch::HaltOps;
-            super::Aarch64::halt_until_interrupt();
+            // Check ring buffer again (IRQ may have fired between checks)
+            if let Some(b) = crate::tty::serial_pop() {
+                return b;
+            }
+            // Sleep until serial IRQ wakes us via poll_wake_all()
+            let task_idx = crate::task_table::current_task_idx();
+            crate::task_table::TASK_TABLE[task_idx].state =
+                crate::task_table::TaskState::WaitingForPoll;
+            use rux_arch::TimerOps;
+            crate::task_table::TASK_TABLE[task_idx].wake_at =
+                crate::arch::Arch::ticks() + 1000; // 1s safety timeout
+            crate::task_table::poll_wait_register(task_idx);
+            let sched = crate::scheduler::get();
+            sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
+            sched.dequeue_current();
+            sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+            sched.schedule();
         }
     }
 }
@@ -96,10 +118,16 @@ pub fn read_byte() -> u8 {
 /// UART RX interrupt handler — drain hardware FIFO into the ring buffer.
 /// Called from GIC handle_irq for UART_IRQ (33).
 pub unsafe fn serial_irq() {
+    let mut got_data = false;
     while mmio_read(UARTFR) & UARTFR_RXFE == 0 {
         crate::tty::serial_push(mmio_read(UARTDR) as u8);
+        got_data = true;
     }
-    mmio_write(UARTICR, 1 << 4); // clear RX interrupt
+    mmio_write(UARTICR, (1 << 4) | (1 << 6)); // clear RX + RT interrupts
+    // Wake tasks sleeping in read_byte() / poll()
+    if got_data && crate::task_table::has_poll_waiters() {
+        crate::task_table::poll_wake_all();
+    }
 }
 
 unsafe impl rux_arch::ConsoleOps for super::Aarch64 {
