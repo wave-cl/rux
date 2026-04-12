@@ -338,16 +338,24 @@ struct SignalFrameX86 {
 unsafe impl rux_arch::SignalOps for super::X86_64 {
     const SIGNAL_FRAME_SIZE: usize = core::mem::size_of::<SignalFrameX86>();
 
-    unsafe fn sig_read_user_sp() -> usize { SAVED_USER_RSP as usize }
+    unsafe fn sig_read_user_sp() -> usize {
+        let pc = crate::percpu::this_cpu();
+        pc.saved_user_rsp as usize
+    }
 
-    unsafe fn sig_write_user_sp(sp: usize) { SAVED_USER_RSP = sp as u64; }
+    unsafe fn sig_write_user_sp(sp: usize) {
+        let pc = crate::percpu::this_cpu();
+        pc.saved_user_rsp = sp as u64;
+        // Keep global in sync for dual-path compatibility
+        SAVED_USER_RSP = sp as u64;
+    }
 
     unsafe fn sig_write_frame(
         frame_addr: usize, syscall_result: i64,
         blocked_mask: u64, restorer: usize, signum: u8,
     ) {
-        // Read saved RCX (user RIP) and R11 (RFLAGS) from kernel stack
-        let kt = CURRENT_KSTACK_TOP as usize;
+        let pc = crate::percpu::this_cpu();
+        let kt = pc.syscall_kstack_top as usize;
         let saved_rip = core::ptr::read_volatile((kt - 8) as *const u64);
         let saved_rflags = core::ptr::read_volatile((kt - 16) as *const u64);
 
@@ -358,27 +366,24 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         (*frame).saved_rax = syscall_result as u64;
         (*frame).saved_mask = blocked_mask;
         (*frame).signum = signum as u64;
-        // Save original user RSP so sigreturn can restore it exactly.
-        (*frame).orig_user_sp = SAVED_USER_RSP;
+        (*frame).orig_user_sp = pc.saved_user_rsp;
     }
 
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
-        let kt = CURRENT_KSTACK_TOP as usize;
-        core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);   // RCX → RIP
-        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);   // RDI = signum
+        let kt = crate::percpu::this_cpu().syscall_kstack_top as usize;
+        core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);
+        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);
     }
 
     unsafe fn sig_redirect_to_handler_siginfo(handler: usize, signum: u8, siginfo_ptr: usize) {
-        let kt = CURRENT_KSTACK_TOP as usize;
-        core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);   // RCX → RIP
-        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);   // RDI = signum
-        core::ptr::write_volatile((kt - 72) as *mut u64, siginfo_ptr as u64); // RSI = siginfo
-        core::ptr::write_volatile((kt - 64) as *mut u64, 0u64);            // RDX = ucontext (NULL)
+        let kt = crate::percpu::this_cpu().syscall_kstack_top as usize;
+        core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);
+        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);
+        core::ptr::write_volatile((kt - 72) as *mut u64, siginfo_ptr as u64);
+        core::ptr::write_volatile((kt - 64) as *mut u64, 0u64);
     }
 
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {
-        // frame_addr = SAVED_USER_RSP at sigreturn time = frame_start + 8
-        // (signal handler's `ret` popped the restorer word, advancing RSP by 8)
         let frame = (frame_addr - 8) as *const SignalFrameX86;
         let saved_rip = (*frame).saved_rip;
         let saved_rflags = (*frame).saved_rflags;
@@ -386,11 +391,13 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         let saved_mask = (*frame).saved_mask;
         let orig_user_sp = (*frame).orig_user_sp;
 
-        // Restore original user RSP
+        // Restore user RSP to both per-CPU and global
+        let pc = crate::percpu::this_cpu();
+        pc.saved_user_rsp = orig_user_sp;
         SAVED_USER_RSP = orig_user_sp;
 
         // Restore RCX (user RIP) and R11 (RFLAGS) on kernel stack
-        let kt = CURRENT_KSTACK_TOP as usize;
+        let kt = pc.syscall_kstack_top as usize;
         core::ptr::write_volatile((kt - 8) as *mut u64, saved_rip);
         core::ptr::write_volatile((kt - 16) as *mut u64, saved_rflags);
 
