@@ -288,37 +288,37 @@ pub fn alloc_pipe_fd(pipe_id: u8, is_write: bool) -> Result<isize, isize> {
 }
 
 /// Read from a file descriptor. Returns bytes read, 0 on EOF, negative on error.
+/// Validate a user buffer pointer. Returns Ok(()) or EFAULT.
+#[inline]
+fn validate_buf(buf: *const u8, len: usize) -> Result<(), isize> {
+    if len == 0 { return Ok(()); }
+    if buf.is_null() || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
+        return Err(crate::EFAULT);
+    }
+    Ok(())
+}
+
 pub fn sys_read_fd<F: FileSystem>(fd: usize, buf: *mut u8, len: usize, fs: &mut F, pipes: &PipeFns) -> isize {
     unsafe {
         let f = match get_fd_mut(fd) {
             Some(f) => f,
             None => return crate::EBADF,
         };
-        if f.is_pipe {
-            return (pipes.read)(f.pipe_id, buf, len);
-        }
-        if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
-            return if len == 0 { 0 } else { crate::EFAULT }; // -EFAULT
-        }
+        if f.is_pipe { return (pipes.read)(f.pipe_id, buf, len); }
+        if len == 0 { return 0; }
+        if let Err(e) = validate_buf(buf, len) { return e; }
 
-        // Get file size
+        // Get file size for EOF check
         let mut stat = core::mem::zeroed::<InodeStat>();
-        if fs.stat(f.ino, &mut stat).is_err() {
-            return crate::EIO; // -EIO
-        }
-        let is_char_dev = stat.mode & 0xF000 == 0x2000; // S_IFCHR
+        if fs.stat(f.ino, &mut stat).is_err() { return crate::EIO; }
+        let is_char_dev = stat.mode & crate::S_IFMT == crate::S_IFCHR;
         let size = stat.size as usize;
-        if !is_char_dev && f.offset >= size {
-            return 0; // EOF (skip for character devices — they generate data)
-        }
+        if !is_char_dev && f.offset >= size { return 0; } // EOF
 
         let to_read = if is_char_dev { len } else { len.min(size - f.offset) };
         let user_buf = core::slice::from_raw_parts_mut(buf, to_read);
         match fs.read(f.ino, f.offset as u64, user_buf) {
-            Ok(n) => {
-                f.offset += n;
-                n as isize
-            }
+            Ok(n) => { f.offset += n; n as isize }
             Err(_) => crate::EIO,
         }
     }
@@ -331,20 +331,13 @@ pub fn sys_write_fd<F: FileSystem>(fd: usize, buf: *const u8, len: usize, fs: &m
             Some(f) => f,
             None => return crate::EBADF,
         };
-        if f.is_pipe {
-            return (pipes.write)(f.pipe_id, buf, len);
-        }
-        // Validate user buffer pointer
-        if buf.is_null() || len == 0 || len > 0x7FFF_FFFF || (buf as usize).wrapping_add(len) < (buf as usize) {
-            return if len == 0 { 0 } else { crate::EFAULT }; // -EFAULT
-        }
+        if f.is_pipe { return (pipes.write)(f.pipe_id, buf, len); }
+        if len == 0 { return 0; }
+        if let Err(e) = validate_buf(buf, len) { return e; }
 
         let user_buf = core::slice::from_raw_parts(buf, len);
         match fs.write(f.ino, f.offset as u64, user_buf) {
-            Ok(n) => {
-                f.offset += n;
-                n as isize
-            }
+            Ok(n) => { f.offset += n; n as isize }
             Err(_) => crate::EIO,
         }
     }
