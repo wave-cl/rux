@@ -24,35 +24,32 @@ pub fn get_current_pid() -> u32 {
     current_pid()
 }
 
-pub fn get_task_cmdline(pid: u32, buf: &mut [u8]) -> usize {
-    unsafe {
-        for i in 0..MAX_PROCS {
-            if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                let len = (TASK_TABLE[i].cmdline_len as usize).min(buf.len());
-                buf[..len].copy_from_slice(&TASK_TABLE[i].cmdline[..len]);
-                return len;
-            }
-        }
-        0
+/// Helper: look up a task slot by PID and apply a closure.
+/// Returns the closure's result, or a default if not found.
+unsafe fn with_task<T>(pid: u32, default: T, f: impl FnOnce(usize) -> T) -> T {
+    match find_task_by_pid(pid) {
+        Some(i) => f(i),
+        None => default,
     }
 }
 
+pub fn get_task_cmdline(pid: u32, buf: &mut [u8]) -> usize {
+    unsafe { with_task(pid, 0, |i| {
+        let len = (TASK_TABLE[i].cmdline_len as usize).min(buf.len());
+        buf[..len].copy_from_slice(&TASK_TABLE[i].cmdline[..len]);
+        len
+    })}
+}
+
 pub fn get_task_info(pid: u32) -> rux_fs::procfs::TaskInfo {
-    unsafe {
-        for i in 0..MAX_PROCS {
-            if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                return rux_fs::procfs::TaskInfo {
-                    pid: TASK_TABLE[i].pid, ppid: TASK_TABLE[i].ppid,
-                    pgid: TASK_TABLE[i].pgid, sid: TASK_TABLE[i].sid,
-                    uid: TASK_TABLE[i].uid, gid: TASK_TABLE[i].gid,
-                    state: TASK_TABLE[i].state as u8, threads: 1,
-                    rss_pages: TASK_TABLE[i].rss_pages,
-                    brk_addr: TASK_TABLE[i].program_brk,
-                };
-            }
+    unsafe { with_task(pid, rux_fs::procfs::TaskInfo::default(), |i| {
+        let t = &TASK_TABLE[i];
+        rux_fs::procfs::TaskInfo {
+            pid: t.pid, ppid: t.ppid, pgid: t.pgid, sid: t.sid,
+            uid: t.uid, gid: t.gid, state: t.state as u8, threads: 1,
+            rss_pages: t.rss_pages, brk_addr: t.program_brk,
         }
-        rux_fs::procfs::TaskInfo::default()
-    }
+    })}
 }
 
 pub fn get_idle_ticks() -> u64 {
@@ -60,29 +57,19 @@ pub fn get_idle_ticks() -> u64 {
 }
 
 pub fn get_task_cwd(pid: u32, buf: &mut [u8]) -> usize {
-    unsafe {
-        for i in 0..MAX_PROCS {
-            if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                let len = TASK_TABLE[i].fs_ctx.cwd_path_len.min(buf.len());
-                buf[..len].copy_from_slice(&TASK_TABLE[i].fs_ctx.cwd_path[..len]);
-                return len;
-            }
-        }
-        0
-    }
+    unsafe { with_task(pid, 0, |i| {
+        let len = TASK_TABLE[i].fs_ctx.cwd_path_len.min(buf.len());
+        buf[..len].copy_from_slice(&TASK_TABLE[i].fs_ctx.cwd_path[..len]);
+        len
+    })}
 }
 
 pub fn get_task_environ(pid: u32, buf: &mut [u8]) -> usize {
-    unsafe {
-        for i in 0..MAX_PROCS {
-            if TASK_TABLE[i].active && TASK_TABLE[i].pid == pid {
-                let len = (TASK_TABLE[i].environ_len as usize).min(buf.len());
-                buf[..len].copy_from_slice(&TASK_TABLE[i].environ[..len]);
-                return len;
-            }
-        }
-        0
-    }
+    unsafe { with_task(pid, 0, |i| {
+        let len = (TASK_TABLE[i].environ_len as usize).min(buf.len());
+        buf[..len].copy_from_slice(&TASK_TABLE[i].environ[..len]);
+        len
+    })}
 }
 
 /// Build a ProcFs with the standard kernel callbacks.
