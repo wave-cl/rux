@@ -33,6 +33,14 @@ unsafe fn with_task<T>(pid: u32, default: T, f: impl FnOnce(usize) -> T) -> T {
     }
 }
 
+pub fn get_task_comm(pid: u32, buf: &mut [u8]) -> usize {
+    unsafe { with_task(pid, 0, |i| {
+        let len = (TASK_TABLE[i].comm_len as usize).min(buf.len());
+        buf[..len].copy_from_slice(&TASK_TABLE[i].comm[..len]);
+        len
+    })}
+}
+
 pub fn get_task_cmdline(pid: u32, buf: &mut [u8]) -> usize {
     unsafe { with_task(pid, 0, |i| {
         let len = (TASK_TABLE[i].cmdline_len as usize).min(buf.len());
@@ -86,6 +94,7 @@ pub const fn new_procfs(
         get_active_pids,
         get_current_pid,
         get_task_cmdline,
+        get_task_comm,
         get_task_info,
         get_idle_ticks,
         get_task_cwd,

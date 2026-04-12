@@ -53,6 +53,12 @@ pub unsafe fn locked_tick(elapsed_ns: u64) {
         core::sync::atomic::Ordering::Acquire,
         core::sync::atomic::Ordering::Relaxed,
     ).is_ok() {
+        {
+            let idx = crate::task_table::current_task_idx();
+            if idx < crate::task_table::MAX_PROCS {
+                crate::task_table::TASK_TABLE[idx].cpu_time_ns += elapsed_ns;
+            }
+        }
         get().tick(elapsed_ns);
         SCHED_LOCK.store(false, core::sync::atomic::Ordering::Release);
     }

@@ -72,6 +72,11 @@ const STACK_FLOOR: usize = STACK_TOP - MAX_STACK_PAGES * 4096;
 pub unsafe fn handle_user_fault(addr: u64, is_write: bool) -> bool {
     // COW resolution for write faults to user addresses
     if is_write && addr < crate::arch::Arch::USER_ADDR_LIMIT {
+        let raw_pte = crate::syscall::current_user_page_table()
+            .read_leaf_pte(rux_klib::VirtAddr::new(addr as usize & !0xFFF));
+        if raw_pte & crate::arch::PageTable::prot_none_bit() != 0 {
+            return false;
+        }
         if crate::cow::handle_cow_fault(addr as usize).is_ok() {
             return true;
         }
