@@ -786,6 +786,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
             0
         }
         TIOCGPGRP => {
+            if !is_tty { return crate::errno::ENOTTY; }
             if arg != 0 {
                 if crate::uaccess::validate_user_ptr(arg, 4).is_err() { return crate::errno::EFAULT; }
                 unsafe { *(arg as *mut i32) = crate::tty::TTY.foreground_pgid as i32; }
@@ -793,6 +794,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
             0
         }
         TIOCSPGRP => {
+            if !is_tty { return crate::errno::ENOTTY; }
             if arg != 0 {
                 if crate::uaccess::validate_user_ptr(arg, 4).is_err() { return crate::errno::EFAULT; }
                 unsafe { crate::tty::TTY.foreground_pgid = *(arg as *const i32) as u32; }
