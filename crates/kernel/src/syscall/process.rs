@@ -77,6 +77,7 @@ unsafe fn reparent_children(idx: usize, my_pid: u32) {
             TASK_TABLE[j].ppid = 1;
             if TASK_TABLE[j].state == TaskState::Zombie {
                 free_task_address_space(j);
+                pid_hash_remove(TASK_TABLE[j].pid);
                 TASK_TABLE[j].active = false;
                 TASK_TABLE[j].state = TaskState::Free;
                 TASK_TABLE[j].pt_root = 0;
@@ -131,11 +132,13 @@ pub fn exit(status: i32) -> ! {
                     crate::uaccess::put_user(ctid, 0u32);
                     super::posix::futex_wake(ctid, 1);
                 }
+                pid_hash_remove(TASK_TABLE[idx].pid);
                 TASK_TABLE[idx].active = false;
                 TASK_TABLE[idx].state = TaskState::Free;
             } else if TASK_TABLE[idx].ppid == 1 {
                 // Auto-reap: free slot before notify to avoid race
                 free_task_address_space(idx);
+                pid_hash_remove(TASK_TABLE[idx].pid);
                 TASK_TABLE[idx].active = false;
                 TASK_TABLE[idx].state = TaskState::Free;
                 TASK_TABLE[idx].pt_root = 0;
@@ -232,6 +235,7 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
                 // Zombie: reap
                 let child_pt_root = t.pt_root;
                 let slot = &mut TASK_TABLE[i];
+                pid_hash_remove(slot.pid);
                 slot.active = false;
                 slot.state = TaskState::Free;
                 slot.pid = 0;
@@ -360,12 +364,20 @@ pub fn clock_gettime(clockid: usize, tp: usize) -> isize {
     if crate::uaccess::validate_user_ptr(tp, 16).is_err() { return crate::errno::EFAULT; }
     let ticks = Arch::ticks();
     let epoch = boot_epoch();
-    let (sec, nsec) = if clockid == 0 {
-        // CLOCK_REALTIME: wall clock = RTC epoch + boot ticks
-        (epoch + ticks / 1000, (ticks % 1000) * 1_000_000)
-    } else {
-        // CLOCK_MONOTONIC and others: time since boot
-        (ticks / 1000, (ticks % 1000) * 1_000_000)
+    let (sec, nsec) = match clockid {
+        0 => (epoch + ticks / 1000, (ticks % 1000) * 1_000_000),
+        2 => unsafe {
+            use crate::task_table::*;
+            let tgid = TASK_TABLE[current_task_idx()].tgid;
+            let mut ns = 0u64;
+            for i in 0..MAX_PROCS { if TASK_TABLE[i].active && TASK_TABLE[i].tgid == tgid { ns += TASK_TABLE[i].cpu_time_ns; } }
+            (ns / 1_000_000_000, ns % 1_000_000_000)
+        }
+        3 => unsafe {
+            let ns = crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].cpu_time_ns;
+            (ns / 1_000_000_000, ns % 1_000_000_000)
+        }
+        _ => (ticks / 1000, (ticks % 1000) * 1_000_000),
     };
     unsafe {
         crate::uaccess::put_user(tp, sec);

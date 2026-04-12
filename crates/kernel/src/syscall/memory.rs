@@ -1005,14 +1005,16 @@ pub fn futex(uaddr: usize, op: usize, val: usize, timeout_ptr: usize) -> isize {
     const FUTEX_WAIT_BITSET: usize = 9;
     const FUTEX_WAKE_BITSET: usize = 10;
 
-    match op & 0x7F { // mask off FUTEX_PRIVATE_FLAG
-        FUTEX_WAIT | FUTEX_WAIT_BITSET => futex_wait(uaddr, val as u32, timeout_ptr),
+    let clock_realtime = op & 0x100 != 0;
+    match op & 0x7F {
+        FUTEX_WAIT => futex_wait(uaddr, val as u32, timeout_ptr, clock_realtime, false),
+        FUTEX_WAIT_BITSET => futex_wait(uaddr, val as u32, timeout_ptr, clock_realtime, true),
         FUTEX_WAKE | FUTEX_WAKE_BITSET => futex_wake(uaddr, val),
-        _ => 0, // unsupported ops succeed silently
+        _ => 0,
     }
 }
 
-fn futex_wait(uaddr: usize, expected: u32, timeout_ptr: usize) -> isize {
+fn futex_wait(uaddr: usize, expected: u32, timeout_ptr: usize, clock_realtime: bool, is_bitset: bool) -> isize {
     unsafe {
         use crate::task_table::*;
 
@@ -1042,11 +1044,25 @@ fn futex_wait(uaddr: usize, expected: u32, timeout_ptr: usize) -> isize {
             use rux_arch::TimerOps;
             let tv_sec = *(timeout_ptr as *const u64);
             let tv_nsec = *((timeout_ptr + 8) as *const u64);
-            let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
-            if ms == 0 { return crate::errno::EAGAIN; } // zero timeout = non-blocking
-            crate::arch::Arch::ticks() + ms
+            let now = crate::arch::Arch::ticks();
+            if is_bitset || clock_realtime {
+                let abs_ms = tv_sec * 1000 + tv_nsec / 1_000_000;
+                if clock_realtime {
+                    let epoch = crate::syscall::process::boot_epoch();
+                    let now_wall_ms = epoch * 1000 + now;
+                    if abs_ms <= now_wall_ms { return crate::errno::ETIMEDOUT; }
+                    now + (abs_ms - now_wall_ms)
+                } else {
+                    if abs_ms <= now { return crate::errno::ETIMEDOUT; }
+                    abs_ms
+                }
+            } else {
+                let ms = tv_sec * 1000 + tv_nsec / 1_000_000;
+                if ms == 0 { return crate::errno::EAGAIN; }
+                now + ms
+            }
         } else {
-            0 // no timeout — wait indefinitely
+            0
         };
 
         // Block until woken by FUTEX_WAKE or timeout

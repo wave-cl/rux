@@ -114,6 +114,7 @@ pub fn exit_group(status: i32) -> ! {
                 && TASK_TABLE[j].state != TaskState::Free
             {
                 // Mark thread as dead and dequeue from scheduler
+                pid_hash_remove(TASK_TABLE[j].pid);
                 TASK_TABLE[j].active = false;
                 TASK_TABLE[j].state = TaskState::Free;
                 let sched = crate::scheduler::get();

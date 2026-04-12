@@ -52,6 +52,7 @@ unsafe fn init_child_slot(
     child.ppid = parent.pid;
     child.pgid = parent.pgid;
     child.state = TaskState::Ready;
+    pid_hash_insert(child_pid, child_idx);
     child.program_brk = parent.program_brk;
     child.mmap_base = parent.mmap_base;
     child.fs_ctx = parent.fs_ctx;
@@ -81,6 +82,7 @@ unsafe fn init_child_slot(
     child.child_available = false;
     child.exit_code = 0;
     child.wake_at = 0;
+    child.cpu_time_ns = 0;
     // fork: inherit interval timers. clone(CLONE_THREAD): don't.
     if clone_flags as usize & crate::errno::CLONE_THREAD == 0 {
         child.itimer_real_deadline = parent.itimer_real_deadline;
@@ -176,6 +178,7 @@ pub unsafe fn sys_fork() -> isize {
                 child_pt.free_user_address_space_cow(alloc, &mut |pa| crate::cow::dec_ref(pa));
                 TASK_TABLE[i].pt_root = 0;
             }
+            pid_hash_remove(TASK_TABLE[i].pid);
             TASK_TABLE[i].active = false;
             TASK_TABLE[i].state = TaskState::Free;
         }

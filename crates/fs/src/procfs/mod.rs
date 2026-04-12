@@ -149,6 +149,7 @@ pub struct ProcFs {
     pub get_active_pids: fn(&mut [u32]) -> usize,
     pub get_current_pid: fn() -> u32,
     pub get_task_cmdline: fn(u32, &mut [u8]) -> usize,
+    pub get_task_comm: fn(u32, &mut [u8]) -> usize,
     pub get_task_info: fn(u32) -> TaskInfo,
     pub get_idle_ticks: fn() -> u64,
     pub get_task_cwd: fn(u32, &mut [u8]) -> usize,
@@ -164,12 +165,13 @@ impl ProcFs {
         get_active_pids: fn(&mut [u32]) -> usize,
         get_current_pid: fn() -> u32,
         get_task_cmdline: fn(u32, &mut [u8]) -> usize,
+        get_task_comm: fn(u32, &mut [u8]) -> usize,
         get_task_info: fn(u32) -> TaskInfo,
         get_idle_ticks: fn() -> u64,
         get_task_cwd: fn(u32, &mut [u8]) -> usize,
         get_task_environ: fn(u32, &mut [u8]) -> usize,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_info, get_idle_ticks, get_task_cwd, get_task_environ, num_cpus: 1 }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_comm, get_task_info, get_idle_ticks, get_task_cwd, get_task_environ, num_cpus: 1 }
     }
 
     /// Check if a PID exists by querying the kernel task table.
@@ -383,13 +385,9 @@ impl ProcFs {
 
     /// Generate /proc/[pid]/comm — process name (basename of argv[0])
     fn gen_pid_comm(&self, pid: u64, buf: &mut [u8]) -> usize {
-        let mut cmdline_buf = [0u8; 128];
-        let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
-        let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
-        let argv0 = &cmdline_buf[..argv0_end];
-        let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
-        let name = &argv0[base_start..];
-        let name = if name.is_empty() { b"sh" as &[u8] } else { name };
+        let mut nb = [0u8; 16];
+        let nl = (self.get_task_comm)(pid as u32, &mut nb);
+        let name = if nl > 0 { &nb[..nl] } else { b"sh" as &[u8] };
         let len = name.len().min(buf.len().saturating_sub(1));
         buf[..len].copy_from_slice(&name[..len]);
         buf[len] = b'\n';
@@ -404,14 +402,9 @@ impl ProcFs {
         let mut pos = 0;
         // pid (comm) state ppid pgrp session tty_nr tpgid flags
         pos += fmt_u64(&mut buf[pos..], pid);
-        // Get real process name for comm field
-        let mut cmdline_buf = [0u8; 128];
-        let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
-        let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
-        let argv0 = &cmdline_buf[..argv0_end];
-        let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
-        let name = &argv0[base_start..];
-        let name = if name.is_empty() { b"sh" as &[u8] } else { name };
+        let mut nb = [0u8; 16];
+        let nl = (self.get_task_comm)(pid as u32, &mut nb);
+        let name = if nl > 0 { &nb[..nl] } else { b"sh" as &[u8] };
         buf[pos] = b' '; pos += 1;
         buf[pos] = b'('; pos += 1;
         let nlen = name.len().min(15);
@@ -485,14 +478,9 @@ impl ProcFs {
         let info = (self.get_task_info)(pid as u32);
         let used_kb = if info.rss_pages > 0 && info.rss_pages <= 65536 { info.rss_pages as usize * 4 } else { 256 };
 
-        // Real process name
-        let mut cmdline_buf = [0u8; 128];
-        let cmdline_len = (self.get_task_cmdline)(pid as u32, &mut cmdline_buf);
-        let argv0_end = cmdline_buf[..cmdline_len].iter().position(|&b| b == 0).unwrap_or(cmdline_len);
-        let argv0 = &cmdline_buf[..argv0_end];
-        let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
-        let name = &argv0[base_start..];
-        let name = if name.is_empty() { b"sh" as &[u8] } else { name };
+        let mut nb = [0u8; 16];
+        let nl = (self.get_task_comm)(pid as u32, &mut nb);
+        let name = if nl > 0 { &nb[..nl] } else { b"sh" as &[u8] };
 
         let state_str = match info.state {
             5 => b"Z (zombie)" as &[u8], 8 => b"T (stopped)",

@@ -13,14 +13,14 @@ pub const MAX_FRAMES: usize = 32768;
 
 /// Page cache size (pcplist equivalent). Order-0 alloc/dealloc goes
 /// through this cache, bypassing the buddy bitmap entirely.
-const PCP_SIZE: usize = 64;
+const PCP_SIZE: usize = 128;
 
 /// When the page cache exceeds this count, drain a batch back to buddy.
-const PCP_HIGH: usize = 48;
+const PCP_HIGH: usize = 96;
 
 /// Number of pages to drain/refill in one batch.
 /// Larger batch = fewer bitmap scans, amortized over more allocs.
-const PCP_BATCH: usize = 48;
+const PCP_BATCH: usize = 64;
 
 /// Per-"CPU" page cache for order-0 fast path.
 /// In a real SMP kernel, there would be one per CPU. For now, single.
@@ -143,14 +143,21 @@ impl BuddyAllocator {
             }
         }
 
-        // Mark all frames as free at order 0
-        for i in 0..total_frames as usize {
-            self.set_free(0, i);
-        }
-
-        // Merge into higher orders where possible
-        for order in 0..MAX_BUDDY_ORDER {
-            self.merge_level(order);
+        // Build free blocks bottom-up: single pass instead of mark-all + 11 merges.
+        let mut frame = 0u32;
+        while frame < total_frames {
+            let mut order = 0u8;
+            while order < MAX_BUDDY_ORDER {
+                let next = order + 1;
+                let block_size = 1u32 << next;
+                if (frame & (block_size - 1)) != 0 || frame + block_size > total_frames {
+                    break;
+                }
+                order = next;
+            }
+            let block_idx = (frame >> order) as usize;
+            self.set_free(order, block_idx);
+            frame += 1u32 << order;
         }
     }
 
@@ -248,17 +255,15 @@ impl BuddyAllocator {
             if !found { break; } // truly out of memory
         }
 
-        // Harvest free bits from the order-0 bitmap
+        // Harvest free bits from the order-0 bitmap (scan from hint, wrap around)
         let start = self.hints[0] as usize;
         let max_words = self.bitmaps[0].len();
+        let mut last_word = start;
 
         let mut word_idx = start;
         while harvested < target && word_idx < max_words {
             let mut word = self.bitmaps[0][word_idx];
-            if word == 0 {
-                word_idx += 1;
-                continue;
-            }
+            if word == 0 { word_idx += 1; continue; }
             while word != 0 && harvested < target {
                 let bit = word.trailing_zeros() as usize;
                 word &= word - 1;
@@ -268,11 +273,31 @@ impl BuddyAllocator {
                 harvested += 1;
             }
             self.bitmaps[0][word_idx] = word;
+            last_word = word_idx;
             word_idx += 1;
         }
 
+        if harvested < target && start > 0 {
+            word_idx = 0;
+            while harvested < target && word_idx < start {
+                let mut word = self.bitmaps[0][word_idx];
+                if word == 0 { word_idx += 1; continue; }
+                while word != 0 && harvested < target {
+                    let bit = word.trailing_zeros() as usize;
+                    word &= word - 1;
+                    let frame_idx = word_idx * 64 + bit;
+                    let addr = PhysAddr::new(self.base.as_usize() + frame_idx * 4096);
+                    self.pcp.push(addr);
+                    harvested += 1;
+                }
+                self.bitmaps[0][word_idx] = word;
+                last_word = word_idx;
+                word_idx += 1;
+            }
+        }
+
         if harvested > 0 {
-            self.hints[0] = word_idx.saturating_sub(1) as u16;
+            self.hints[0] = last_word as u16;
         }
     }
 

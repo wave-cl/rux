@@ -235,6 +235,14 @@ pub unsafe fn load_elf_from_inode(
         let len = (cmdline_len as usize).min(128);
         slot.cmdline[..len].copy_from_slice(&cmdline[..len]);
         slot.cmdline_len = len as u8;
+        let argv0_end = cmdline[..len].iter().position(|&b| b == 0).unwrap_or(len);
+        let argv0 = &cmdline[..argv0_end];
+        let base_start = argv0.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0);
+        let name = &argv0[base_start..];
+        let nlen = name.len().min(15);
+        slot.comm[..nlen].copy_from_slice(&name[..nlen]);
+        slot.comm[nlen] = 0;
+        slot.comm_len = nlen as u8;
     }
     // Check for pending reschedule before entering userspace.
     // After exec, other pipeline processes may be waiting to run.

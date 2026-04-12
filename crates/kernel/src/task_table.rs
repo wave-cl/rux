@@ -145,13 +145,16 @@ pub struct TaskSlot {
     // ── Command line (for /proc/[pid]/cmdline) ─────────────────────
     pub cmdline: [u8; 128],     // null-separated argv
     pub cmdline_len: u8,
+    pub comm: [u8; 16],         // basename of argv[0] (Linux TASK_COMM_LEN=16)
+    pub comm_len: u8,
 
     // ── Environment (for /proc/[pid]/environ) ────────────────────
     pub environ: [u8; 512],     // null-separated KEY=VALUE pairs
     pub environ_len: u16,
 
     // ── Memory tracking (for /proc/[pid]/stat vsize/rss) ─────────
-    pub rss_pages: u32,         // resident set size in 4K pages
+    pub rss_pages: u32,
+    pub cpu_time_ns: u64,       // accumulated CPU time (Linux CLOCK_PROCESS_CPUTIME_ID)
 
     // ── Preemption ────────────────────────────────────────────────────
     pub preempt_count: u32,     // saved/restored on context switch
@@ -185,8 +188,9 @@ impl TaskSlot {
             waiting_pipe_id: 0,
             itimer_real_deadline: 0, itimer_real_interval: 0,
             cmdline: [0; 128], cmdline_len: 0,
+            comm: [0; 16], comm_len: 0,
             environ: [0; 512], environ_len: 0,
-            rss_pages: 0,
+            rss_pages: 0, cpu_time_ns: 0,
             preempt_count: 0,
             fpu_state: rux_arch::FpuState::new(),
         }
@@ -199,6 +203,55 @@ pub static mut TASK_TABLE: [TaskSlot; MAX_PROCS] = {
     const EMPTY: TaskSlot = TaskSlot::new();
     [EMPTY; MAX_PROCS]
 };
+
+// ── PID hash table (Linux pid_hash) ──────────────────────────────────
+const PID_HASH_SIZE: usize = 128;
+const PID_HASH_EMPTY: u8 = 0xFF;
+static mut PID_HASH: [u8; PID_HASH_SIZE] = [PID_HASH_EMPTY; PID_HASH_SIZE];
+
+#[inline(always)]
+fn pid_hash_idx(pid: u32) -> usize { pid as usize & (PID_HASH_SIZE - 1) }
+
+pub unsafe fn pid_hash_insert(pid: u32, slot: usize) {
+    let mut i = pid_hash_idx(pid);
+    loop {
+        if PID_HASH[i] == PID_HASH_EMPTY { PID_HASH[i] = slot as u8; return; }
+        i = (i + 1) & (PID_HASH_SIZE - 1);
+    }
+}
+
+pub unsafe fn pid_hash_remove(pid: u32) {
+    let mut i = pid_hash_idx(pid);
+    loop {
+        if PID_HASH[i] == PID_HASH_EMPTY { return; }
+        if TASK_TABLE[PID_HASH[i] as usize].pid == pid {
+            PID_HASH[i] = PID_HASH_EMPTY;
+            let mut j = (i + 1) & (PID_HASH_SIZE - 1);
+            while PID_HASH[j] != PID_HASH_EMPTY {
+                let slot = PID_HASH[j];
+                PID_HASH[j] = PID_HASH_EMPTY;
+                let mut k = pid_hash_idx(TASK_TABLE[slot as usize].pid);
+                loop {
+                    if PID_HASH[k] == PID_HASH_EMPTY { PID_HASH[k] = slot; break; }
+                    k = (k + 1) & (PID_HASH_SIZE - 1);
+                }
+                j = (j + 1) & (PID_HASH_SIZE - 1);
+            }
+            return;
+        }
+        i = (i + 1) & (PID_HASH_SIZE - 1);
+    }
+}
+
+unsafe fn pid_hash_lookup(pid: u32) -> Option<usize> {
+    let mut i = pid_hash_idx(pid);
+    loop {
+        if PID_HASH[i] == PID_HASH_EMPTY { return None; }
+        let slot = PID_HASH[i] as usize;
+        if TASK_TABLE[slot].pid == pid && TASK_TABLE[slot].active { return Some(slot); }
+        i = (i + 1) & (PID_HASH_SIZE - 1);
+    }
+}
 
 /// Kernel stack size per task. 32KB allows 28KB usable with a 4KB guard page.
 /// The dynamic linking exec path (load ELF + ld.so + page tables) needs >12KB.
@@ -312,12 +365,10 @@ pub fn alloc_task_slot() -> Option<usize> {
     }
 }
 
-/// Find the task slot index for a given PID. Returns None if not found.
+/// Find the task slot index for a given PID via hash table (Linux pid_hash).
 #[inline]
 pub fn find_task_by_pid(pid: u32) -> Option<usize> {
-    unsafe {
-        (0..MAX_PROCS).find(|&i| TASK_TABLE[i].active && TASK_TABLE[i].pid == pid)
-    }
+    unsafe { pid_hash_lookup(pid) }
 }
 
 /// Send a signal to a task and wake it if it's sleeping/blocked.
@@ -388,7 +439,7 @@ pub unsafe fn init_idle() {
     slot.pgid = 0;
     slot.state = TaskState::Running;
     slot.kstack_top = KSTACKS.0[0].as_ptr() as usize + KSTACK_SIZE;
-    // No FDs, no page table, no user state needed for idle
+    pid_hash_insert(0, 0);
 }
 
 /// Initialize task slot 1 as PID 1 (init).
@@ -402,6 +453,7 @@ pub unsafe fn init_pid1() {
     slot.ppid = 0;
     slot.pgid = 1;
     slot.state = TaskState::Running;
+    pid_hash_insert(1, 1);
 
     let kstack = crate::arch::Arch::pid1_kstack_top();
     slot.kstack_top = kstack;
