@@ -472,6 +472,11 @@ impl Tty {
                     crate::task_table::TASK_TABLE[task_idx].state =
                         crate::task_table::TaskState::WaitingForPoll;
                     crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
+                    if deadline > 0 {
+                        crate::deadline_queue::DEADLINE_QUEUE.insert(
+                            deadline, task_idx as u16, crate::deadline_queue::KIND_WAKE,
+                        );
+                    }
                     crate::task_table::poll_wait_register(task_idx);
                     let sched = crate::scheduler::get();
                     sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;

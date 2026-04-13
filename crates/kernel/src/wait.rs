@@ -26,6 +26,11 @@ pub unsafe fn block_until(state: TaskState, deadline: u64) -> WakeReason {
     let task_idx = crate::task_table::current_task_idx();
     TASK_TABLE[task_idx].state = state;
     TASK_TABLE[task_idx].wake_at = deadline;
+    if deadline > 0 {
+        crate::deadline_queue::DEADLINE_QUEUE.insert(
+            deadline, task_idx as u16, crate::deadline_queue::KIND_WAKE,
+        );
+    }
 
     if state == TaskState::WaitingForPoll {
         crate::task_table::poll_wait_register(task_idx);

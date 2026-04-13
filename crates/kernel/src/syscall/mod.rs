@@ -662,6 +662,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                 // alarm(N): set one-shot timer for N seconds
                 t.itimer_real_deadline = now + (a0 as u64) * 1000;
                 t.itimer_real_interval = 0;
+                crate::deadline_queue::DEADLINE_QUEUE.insert(
+                    t.itimer_real_deadline, idx as u16, crate::deadline_queue::KIND_ITIMER,
+                );
             }
             old_remaining
         },
@@ -775,6 +778,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                 t.itimer_real_interval = interval_ms;
                 if value_ms > 0 {
                     t.itimer_real_deadline = now + value_ms;
+                    crate::deadline_queue::DEADLINE_QUEUE.insert(
+                        t.itimer_real_deadline, idx as u16, crate::deadline_queue::KIND_ITIMER,
+                    );
                 } else {
                     t.itimer_real_deadline = 0; // disarm
                 }

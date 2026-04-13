@@ -434,27 +434,30 @@ pub unsafe fn notify_parent_child_exit(child_ppid: u32, exit_status: i32) {
 /// Called from timer tick interrupt handler.
 pub unsafe fn wake_sleepers() {
     use rux_arch::TimerOps;
+    use crate::deadline_queue::{DEADLINE_QUEUE, KIND_WAKE, KIND_ITIMER};
     let now = crate::arch::Arch::ticks();
-    for i in 0..MAX_PROCS {
+    while DEADLINE_QUEUE.peek_deadline() <= now {
+        let entry = DEADLINE_QUEUE.pop();
+        let i = entry.task_idx as usize;
+        if i >= MAX_PROCS { continue; }
         let t = &mut TASK_TABLE[i];
-        if !t.active { continue; }
-        // Wake sleeping tasks whose deadline has passed (nanosleep + futex timeout)
-        if (t.state == TaskState::Sleeping || t.state == TaskState::WaitingForFutex
-            || t.state == TaskState::WaitingForPoll)
-            && t.wake_at > 0 && now >= t.wake_at
-        {
+        if entry.kind == KIND_WAKE {
+            // Lazy removal: skip if task already woken or deadline cleared
+            if !t.active || t.wake_at == 0 { continue; }
+            if t.state != TaskState::Sleeping && t.state != TaskState::WaitingForFutex
+                && t.state != TaskState::WaitingForPoll { continue; }
             t.wake_at = 0;
             t.state = TaskState::Ready;
             crate::scheduler::locked_wake_task(i);
-        }
-        // Check ITIMER_REAL expiry → set pending SIGALRM (signal 14)
-        if t.itimer_real_deadline > 0 && now >= t.itimer_real_deadline {
+        } else if entry.kind == KIND_ITIMER {
+            if !t.active || t.itimer_real_deadline == 0 { continue; }
             if t.itimer_real_interval > 0 {
                 t.itimer_real_deadline = now + t.itimer_real_interval;
+                DEADLINE_QUEUE.insert(t.itimer_real_deadline, entry.task_idx, KIND_ITIMER);
             } else {
                 t.itimer_real_deadline = 0;
             }
-            send_signal_to(i, 14); // SIGALRM
+            send_signal_to(i, 14);
         }
     }
 }

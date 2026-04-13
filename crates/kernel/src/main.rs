@@ -16,6 +16,7 @@ mod pgtrack;
 mod syscall;
 mod uaccess;
 mod task_table;
+mod deadline_queue;
 mod percpu;
 mod fork;
 mod idle;
