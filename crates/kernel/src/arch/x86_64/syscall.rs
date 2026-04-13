@@ -137,6 +137,9 @@ extern "C" {
 /// Called from the assembly entry point with syscall number and arguments.
 #[no_mangle]
 extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
+    // Save original syscall number for ERESTARTSYS restart (Linux orig_ax)
+    unsafe { crate::percpu::this_cpu().saved_syscall_nr = nr; }
+
     // Process creation syscalls (handled before generic dispatch)
     match nr {
         // 56=clone(flags=rdi, stack=rsi, ptid=rdx, ctid=r10, tls=r8)
@@ -254,6 +257,14 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
         core::ptr::write_volatile((kt - 16) as *mut u64, saved_rflags);
 
         (saved_rax as i64, saved_mask)
+    }
+
+    unsafe fn sig_prepare_restart() {
+        let pc = crate::percpu::this_cpu();
+        let kt = pc.syscall_kstack_top as usize;
+        // Decrement saved RIP by 2 (x86_64 SYSCALL instruction length)
+        let rip = core::ptr::read_volatile((kt - 8) as *const u64);
+        core::ptr::write_volatile((kt - 8) as *mut u64, rip - 2);
     }
 }
 

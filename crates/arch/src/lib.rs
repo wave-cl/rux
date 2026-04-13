@@ -274,6 +274,12 @@ pub unsafe trait SignalOps {
 
     /// Optional pre-delivery setup (e.g., aarch64 maps sigreturn trampoline page).
     unsafe fn sig_pre_deliver() {}
+
+    /// Prepare saved regs for syscall restart (SA_RESTART + ERESTARTSYS).
+    /// Decrements saved PC to re-execute the syscall instruction and restores
+    /// the original syscall number from per-CPU saved_syscall_nr.
+    /// Called BEFORE sig_write_frame so the signal frame captures the restart state.
+    unsafe fn sig_prepare_restart() {}
 }
 
 /// Linux struct stat layout constants — differs per architecture.

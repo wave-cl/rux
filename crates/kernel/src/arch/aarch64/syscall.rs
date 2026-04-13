@@ -35,6 +35,8 @@ pub fn handle_syscall(frame: *mut u8) {
 
         // aarch64 syscall convention: x8 = number, x0-x5 = args
         let nr = *regs.add(8);   // x8
+        // Save original syscall number for ERESTARTSYS restart
+        crate::percpu::this_cpu().saved_syscall_nr = nr;
         let a0 = *regs.add(0);   // x0
         let a1 = *regs.add(1);   // x1
         let a2 = *regs.add(2);   // x2
@@ -216,6 +218,16 @@ unsafe impl rux_arch::SignalOps for super::Aarch64 {
 
     unsafe fn sig_pre_deliver() {
         ensure_trampoline();
+    }
+
+    unsafe fn sig_prepare_restart() {
+        let cpu = crate::percpu::cpu_id();
+        let regs = CURRENT_REGS_PTR_PERCPU[cpu];
+        if !regs.is_null() {
+            // Decrement saved ELR by 4 (aarch64 SVC instruction length)
+            let elr = *regs.add(31);
+            *regs.add(31) = elr - 4;
+        }
     }
 }
 

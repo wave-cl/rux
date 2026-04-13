@@ -1375,23 +1375,33 @@ pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
     };
 
     let ret = if (*process()).signal_hot.has_deliverable() {
-        crate::uaccess::stac();
-        let r = generic_deliver_signal::<S>(result);
-        crate::uaccess::clac();
-        let sa_restart = r & (1 << 32) != 0;
-        if sa_restart && result == crate::errno::ERESTARTSYS as i64 {
-            // SA_RESTART + ERESTARTSYS: return -EINTR for now (musl retries).
-            // TODO: implement kernel-level restart via S::restart_syscall()
-            // by modifying saved PC to re-execute the syscall instruction.
-            crate::errno::EINTR as i64
-        } else if result == crate::errno::ERESTARTSYS as i64 {
-            // No SA_RESTART: convert to user-visible EINTR
-            crate::errno::EINTR as i64
+        // Check if the pending signal has SA_RESTART before delivering.
+        // If ERESTARTSYS + SA_RESTART, modify saved regs for restart
+        // BEFORE building the signal frame (Linux do_signal approach).
+        let sig_result = if result == crate::errno::ERESTARTSYS as i64 {
+            let hot = &(*process()).signal_hot;
+            let cold = crate::task_table::signal_cold_for(crate::task_table::current_task_idx());
+            let pending = hot.pending.0 & !hot.blocked.0;
+            let signum = pending.trailing_zeros();
+            let has_restart = if signum < 32 {
+                cold.actions[signum as usize].flags & rux_proc::signal::SA_RESTART != 0
+            } else { false };
+            if has_restart {
+                // Kernel-level restart: signal frame will capture restarted PC.
+                // When sigreturn restores it, the syscall re-executes.
+                S::sig_prepare_restart();
+                crate::errno::EINTR as i64 // result for the signal frame's saved_rax
+            } else {
+                crate::errno::EINTR as i64 // no restart, user sees EINTR
+            }
         } else {
-            r & 0xFFFFFFFF
-        }
+            result
+        };
+        crate::uaccess::stac();
+        let r = generic_deliver_signal::<S>(sig_result);
+        crate::uaccess::clac();
+        r & 0xFFFFFFFF
     } else {
-        // No signal: if ERESTARTSYS somehow got here, convert to EINTR
         if result == crate::errno::ERESTARTSYS as i64 {
             crate::errno::EINTR as i64
         } else {
