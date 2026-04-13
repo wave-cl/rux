@@ -846,7 +846,9 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Lgetxattr | Syscall::Lsetxattr | Syscall::Listxattr | Syscall::Flistxattr |
         Syscall::Llistxattr | Syscall::Removexattr | Syscall::Fremovexattr |
         Syscall::Lremovexattr |
-        Syscall::Capget | Syscall::Capset | Syscall::Personality | Syscall::Seccomp => crate::errno::ENOSYS,
+        Syscall::Personality => 0, // PER_LINUX = 0 (current personality)
+        Syscall::Capget => 0,     // Report success (all capabilities available)
+        Syscall::Capset | Syscall::Seccomp => crate::errno::ENOSYS,
 
         // ── Phase 2 wrappers ─────────────────────────────────────
         Syscall::Pwrite64 => posix::pwrite64(a0, a1, a2, a3),
