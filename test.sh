@@ -321,6 +321,17 @@ git --version 2>&1
 git init /tmp/repo 2>/dev/null
 cd /tmp/repo && git config user.email "t@rux" && git config user.name "rux" && echo hello > f.txt && git add f.txt && GIT_PAGER=cat git commit -m "init" 2>&1 | grep -E 'master|create'
 cd /
+echo '2+3' > /tmp/bc1.txt && bc < /tmp/bc1.txt
+echo '100/7' > /tmp/bc2.txt && bc < /tmp/bc2.txt
+dc -e '3 5 + p'
+echo hello_world > /tmp/sed1.txt && sed s/world/rux/ < /tmp/sed1.txt
+echo rux_test > /tmp/b64.txt && base64 < /tmp/b64.txt
+echo hello > /tmp/tr1.txt && tr a-z A-Z < /tmp/tr1.txt
+echo '1 2 3' > /tmp/awk1.txt && awk '{print $2}' < /tmp/awk1.txt
+echo gzip_data > /tmp/gz.txt && gzip /tmp/gz.txt && gunzip /tmp/gz.txt.gz && cat /tmp/gz.txt
+echo tar_data > /tmp/tr.txt && tar cf /tmp/t.tar /tmp/tr.txt 2>/dev/null && tar tf /tmp/t.tar
+diff /etc/hostname /etc/hostname > /dev/null 2>&1 && echo diff_same || echo diff_differ
+nslookup example.com 10.0.2.3 > /tmp/ns.txt 2>&1 ; grep -c Address /tmp/ns.txt
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
 timeout 5 top -bn1 -d1 2>&1 | head -3
 exit
@@ -531,6 +542,17 @@ check "perl fibonacci"       "pl_fib=6765"
 check "git version"          "git version"
 check "git init"             "Initialized"
 check "git commit"           "master"
+check "bc add"               "5"
+check "bc divide"            "14"
+check "dc stack"             "8"
+check "sed subst"            "hello_rux"
+check "base64 encode"        "cnV4X3Rlc3QK"
+check "tr uppercase"         "HELLO"
+check "awk field"            "2"
+check "gzip roundtrip"       "gzip_data"
+check "tar list"             "tr.txt"
+check "diff"                 "diff_same"
+check "nslookup"             "2"
 check "ruby print"           "ruby:42"
 check "ruby reduce"          "55"
 check "ruby platform"        "x86_64-linux"
@@ -777,6 +799,16 @@ lua5.4 -e 'print("lua:" .. 6*7)' 2>&1
 lua5.4 -e 'function fib(n) if n<2 then return n end; return fib(n-1)+fib(n-2) end; print("lua_fib=" .. fib(20))'
 perl -e 'sub fib{$_[0]<2?$_[0]:fib($_[0]-1)+fib($_[0]-2)}; print "pl_fib=" . fib(20) . "\n"'
 git --version 2>&1
+echo '2+3' > /tmp/bc1.txt && bc < /tmp/bc1.txt
+echo '100/7' > /tmp/bc2.txt && bc < /tmp/bc2.txt
+dc -e '3 5 + p'
+echo hello_world > /tmp/sed1.txt && sed s/world/rux/ < /tmp/sed1.txt
+echo rux_test > /tmp/b64.txt && base64 < /tmp/b64.txt
+echo hello > /tmp/tr1.txt && tr a-z A-Z < /tmp/tr1.txt
+echo '1 2 3' > /tmp/awk1.txt && awk '{print $2}' < /tmp/awk1.txt
+echo gzip_data > /tmp/gz.txt && gzip /tmp/gz.txt && gunzip /tmp/gz.txt.gz && cat /tmp/gz.txt
+echo tar_data > /tmp/tr.txt && tar cf /tmp/t.tar /tmp/tr.txt 2>/dev/null && tar tf /tmp/t.tar
+diff /etc/hostname /etc/hostname > /dev/null 2>&1 && echo diff_same || echo diff_differ
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 timeout 5 top -bn1 -d1 2>&1 | head -3
 exit
@@ -971,6 +1003,16 @@ check "lua print"            "lua:42"
 check "lua fibonacci"        "lua_fib=6765"
 check "perl fibonacci"       "pl_fib=6765"
 check "git version"          "git version"
+check "bc add"               "5"
+check "bc divide"            "14"
+check "dc stack"             "8"
+check "sed subst"            "hello_rux"
+check "base64 encode"        "cnV4X3Rlc3QK"
+check "tr uppercase"         "HELLO"
+check "awk field"            "2"
+check "gzip roundtrip"       "gzip_data"
+check "tar list"             "tr.txt"
+check "diff"                 "diff_same"
 check "ruby print"           "ruby:42"
 check "ruby reduce"          "55"
 check "socketpair"           "sp_hello_sp_reply_sp"
