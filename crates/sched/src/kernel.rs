@@ -62,8 +62,8 @@ pub struct Scheduler {
     pub tasks: [KernelTask; MAX_TASKS],
     /// Per-CPU current task index. Indexed by cpu_id.
     pub current_per_cpu: [usize; 64],
-    /// Clock in nanoseconds (advanced by timer ISR).
-    pub clock_ns: u64,
+    /// Per-CPU clocks in nanoseconds (each CPU advances independently).
+    pub clock_per_cpu: [u64; 64],
     /// Per-CPU reschedule bitmask. Bit N set = CPU N needs to reschedule.
     /// Replaces the global `need_resched: bool` for proper SMP support.
     pub need_resched: u64,
@@ -84,7 +84,7 @@ impl Scheduler {
             cfs: CfsClass::new(),
             tasks: [EMPTY_TASK; MAX_TASKS],
             current_per_cpu: [0; 64],
-            clock_ns: 0,
+            clock_per_cpu: [0; 64],
             need_resched: 0,
             cpu_id: 0,
             ctx: None,
@@ -137,7 +137,7 @@ impl Scheduler {
         task.saved_sp = (ctx.init_task_stack)(stack_top, entry as usize, 0);
 
         // Enqueue into CFS
-        self.cfs.set_clock(self.cpu_id, self.clock_ns);
+        self.cfs.set_clock(self.cpu_id, self.clock_per_cpu[self.cpu_id as usize]);
         self.cfs.enqueue(self.cpu_id, &mut task.entity, WF_FORK);
 
         idx
@@ -147,8 +147,8 @@ impl Scheduler {
     /// and sets `need_resched` if a context switch is needed.
     pub fn tick(&mut self, elapsed_ns: u64) {
         let cpu = self.this_cpu();
-        self.clock_ns += elapsed_ns;
-        self.cfs.set_clock(cpu, self.clock_ns);
+        self.clock_per_cpu[cpu as usize] += elapsed_ns;
+        self.cfs.set_clock(cpu, self.clock_per_cpu[cpu as usize]);
 
         let current = self.current_per_cpu[cpu as usize];
         if current == 0 {
@@ -193,7 +193,7 @@ impl Scheduler {
         if idx >= MAX_TASKS || !self.tasks[idx].active { return self.cpu_id; }
         self.tasks[idx].entity.state = TaskState::Ready;
         self.tasks[idx].entity.cpu = target_cpu;
-        self.cfs.set_clock(target_cpu, self.clock_ns);
+        self.cfs.set_clock(target_cpu, self.clock_per_cpu[target_cpu as usize]);
         self.cfs.enqueue(target_cpu, &mut self.tasks[idx].entity, 0);
         self.need_resched |= 1u64 << target_cpu;
         target_cpu

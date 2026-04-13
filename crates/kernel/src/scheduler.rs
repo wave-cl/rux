@@ -9,50 +9,55 @@ pub use rux_sched::kernel::{Scheduler, ContextFns};
 /// Accessed from the timer ISR and from kernel_main.
 static mut SCHED: Scheduler = Scheduler::new();
 
-/// Scheduler spinlock for SMP safety.
-/// Protects SCHED state (CFS tree, current task, clock) from concurrent
-/// access by BSP timer ISR, AP timer ISR, and syscall return paths.
-pub static SCHED_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Per-CPU scheduler locks (Linux rq->lock). Each CPU's lock protects
+/// only that CPU's runqueue, eliminating cross-CPU contention.
+use core::sync::atomic::{AtomicBool, Ordering};
+static PERCPU_SCHED_LOCK: [AtomicBool; crate::percpu::MAX_CPUS] = {
+    const UNLOCKED: AtomicBool = AtomicBool::new(false);
+    [UNLOCKED; crate::percpu::MAX_CPUS]
+};
 
-/// Acquire the scheduler lock (spinlock). Also disables preemption.
+/// Acquire the scheduler lock for a specific CPU's runqueue.
 #[inline(always)]
-pub fn sched_lock() {
+pub fn sched_lock_cpu(cpu: usize) {
     unsafe { crate::arch::preempt_disable(); }
-    while SCHED_LOCK.compare_exchange_weak(
-        false, true,
-        core::sync::atomic::Ordering::Acquire,
-        core::sync::atomic::Ordering::Relaxed,
+    while PERCPU_SCHED_LOCK[cpu].compare_exchange_weak(
+        false, true, Ordering::Acquire, Ordering::Relaxed,
     ).is_err() {
         core::hint::spin_loop();
     }
 }
 
-/// Release the scheduler lock. Also re-enables preemption.
+/// Release a specific CPU's scheduler lock.
 #[inline(always)]
-pub fn sched_unlock() {
-    SCHED_LOCK.store(false, core::sync::atomic::Ordering::Release);
+pub fn sched_unlock_cpu(cpu: usize) {
+    PERCPU_SCHED_LOCK[cpu].store(false, Ordering::Release);
     unsafe { crate::arch::preempt_enable(); }
+}
+
+/// Try to acquire a CPU's lock without spinning (for ISR context).
+#[inline(always)]
+fn try_lock_cpu(cpu: usize) -> bool {
+    PERCPU_SCHED_LOCK[cpu].compare_exchange(
+        false, true, Ordering::Acquire, Ordering::Relaxed,
+    ).is_ok()
 }
 
 /// Get a mutable reference to the global scheduler.
 ///
 /// # Safety
-/// Caller must hold SCHED_LOCK or be in a single-CPU context (boot, ISR with IF=0).
+/// Caller must hold per-CPU lock or be in a single-CPU context (boot, ISR with IF=0).
 #[inline(always)]
 pub unsafe fn get() -> &'static mut Scheduler {
     &mut *(&raw mut SCHED)
 }
 
-/// Lock-protected tick: try-lock to avoid deadlock on TCG SMP
-/// (ISR spinning on lock held by other vCPU in serialized execution).
+/// Per-CPU tick: try-lock THIS CPU's runqueue only. No contention with other CPUs.
 #[inline(always)]
 pub unsafe fn locked_tick(elapsed_ns: u64) {
+    let cpu = crate::percpu::cpu_id();
     crate::arch::preempt_disable();
-    if SCHED_LOCK.compare_exchange(
-        false, true,
-        core::sync::atomic::Ordering::Acquire,
-        core::sync::atomic::Ordering::Relaxed,
-    ).is_ok() {
+    if try_lock_cpu(cpu) {
         {
             let idx = crate::task_table::current_task_idx();
             if idx < crate::task_table::MAX_PROCS {
@@ -61,24 +66,24 @@ pub unsafe fn locked_tick(elapsed_ns: u64) {
         }
         let sched = get();
         sched.tick(elapsed_ns);
-        let cpu = crate::percpu::cpu_id() as u32;
-        if sched.need_resched & (1u64 << cpu) != 0 {
+        if sched.need_resched & (1u64 << cpu as u32) != 0 {
             crate::task_table::set_current_need_resched();
         }
-        SCHED_LOCK.store(false, core::sync::atomic::Ordering::Release);
+        sched_unlock_cpu(cpu);
+    } else {
+        crate::arch::preempt_enable();
     }
-    crate::arch::preempt_enable();
 }
 
-/// Lock-protected wake_task: acquire lock, wake, release.
+/// Wake a task: acquires the TARGET CPU's lock, enqueues, releases.
 /// Sends a reschedule IPI if the task's CPU differs from the caller's.
 #[inline(always)]
 pub unsafe fn locked_wake_task(idx: usize) {
-    sched_lock();
+    let target_cpu = get().tasks[idx].entity.cpu as usize;
+    sched_lock_cpu(target_cpu);
     get().wake_task(idx);
-    let target_cpu = get().tasks[idx].entity.cpu;
-    sched_unlock();
-    send_resched_ipi_if_remote(target_cpu);
+    sched_unlock_cpu(target_cpu);
+    send_resched_ipi_if_remote(target_cpu as u32);
 }
 
 /// Send a reschedule IPI to a remote CPU if the target differs from ours.

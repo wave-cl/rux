@@ -147,7 +147,7 @@ unsafe fn enqueue_child(child_idx: usize) {
     task.entity.state = rux_sched::TaskState::Ready;
     task.entity.nice = 0;
     task.entity.cpu = target_cpu;
-    sched.cfs.set_clock(target_cpu, sched.clock_ns);
+    sched.cfs.set_clock(target_cpu, sched.clock_per_cpu[target_cpu as usize]);
     sched.cfs.enqueue(target_cpu, &mut task.entity, rux_sched::fair::constants::WF_FORK);
     sched.need_resched |= 1u64 << target_cpu;
     if target_cpu == my_cpu {
