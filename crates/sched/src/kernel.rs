@@ -256,9 +256,6 @@ impl Scheduler {
             self.need_resched |= 1u64 << cpu;
         }
 
-        // Keep timer always running — slot 0 is the init/shell process which
-        // uses timer interrupts to poll UART input; stopping the timer would
-        // cause console reads to hang forever.
         let ctx = match self.ctx.as_ref() {
             Some(c) => c,
             None => return, // Early boot: scheduler context not yet initialized
