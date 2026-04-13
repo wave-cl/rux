@@ -156,8 +156,9 @@ pub struct TaskSlot {
     pub rss_pages: u32,
     pub cpu_time_ns: u64,       // accumulated CPU time (Linux CLOCK_PROCESS_CPUTIME_ID)
 
-    // ── Preemption ────────────────────────────────────────────────────
+    // ── Preemption (Linux TIF_NEED_RESCHED) ─────────────────────────
     pub preempt_count: u32,     // saved/restored on context switch
+    pub need_resched: bool,     // per-task reschedule flag
 
     // ── FPU/SIMD state ──────────────────────────────────────────────
     pub fpu_state: rux_arch::FpuState,
@@ -191,7 +192,7 @@ impl TaskSlot {
             comm: [0; 16], comm_len: 0,
             environ: [0; 512], environ_len: 0,
             rss_pages: 0, cpu_time_ns: 0,
-            preempt_count: 0,
+            preempt_count: 0, need_resched: false,
             fpu_state: rux_arch::FpuState::new(),
         }
     }
@@ -203,6 +204,17 @@ pub static mut TASK_TABLE: [TaskSlot; MAX_PROCS] = {
     const EMPTY: TaskSlot = TaskSlot::new();
     [EMPTY; MAX_PROCS]
 };
+
+// ── Per-process VMA lists (Linux mm_struct.mmap) ─────────────────────
+pub static mut VMA_LISTS: [rux_mm::vma::VmaList; MAX_PROCS] = {
+    const EMPTY: rux_mm::vma::VmaList = rux_mm::vma::VmaList::new();
+    [EMPTY; MAX_PROCS]
+};
+
+#[inline(always)]
+pub unsafe fn vma_list(idx: usize) -> &'static mut rux_mm::vma::VmaList {
+    &mut (*(&raw mut VMA_LISTS))[idx]
+}
 
 // ── PID hash table (Linux pid_hash) ──────────────────────────────────
 const PID_HASH_SIZE: usize = 128;
@@ -342,6 +354,25 @@ pub fn current_pid() -> u32 {
 /// Get the current task's parent PID.
 pub fn current_ppid() -> u32 {
     unsafe { TASK_TABLE[current_task_idx()].ppid }
+}
+
+// ── Per-task TIF_NEED_RESCHED ────────────────────────────────────────
+
+#[inline(always)]
+pub unsafe fn set_current_need_resched() {
+    TASK_TABLE[current_task_idx()].need_resched = true;
+}
+
+#[inline(always)]
+pub unsafe fn clear_current_need_resched() {
+    TASK_TABLE[current_task_idx()].need_resched = false;
+}
+
+/// Check if current task needs rescheduling (per-task flag OR sched bitmask).
+#[inline(always)]
+pub unsafe fn current_needs_resched() -> bool {
+    TASK_TABLE[current_task_idx()].need_resched
+        || crate::scheduler::get().need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0
 }
 
 /// Allocate a new PID.

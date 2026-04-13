@@ -59,7 +59,12 @@ pub unsafe fn locked_tick(elapsed_ns: u64) {
                 crate::task_table::TASK_TABLE[idx].cpu_time_ns += elapsed_ns;
             }
         }
-        get().tick(elapsed_ns);
+        let sched = get();
+        sched.tick(elapsed_ns);
+        let cpu = crate::percpu::cpu_id() as u32;
+        if sched.need_resched & (1u64 << cpu) != 0 {
+            crate::task_table::set_current_need_resched();
+        }
         SCHED_LOCK.store(false, core::sync::atomic::Ordering::Release);
     }
     crate::arch::preempt_enable();

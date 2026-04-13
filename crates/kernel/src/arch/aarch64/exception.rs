@@ -26,13 +26,11 @@ fn esr_ec(esr: u64) -> u32 {
 /// task stack, preserved across any context_switch.
 #[no_mangle]
 pub unsafe extern "C" fn aarch64_isr_check_preempt() {
-    if crate::arch::preemptible() {
-        let sched = crate::scheduler::get();
-        if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
-            crate::arch::preempt_disable();
-            sched.schedule();
-            crate::arch::preempt_enable();
-        }
+    if crate::arch::preemptible() && crate::task_table::current_needs_resched() {
+        crate::task_table::clear_current_need_resched();
+        crate::arch::preempt_disable();
+        crate::scheduler::get().schedule();
+        crate::arch::preempt_enable();
     }
 }
 

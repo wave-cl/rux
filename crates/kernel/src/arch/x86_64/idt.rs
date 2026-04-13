@@ -317,14 +317,11 @@ pub unsafe fn load() {
 /// and TSS.rsp0 is updated per-task so each task's ISR frame is on its own stack.
 #[no_mangle]
 pub unsafe extern "C" fn isr_check_preempt() {
-    if crate::arch::preemptible() {
-        let cpu = crate::percpu::cpu_id() as u32;
-        let sched = crate::scheduler::get();
-        if sched.need_resched & (1u64 << cpu) != 0 {
-            crate::arch::preempt_disable();
-            sched.schedule();
-            crate::arch::preempt_enable();
-        }
+    if crate::arch::preemptible() && crate::task_table::current_needs_resched() {
+        crate::task_table::clear_current_need_resched();
+        crate::arch::preempt_disable();
+        crate::scheduler::get().schedule();
+        crate::arch::preempt_enable();
     }
 }
 
@@ -506,6 +503,7 @@ unsafe fn interrupt_dispatch_inner(vector: u64, error_code: u64, frame: *mut u8)
                 // Set need_resched so isr_check_preempt switches to the woken task
                 let cpu = crate::percpu::cpu_id() as u32;
                 crate::scheduler::get().need_resched |= 1u64 << cpu;
+                crate::task_table::set_current_need_resched();
             }
         }
         _ => {

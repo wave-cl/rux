@@ -35,6 +35,7 @@ pub unsafe fn block_until(state: TaskState, deadline: u64) -> WakeReason {
     sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
     sched.dequeue_current();
     sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+    crate::task_table::set_current_need_resched();
     sched.schedule();
 
     // Check if woken by a signal

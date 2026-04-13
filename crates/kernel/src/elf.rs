@@ -248,9 +248,9 @@ pub unsafe fn load_elf_from_inode(
     // After exec, other pipeline processes may be waiting to run.
     // Without this, the post_syscall check is skipped (exec doesn't return).
     unsafe {
-        let sched = crate::scheduler::get();
-        if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
-            sched.schedule();
+        if crate::task_table::current_needs_resched() {
+            crate::task_table::clear_current_need_resched();
+            crate::scheduler::get().schedule();
         }
     }
     {

@@ -477,6 +477,7 @@ impl Tty {
                     sched.tasks[task_idx].entity.state = rux_sched::TaskState::Interruptible;
                     sched.dequeue_current();
                     sched.need_resched |= 1u64 << crate::percpu::cpu_id() as u32;
+                    unsafe { crate::task_table::set_current_need_resched(); }
                     sched.schedule();
                 }
             }

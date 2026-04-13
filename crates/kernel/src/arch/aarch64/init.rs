@@ -31,11 +31,10 @@ pub extern "C" fn ap_entry_rust(cpu_id: u64) -> ! {
         core::arch::asm!("msr daifclr, #0xF", options(nostack));
         loop {
             core::arch::asm!("wfi", options(nostack, nomem));
-            // After timer interrupt, check if scheduler wants to reschedule
-            let sched = crate::scheduler::get();
-            if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
+            if crate::task_table::current_needs_resched() {
+                crate::task_table::clear_current_need_resched();
                 crate::arch::preempt_disable();
-                sched.schedule();
+                crate::scheduler::get().schedule();
                 crate::arch::preempt_enable();
             }
         }

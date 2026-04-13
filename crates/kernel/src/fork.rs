@@ -143,7 +143,9 @@ unsafe fn enqueue_child(child_idx: usize) {
     sched.cfs.set_clock(target_cpu, sched.clock_ns);
     sched.cfs.enqueue(target_cpu, &mut task.entity, rux_sched::fair::constants::WF_FORK);
     sched.need_resched |= 1u64 << target_cpu;
-    if target_cpu != my_cpu {
+    if target_cpu == my_cpu {
+        set_current_need_resched();
+    } else {
         crate::scheduler::send_resched_ipi_if_remote(target_cpu);
     }
 }

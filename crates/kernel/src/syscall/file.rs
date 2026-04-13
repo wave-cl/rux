@@ -1005,6 +1005,7 @@ unsafe fn pipe_block(pipe_id: u8) {
     sched.tasks[idx].entity.state = rux_sched::TaskState::Interruptible;
     sched.dequeue_current();
     sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
+    unsafe { crate::task_table::set_current_need_resched(); }
     crate::arch::irq_restore(was);
     crate::arch::preempt_disable();
     sched.schedule();

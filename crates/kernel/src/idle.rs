@@ -16,11 +16,10 @@ pub extern "C" fn idle_loop() -> ! {
             use rux_arch::HaltOps;
             crate::arch::Arch::halt_until_interrupt();
             IDLE_TICKS.fetch_add(1, Ordering::Relaxed);
-            // After timer IRQ wakes us, check if any task became runnable
-            let sched = crate::scheduler::get();
-            if sched.need_resched & (1u64 << crate::percpu::cpu_id() as u32) != 0 {
+            if crate::task_table::current_needs_resched() {
+                crate::task_table::clear_current_need_resched();
                 crate::arch::preempt_disable();
-                sched.schedule();
+                crate::scheduler::get().schedule();
                 crate::arch::preempt_enable();
             }
         }
