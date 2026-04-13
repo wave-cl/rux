@@ -299,7 +299,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
             if let crate::wait::WakeReason::Signal = unsafe {
                 crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, dl)
             } {
-                return crate::errno::EINTR;
+                return crate::errno::ERESTARTSYS;
             }
         }
     }
@@ -1216,7 +1216,7 @@ pub fn pselect6(nfds: usize, readfds_ptr: usize, writefds_ptr: usize, _exceptfds
                     if readfds_ptr != 0 { *(readfds_ptr as *mut u64) = 0; }
                     if writefds_ptr != 0 { *(writefds_ptr as *mut u64) = 0; }
                 }
-                return crate::errno::EINTR;
+                return crate::errno::ERESTARTSYS;
             }
         }
     }
@@ -1399,7 +1399,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
         if let crate::wait::WakeReason::Signal = unsafe {
             crate::wait::block_until(crate::task_table::TaskState::WaitingForPoll, deadline)
         } {
-            return crate::errno::EINTR;
+            return crate::errno::ERESTARTSYS;
         }
     }
 }

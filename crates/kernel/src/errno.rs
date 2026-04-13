@@ -35,6 +35,9 @@ pub const EADDRINUSE: isize = -98;     // Address already in use
 pub const EOPNOTSUPP: isize = -95;     // Operation not supported on socket
 pub const ENOTCONN: isize = -107;     // Transport endpoint is not connected
 
+// ── Kernel-internal restart codes (never visible to userspace) ──────
+pub const ERESTARTSYS: isize = -512;   // Restart if SA_RESTART, else EINTR
+
 // ── Signal numbers (POSIX) ──────────────────────────────────────────
 
 pub const SIGKILL: u8 = 9;

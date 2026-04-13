@@ -814,7 +814,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                     if let crate::wait::WakeReason::Signal = crate::wait::block_until(
                         crate::task_table::TaskState::Sleeping, deadline,
                     ) {
-                        return crate::errno::EINTR;
+                        return crate::errno::ERESTARTSYS;
                     }
                 }
                 0
@@ -1037,7 +1037,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             use rux_arch::TimerOps;
             let dl = crate::arch::Arch::ticks() + 60_000;
             unsafe { crate::wait::block_until(crate::task_table::TaskState::Sleeping, dl); }
-            crate::errno::EINTR
+            crate::errno::ERESTARTSYS
         }
         Syscall::Getitimer => unsafe {
             // getitimer(which, value) — return current timer state
@@ -1362,23 +1362,41 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
 /// Called by both x86_64 and aarch64 syscall return paths.
 #[inline]
 pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
+    // Convert ERESTARTSYS before it reaches userspace
+    let result = if result == crate::errno::ERESTARTSYS as i64 {
+        // No signal pending — convert to EINTR (shouldn't normally happen,
+        // but defensive: ERESTARTSYS must never leak to userspace)
+        if !(*process()).signal_hot.has_deliverable() {
+            return crate::errno::EINTR as i64;
+        }
+        result
+    } else {
+        result
+    };
+
     let ret = if (*process()).signal_hot.has_deliverable() {
         crate::uaccess::stac();
         let r = generic_deliver_signal::<S>(result);
         crate::uaccess::clac();
-        // SA_RESTART: if the signal handler had SA_RESTART set (encoded in bit 32)
-        // and the original syscall returned -EINTR, return -EINTR to let the
-        // arch return path restart the syscall (Linux uses -ERESTARTSYS internally).
-        // For now, we return the original result so the syscall restarts transparently
-        // via the userspace libc retry loop (musl handles this).
         let sa_restart = r & (1 << 32) != 0;
-        if sa_restart && result == -(crate::errno::EINTR as i64).abs() {
-            result // return original -EINTR; musl restarts in userspace
+        if sa_restart && result == crate::errno::ERESTARTSYS as i64 {
+            // SA_RESTART + ERESTARTSYS: return -EINTR for now (musl retries).
+            // TODO: implement kernel-level restart via S::restart_syscall()
+            // by modifying saved PC to re-execute the syscall instruction.
+            crate::errno::EINTR as i64
+        } else if result == crate::errno::ERESTARTSYS as i64 {
+            // No SA_RESTART: convert to user-visible EINTR
+            crate::errno::EINTR as i64
         } else {
-            r & 0xFFFFFFFF // mask off the restart flag bit
+            r & 0xFFFFFFFF
         }
     } else {
-        result
+        // No signal: if ERESTARTSYS somehow got here, convert to EINTR
+        if result == crate::errno::ERESTARTSYS as i64 {
+            crate::errno::EINTR as i64
+        } else {
+            result
+        }
     };
     if unsafe { crate::task_table::current_needs_resched() } {
         unsafe { crate::task_table::clear_current_need_resched(); }

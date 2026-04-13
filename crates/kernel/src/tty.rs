@@ -385,7 +385,7 @@ impl Tty {
             match event {
                 LineEvent::Signal(signum) => {
                     crate::syscall::posix::kill(-(self.foreground_pgid as isize), signum as usize);
-                    return crate::errno::EINTR;
+                    return crate::errno::ERESTARTSYS;
                 }
                 LineEvent::Eof => return 0,
                 LineEvent::EofFlush | LineEvent::Complete => break,

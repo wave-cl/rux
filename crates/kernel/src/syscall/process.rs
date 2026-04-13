@@ -397,7 +397,7 @@ pub fn nanosleep(req_ptr: usize) -> isize {
         if let crate::wait::WakeReason::Signal = crate::wait::block_until(
             crate::task_table::TaskState::Sleeping, deadline,
         ) {
-            return crate::errno::EINTR;
+            return crate::errno::ERESTARTSYS;
         }
     }
     0
