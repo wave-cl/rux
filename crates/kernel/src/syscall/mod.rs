@@ -924,7 +924,44 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             }
             crate::errno::EAGAIN
         },
-        Syscall::SigQueueinfo | Syscall::TgSigQueueinfo => crate::errno::ENOSYS,
+        Syscall::SigQueueinfo | Syscall::TgSigQueueinfo => unsafe {
+            // rt_sigqueueinfo(pid, sig, siginfo_ptr) / rt_tgsigqueueinfo(tgid, tid, sig, siginfo_ptr)
+            let signum = a1;
+            if signum < 1 || signum > 64 { return crate::errno::EINVAL; }
+            let pid = a0 as u32;
+            let si_ptr = a2;
+            if si_ptr == 0 || crate::uaccess::validate_user_ptr(si_ptr, 32).is_err() {
+                return crate::errno::EFAULT;
+            }
+            // Read si_value from user siginfo_t (offset 24 = si_value.sival_int)
+            let si_value: i32 = crate::uaccess::get_user(si_ptr + 24);
+            let info = rux_proc::signal::SigInfo {
+                signo: signum as u8,
+                code: rux_proc::signal::SigCode::User,
+                _pad0: [0; 2],
+                pid: rux_proc::id::Pid(crate::task_table::current_pid()),
+                uid: rux_proc::id::Uid(0),
+                _pad1: [0; 4],
+                addr: 0,
+                status: si_value,
+                _pad2: [0; 4],
+            };
+            match crate::task_table::find_task_by_pid(pid) {
+                Some(idx) => {
+                    if signum >= 32 {
+                        let cold = crate::task_table::signal_cold_for(idx);
+                        let _ = cold.send_rt(
+                            &mut crate::task_table::TASK_TABLE[idx].signal_hot,
+                            signum as u8, info,
+                        );
+                    } else {
+                        crate::task_table::send_signal_to(idx, signum as u8);
+                    }
+                    0
+                }
+                None => crate::errno::ESRCH,
+            }
+        },
         Syscall::Signalfd4 => memory::signalfd4(a0, a1, a2),
 
         // ── Batch 2: splice / zero-copy I/O ───────────────────────
