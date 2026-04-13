@@ -1082,10 +1082,11 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::CopyFileRange => file::copy_file_range(a0, a1, a2, a3, a4),
         Syscall::Statx => fs_ops::statx(a0, a1, a2, a3, a4),
 
-        // ── Batch 3: POSIX IPC ─────────────────────────────────────
-        Syscall::Semget | Syscall::Semop | Syscall::Semctl => crate::errno::ENOSYS,
-        Syscall::Shmget | Syscall::Shmat | Syscall::Shmdt | Syscall::Shmctl => crate::errno::ENOSYS,
-        Syscall::Msgget | Syscall::Msgsnd | Syscall::Msgrcv | Syscall::Msgctl => crate::errno::ENOSYS,
+        // ── Batch 3: SysV IPC (graceful stubs — no resources available) ──
+        Syscall::Semget | Syscall::Shmget | Syscall::Msgget => crate::errno::ENOSPC,
+        Syscall::Semop | Syscall::Semctl => crate::errno::EINVAL,
+        Syscall::Shmat | Syscall::Shmdt | Syscall::Shmctl => crate::errno::EINVAL,
+        Syscall::Msgsnd | Syscall::Msgrcv | Syscall::Msgctl => crate::errno::EINVAL,
 
         // ── Batch 3: process extensions ───────────────────────────
         Syscall::Clone3 => crate::errno::ENOSYS, // musl falls back to clone

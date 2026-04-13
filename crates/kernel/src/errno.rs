@@ -24,6 +24,7 @@ pub const ESPIPE: isize = -29;     // Illegal seek (pipe)
 pub const EPIPE: isize = -32;      // Broken pipe
 pub const ERANGE: isize = -34;     // Numerical result out of range
 pub const ENOMEM: isize = -12;     // Cannot allocate memory
+pub const ENOSPC: isize = -28;     // No space left on device
 pub const ENOSYS: isize = -38;     // Function not implemented
 pub const EAFNOSUPPORT: isize = -97;  // Address family not supported
 pub const EPROTONOSUPPORT: isize = -93; // Protocol not supported
