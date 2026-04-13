@@ -80,6 +80,43 @@ pub fn get_task_environ(pid: u32, buf: &mut [u8]) -> usize {
     })}
 }
 
+/// Generate /proc/[pid]/maps from VMA list.
+pub fn get_task_maps(pid: u32, buf: &mut [u8]) -> usize {
+    unsafe { with_task(pid, 0, |i| {
+        let vmas = crate::task_table::vma_list(i);
+        let mut pos = 0;
+        for v in 0..vmas.count as usize {
+            let vma = &vmas.entries[v];
+            if pos + 80 > buf.len() { break; }
+            pos += fmt_hex_pad(&mut buf[pos..], vma.start.as_usize());
+            buf[pos] = b'-'; pos += 1;
+            pos += fmt_hex_pad(&mut buf[pos..], vma.end.as_usize());
+            buf[pos] = b' '; pos += 1;
+            buf[pos] = if vma.flags.contains(rux_mm::MappingFlags::READ) { b'r' } else { b'-' }; pos += 1;
+            buf[pos] = if vma.flags.contains(rux_mm::MappingFlags::WRITE) { b'w' } else { b'-' }; pos += 1;
+            buf[pos] = if vma.flags.contains(rux_mm::MappingFlags::EXECUTE) { b'x' } else { b'-' }; pos += 1;
+            buf[pos] = if vma.kind == rux_mm::vma::VmaKind::Shared { b's' } else { b'p' }; pos += 1;
+            buf[pos] = b' '; pos += 1;
+            pos += fmt_hex_pad(&mut buf[pos..], vma.offset as usize);
+            let tail = b" 00:00 0\n";
+            buf[pos..pos + tail.len()].copy_from_slice(tail);
+            pos += tail.len();
+        }
+        pos
+    })}
+}
+
+fn fmt_hex_pad(buf: &mut [u8], val: usize) -> usize {
+    let mut tmp = [0u8; 16];
+    let bytes = rux_klib::fmt::usize_to_hex(&mut tmp, val);
+    let pad = if bytes.len() < 8 { 8 - bytes.len() } else { 0 };
+    let total = pad + bytes.len();
+    if total > buf.len() { return 0; }
+    for i in 0..pad { buf[i] = b'0'; }
+    buf[pad..total].copy_from_slice(bytes);
+    total
+}
+
 /// Build a ProcFs with the standard kernel callbacks.
 /// `get_ticks` and `get_total_frames` are parameterized for arch differences.
 pub const fn new_procfs(
@@ -99,5 +136,6 @@ pub const fn new_procfs(
         get_idle_ticks,
         get_task_cwd,
         get_task_environ,
+        get_task_maps,
     )
 }

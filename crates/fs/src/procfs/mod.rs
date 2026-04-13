@@ -154,6 +154,7 @@ pub struct ProcFs {
     pub get_idle_ticks: fn() -> u64,
     pub get_task_cwd: fn(u32, &mut [u8]) -> usize,
     pub get_task_environ: fn(u32, &mut [u8]) -> usize,
+    pub get_task_maps: fn(u32, &mut [u8]) -> usize,
     pub num_cpus: u32,
 }
 
@@ -170,8 +171,9 @@ impl ProcFs {
         get_idle_ticks: fn() -> u64,
         get_task_cwd: fn(u32, &mut [u8]) -> usize,
         get_task_environ: fn(u32, &mut [u8]) -> usize,
+        get_task_maps: fn(u32, &mut [u8]) -> usize,
     ) -> Self {
-        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_comm, get_task_info, get_idle_ticks, get_task_cwd, get_task_environ, num_cpus: 1 }
+        Self { get_ticks, get_total_frames, get_free_frames, get_active_pids, get_current_pid, get_task_cmdline, get_task_comm, get_task_info, get_idle_ticks, get_task_cwd, get_task_environ, get_task_maps, num_cpus: 1 }
     }
 
     /// Check if a PID exists by querying the kernel task table.
@@ -589,52 +591,12 @@ impl ProcFs {
         pos
     }
 
-    /// Generate /proc/[pid]/maps — synthesized from per-process brk/rss.
-    /// Format: start-end perms offset dev inode pathname
+    /// Generate /proc/[pid]/maps from per-process VMA list (Linux mm_struct.mmap).
     fn gen_pid_maps(&self, pid: u64, buf: &mut [u8]) -> usize {
-        let info = (self.get_task_info)(pid as u32);
-        let brk = if info.brk_addr > 0 { info.brk_addr } else { 0x800000 };
-        // Infer text start: brk is typically just past text+data, so text ~ brk - rss*4096
-        let rss_bytes = (info.rss_pages as usize).max(16) * 4096;
-        let text_start = if brk > rss_bytes { brk - rss_bytes } else { 0x400000 };
-        let text_start_page = text_start & !0xFFF;
-        // Split: ~75% text (r-x), ~25% data (rw-)
-        let text_pages = (info.rss_pages as usize * 3 / 4).max(1);
-        let text_end = text_start_page + text_pages * 4096;
-        let data_end = (brk + 0xFFF) & !0xFFF;
-        let heap_end = data_end + 0x100000; // assume ~1MB heap
-
-        let mut pos = 0;
-        // Text
-        pos += fmt_hex(&mut buf[pos..], text_start_page);
-        buf[pos] = b'-'; pos += 1;
-        pos += fmt_hex(&mut buf[pos..], text_end);
-        pos += copy_str(&mut buf[pos..], b" r-xp 00000000 fe:00 1 ");
-        // Get exe name from cmdline
-        let mut cmd = [0u8; 128];
-        let clen = (self.get_task_cmdline)(pid as u32, &mut cmd);
-        let end = cmd[..clen].iter().position(|&b| b == 0).unwrap_or(clen);
-        let name = &cmd[..end];
-        let nlen = name.len().min(buf.len() - pos - 1);
-        buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
-        pos += nlen;
-        buf[pos] = b'\n'; pos += 1;
-        // Data/BSS
-        pos += fmt_hex(&mut buf[pos..], text_end);
-        buf[pos] = b'-'; pos += 1;
-        pos += fmt_hex(&mut buf[pos..], data_end);
-        pos += copy_str(&mut buf[pos..], b" rw-p 00000000 fe:00 1 ");
-        buf[pos..pos+nlen].copy_from_slice(&name[..nlen]);
-        pos += nlen;
-        buf[pos] = b'\n'; pos += 1;
-        // Heap
-        pos += fmt_hex(&mut buf[pos..], data_end);
-        buf[pos] = b'-'; pos += 1;
-        pos += fmt_hex(&mut buf[pos..], heap_end);
-        pos += copy_str(&mut buf[pos..], b" rw-p 00000000 00:00 0 [heap]\n");
-        // Stack
-        pos += copy_str(&mut buf[pos..], b"7ffe0000-80000000 rw-p 00000000 00:00 0 [stack]\n");
-        pos
+        let pos = (self.get_task_maps)(pid as u32, buf);
+        if pos > 0 { return pos; }
+        // Fallback for processes without VMA tracking
+        copy_str(buf, b"7ffe0000-80000000 rw-p 00000000 00:00 0          [stack]\n")
     }
 }
 

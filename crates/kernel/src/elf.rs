@@ -244,6 +244,9 @@ pub unsafe fn load_elf_from_inode(
         slot.comm[nlen] = 0;
         slot.comm_len = nlen as u8;
     }
+    // Populate VMA list for ELF segments + stack
+    unsafe { populate_exec_vmas(&elf_info, pie_base, stack_top); }
+
     // Check for pending reschedule before entering userspace.
     // After exec, other pipeline processes may be waiting to run.
     // Without this, the post_syscall check is skipped (exec doesn't return).
@@ -349,5 +352,34 @@ unsafe fn load_dynamic_interp(
 
     // 6. Return interpreter's entry point (offset by base)
     (interp_base + interp_elf.entry) as usize
+}
+
+#[inline(never)]
+unsafe fn populate_exec_vmas(elf_info: &rux_elf::ElfInfo, pie_base: u64, stack_top: u64) {
+    use rux_mm::vma::{Vma, VmaKind, VmaOps};
+    let idx = crate::task_table::current_task_idx();
+    let vmas = &mut (*(&raw mut crate::task_table::VMA_LISTS))[idx];
+    vmas.count = 0;
+    for i in 0..elf_info.num_segments {
+        let seg = &elf_info.segments[i];
+        if seg.memsz == 0 { continue; }
+        let mut flags = rux_mm::MappingFlags::USER;
+        if seg.flags & 4 != 0 { flags = flags.or(rux_mm::MappingFlags::READ); }
+        if seg.flags & 2 != 0 { flags = flags.or(rux_mm::MappingFlags::WRITE); }
+        if seg.flags & 1 != 0 { flags = flags.or(rux_mm::MappingFlags::EXECUTE); }
+        let base = (seg.vaddr as u64 + pie_base) as usize;
+        let _ = vmas.insert(Vma {
+            start: rux_klib::VirtAddr::new(base & !0xFFF),
+            end: rux_klib::VirtAddr::new(((base + seg.memsz as usize) + 0xFFF) & !0xFFF),
+            flags, kind: VmaKind::FileBacked, _pad: [0; 3], inode: 0, offset: seg.file_offset,
+        });
+    }
+    let sb = (stack_top as usize).saturating_sub(32 * 4096);
+    let _ = vmas.insert(Vma {
+        start: rux_klib::VirtAddr::new(sb),
+        end: rux_klib::VirtAddr::new(stack_top as usize),
+        flags: rux_mm::MappingFlags::READ.or(rux_mm::MappingFlags::WRITE).or(rux_mm::MappingFlags::USER),
+        kind: VmaKind::Stack, _pad: [0; 3], inode: 0, offset: 0,
+    });
 }
 

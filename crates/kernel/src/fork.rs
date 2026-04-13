@@ -98,6 +98,13 @@ unsafe fn init_child_slot(
     // Copy parent's FPU/SIMD state
     child.fpu_state = parent.fpu_state;
 
+    // Copy parent's VMA list (Linux dup_mmap)
+    core::ptr::copy_nonoverlapping(
+        vma_list(parent_idx) as *const _ as *const u8,
+        vma_list(child_idx) as *mut _ as *mut u8,
+        core::mem::size_of::<rux_mm::vma::VmaList>(),
+    );
+
     // Set up child kernel stack
     child.kstack_top = KSTACKS.0[child_idx].as_ptr() as usize + KSTACK_SIZE;
     {

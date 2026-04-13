@@ -866,6 +866,18 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
             }
         }
 
+        // Track in VMA list
+        unsafe {
+            use rux_mm::vma::{Vma, VmaKind, VmaOps};
+            let kind = if mmap_flags & MAP_SHARED != 0 { VmaKind::Shared }
+                else if mmap_flags & MAP_ANONYMOUS != 0 { VmaKind::Anonymous }
+                else { VmaKind::FileBacked };
+            let _ = crate::task_table::vma_list(crate::task_table::current_task_idx()).insert(Vma {
+                start: rux_klib::VirtAddr::new(result),
+                end: rux_klib::VirtAddr::new(result + aligned_len),
+                flags: pg_flags, kind, _pad: [0; 3], inode: 0, offset: offset as u64,
+            });
+        }
         result as isize
     }
 }
@@ -896,6 +908,19 @@ pub fn munmap(addr: usize, len: usize) -> isize {
                 }
             }
             va += 4096;
+        }
+    }
+    // Remove VMAs for unmapped range
+    unsafe {
+        use rux_mm::vma::VmaOps;
+        let vmas = crate::task_table::vma_list(crate::task_table::current_task_idx());
+        let al = (len + 0xFFF) & !0xFFF;
+        let _ = vmas.split(rux_klib::VirtAddr::new(addr));
+        let _ = vmas.split(rux_klib::VirtAddr::new(addr + al));
+        let mut va = addr;
+        while va < addr + al {
+            if let Ok(r) = vmas.remove(rux_klib::VirtAddr::new(va)) { va = r.end.as_usize(); }
+            else { va += 4096; }
         }
     }
     0
@@ -1251,6 +1276,10 @@ pub fn mprotect(addr: usize, len: usize, prot: usize) -> isize {
             }
             va += 4096;
         }
+        // Update VMA protection flags
+        use rux_mm::vma::VmaOps;
+        let vmas = crate::task_table::vma_list(crate::task_table::current_task_idx());
+        let _ = vmas.protect(rux_klib::VirtAddr::new(addr), rux_klib::VirtAddr::new(addr + aligned_len), flags);
     }
     0
 }

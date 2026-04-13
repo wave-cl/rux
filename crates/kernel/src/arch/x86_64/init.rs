@@ -294,7 +294,11 @@ pub fn x86_64_init(multiboot_info: usize) {
     let alloc_size_bytes = core::mem::size_of::<rux_mm::frame::BuddyAllocator>();
     let alloc_addr = initrd_end.max(kernel_end).max(0x600000);
     let ramfs_addr = (alloc_addr + alloc_size_bytes + 0xFFF) & !0xFFF;
-    let ramfs_end = (ramfs_addr + core::mem::size_of::<rux_fs::ramfs::RamFs>() + 0xFFF) & !0xFFF;
+    // boot.rs places Vfs after RamFs with page alignment:
+    //   vfs_addr = (ramfs_addr + sizeof(RamFs) + 0xFFF) & !0xFFF
+    // Frame pool must start after the Vfs to avoid overlap.
+    let vfs_start = (ramfs_addr + core::mem::size_of::<rux_fs::ramfs::RamFs>() + 0xFFF) & !0xFFF;
+    let ramfs_end = (vfs_start + core::mem::size_of::<rux_fs::vfs::Vfs>() + 0xFFF) & !0xFFF;
 
     // Log computed layout
     {

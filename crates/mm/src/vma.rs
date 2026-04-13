@@ -2,7 +2,7 @@ use rux_klib::VirtAddr;
 use crate::{MappingFlags, MemoryError};
 
 /// Maximum VMAs per address space.
-pub const MAX_VMAS: usize = 128;
+pub const MAX_VMAS: usize = 16;
 
 /// Kind of virtual memory area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
