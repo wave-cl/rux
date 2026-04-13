@@ -408,8 +408,9 @@ impl SignalHot {
 pub struct SignalCold {
     /// Saved mask for sigsuspend/pselect restore.
     pub saved_mask: SignalSet,
-    /// Per-signal handler configuration (indices 0-31; index 0 unused).
-    pub actions: [SignalAction; 32],
+    /// Per-signal handler configuration (indices 0-64; index 0 unused).
+    /// Signals 1-31: standard. Signals 32-64: RT.
+    pub actions: [SignalAction; 65],
     /// Queued real-time signals.
     pub rt_queue: SigQueue,
     /// Alternate signal stack base address (sigaltstack).
@@ -428,7 +429,7 @@ impl SignalCold {
     pub const fn new() -> Self {
         Self {
             saved_mask: SignalSet::EMPTY,
-            actions: [SignalAction::DEFAULT; 32],
+            actions: [SignalAction::DEFAULT; 65],
             rt_queue: SigQueue::new(),
             alt_stack_base: 0,
             alt_stack_size: 0,
@@ -481,11 +482,8 @@ impl SignalCold {
         // RT signal (32-64) — dequeue from ring buffer
         if let Some(info) = self.rt_queue.dequeue() {
             hot.pending = hot.pending.remove(signo);
-            // RT signals use default action (Terminate)
-            let action = SignalAction::DEFAULT;
-            // Synthesize a Signal — RT signals don't have named variants,
-            // but we return the closest match or the caller handles by signo.
-            // For now, return Hup as placeholder; caller uses info.signo.
+            let action = self.actions[signo as usize];
+            // Use Hup as placeholder Signal enum; callers use info.signo for real number
             return Some((Signal::Hup, action, info));
         }
 
@@ -527,7 +525,7 @@ impl SignalCold {
 pub unsafe fn deliver_signal<S: rux_arch::SignalOps>(
     hot: &mut SignalHot,
     cold: &mut SignalCold,
-    restorer: &[usize; 32],
+    restorer: &[usize; 65],
     syscall_result: i64,
     exit_fn: fn(i32) -> !,
 ) -> i64 {
@@ -538,20 +536,25 @@ pub unsafe fn deliver_signal<S: rux_arch::SignalOps>(
 pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
     hot: &mut SignalHot,
     cold: &mut SignalCold,
-    restorer: &[usize; 32],
+    restorer: &[usize; 65],
     syscall_result: i64,
     exit_fn: fn(i32) -> !,
     stop_fn: impl FnOnce(u8),
 ) -> i64 {
-    let (sig, action, _info) = match cold.dequeue_signal(hot) {
+    let (sig, action, info) = match cold.dequeue_signal(hot) {
         Some(v) => v,
         None => return syscall_result,
     };
-    let signum = sig as u8;
+    let signum = info.signo; // Use actual signal number from SigInfo
 
-    // Default action
+    // Default action (RT signals 32-64 default to Terminate per POSIX)
     if action.handler_type == SignalHandler::Default {
-        match sig.default_action() {
+        let default_act = if signum >= 32 {
+            SignalDefault::Terminate
+        } else {
+            sig.default_action()
+        };
+        match default_act {
             SignalDefault::Terminate | SignalDefault::CoreDump => {
                 exit_fn(128 + signum as i32);
             }

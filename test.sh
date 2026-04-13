@@ -136,6 +136,7 @@ touch /tmp/ts && stat /tmp/ts | grep Modify
 echo abc | cat
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
+python3 -c "import signal,os; signal.signal(34, lambda s,f: print('rt_sig_ok')); os.kill(os.getpid(), 34)" 2>&1
 timeout 1 sleep 10 ; echo timeout_exit=$?
 tail -c 8 /etc/passwd
 find /etc -name passwd 2>/dev/null
@@ -430,6 +431,7 @@ check "dev/urandom"            "8"
 check "touch timestamp"        "Modify:"
 check "pipe cat"               "abc"
 check "signal trap"            "trapped_sig"
+check "rt signal"              "rt_sig_ok"
 check "timeout (alarm)"        "timeout_exit="
 check "tail (lseek)"           "/bin/sh"
 check "find /etc"              "passwd"
@@ -634,6 +636,7 @@ echo hello | tr a-z A-Z
 echo testdata | tee /tmp/tee_out > /dev/null && cat /tmp/tee_out
 ps aux | head -5
 trap "echo trapped_sig" TERM ; kill -15 $$ ; echo after_trap
+python3 -c "import signal,os; signal.signal(34, lambda s,f: print('rt_sig_ok')); os.kill(os.getpid(), 34)" 2>&1
 timeout 1 sleep 10 ; echo timeout_exit=$?
 cat /proc/$$/stat | cut -d" " -f5
 cp /etc/passwd /tmp/cp_test && wc -l /tmp/cp_test
@@ -900,6 +903,7 @@ check "dev/urandom"            "8"
 check "touch timestamp"        "Modify:"
 check "pipe cat"               "abc"
 check "signal trap"            "trapped_sig"
+check "rt signal"              "rt_sig_ok"
 check "timeout (alarm)"        "timeout_exit="
 check "tail (lseek)"           "/bin/sh"
 check "find /etc"              "passwd"

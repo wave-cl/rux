@@ -9,23 +9,8 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
     use rux_arch::SigactionLayout;
     if signum < 1 || signum > 64 { return crate::errno::EINVAL; }
 
-    // RT signals (32-64): accept but don't store handlers (no RT signal delivery yet).
-    // Return SIG_DFL for oldact queries. This satisfies programs (like CPython) that
-    // iterate all signals to save/restore dispositions.
-    if signum > 31 {
-        if oldact_ptr != 0 {
-            if crate::uaccess::validate_user_ptr(oldact_ptr, 32).is_err() { return crate::errno::EFAULT; }
-            unsafe { Arch::write_sigaction(oldact_ptr, 0, 0, 0, 0); } // SIG_DFL
-        }
-        return 0;
-    }
-
-    let sig = match Signal::from_raw(signum as u8) {
-        Some(s) => s,
-        None => return crate::errno::EINVAL,
-    };
-    if sig == Signal::Kill || sig == Signal::Stop { return crate::errno::EINVAL; }
-    // Validate user pointers for sigaction struct (32 bytes on x86_64, 24 on aarch64)
+    // SIGKILL (9) and SIGSTOP (19) cannot be caught
+    if signum == 9 || signum == 19 { return crate::errno::EINVAL; }
     if act_ptr != 0 && crate::uaccess::validate_user_ptr(act_ptr, 32).is_err() { return crate::errno::EFAULT; }
     if oldact_ptr != 0 && crate::uaccess::validate_user_ptr(oldact_ptr, 32).is_err() { return crate::errno::EFAULT; }
 
@@ -33,9 +18,9 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
         let idx = crate::task_table::current_task_idx();
         let cold = crate::task_table::signal_cold_for(idx);
 
-        // Write old action to user oldact
+        // Write old action to user oldact (works for all signals 1-64)
         if oldact_ptr != 0 {
-            let old = cold.get_action(sig);
+            let old = &cold.actions[signum];
             let handler: usize = match old.handler_type {
                 SignalHandler::Default => 0,
                 SignalHandler::Ignore => 1,
@@ -47,10 +32,9 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
             );
         }
 
-        // Read new action from user act
+        // Read new action from user act (works for all signals 1-64)
         if act_ptr != 0 {
             let (handler_addr, flags, mask_raw, restorer) = Arch::read_sigaction(act_ptr);
-
             let handler_type = match handler_addr {
                 0 => SignalHandler::Default,
                 1 => SignalHandler::Ignore,
@@ -64,9 +48,8 @@ pub fn sigaction(signum: usize, act_ptr: usize, oldact_ptr: usize) -> isize {
                 flags,
                 _pad1: [0; 4],
             };
-            let _ = cold.set_action(sig, action);
-            // Sync to process global (delivery reads from there)
-            let _ = (*super::process()).signal_cold.set_action(sig, action);
+            cold.actions[signum] = action;
+            (*super::process()).signal_cold.actions[signum] = action;
             if Arch::HAS_RESTORER {
                 super::process().signal_restorer[signum] = restorer;
             }
@@ -136,7 +119,7 @@ unsafe fn check_kill_permission(_target_idx: usize) -> bool {
 pub fn kill(pid: isize, signum: usize) -> isize {
     use rux_proc::signal::*;
 
-    if signum > 31 { return crate::errno::EINVAL; }
+    if signum > 64 { return crate::errno::EINVAL; }
 
     let my_pid = crate::task_table::current_pid() as isize;
 
@@ -158,10 +141,9 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         }
     }
 
-    let sig = match Signal::from_raw(signum as u8) {
-        Some(s) => s,
-        None => return crate::errno::EINVAL,
-    };
+    // RT signals (32-64) and standard signals (1-31) both route through
+    // send_signal_to which handles queueing for RT.
+    let sig = Signal::from_raw(signum as u8); // None for RT signals
 
     // Send to process group: pid==0 (own group) or pid<-1 (group -pid)
     if to_pgrp {
@@ -207,16 +189,21 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         unsafe {
             let hot = &mut (*super::process()).signal_hot;
             let cold = crate::task_table::signal_cold_mut(crate::task_table::current_task_idx());
-            let action = *cold.get_action(sig);
+            let action = cold.actions[signum];
 
             // SIGKILL always terminates
-            if sig == Signal::Kill {
+            if signum == 9 {
                 posix_exit(128 + crate::errno::SIGKILL as i32);
             }
 
-            // If default action is Terminate/CoreDump and handler is Default, exit now
+            // Default action: RT signals (32-64) default to Terminate (POSIX)
             if action.handler_type == SignalHandler::Default {
-                match sig.default_action() {
+                let default_act = if let Some(s) = sig {
+                    s.default_action()
+                } else {
+                    SignalDefault::Terminate // RT signals default to Terminate
+                };
+                match default_act {
                     SignalDefault::Terminate | SignalDefault::CoreDump => {
                         posix_exit(128 + signum as i32);
                     }
@@ -263,7 +250,11 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                 status: 0,
                 _pad2: [0; 4],
             };
-            let _ = cold.send_standard(hot, sig, &info);
+            if signum >= 32 {
+                let _ = cold.send_rt(hot, signum as u8, info);
+            } else if let Some(s) = sig {
+                let _ = cold.send_standard(hot, s, &info);
+            }
         }
         0
     } else {
@@ -281,7 +272,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             }
 
             // SIGKILL: mark target as zombie (no handler check needed)
-            if sig == Signal::Kill {
+            if signum == 9 {
                 // Force-kill the target: mark zombie, wake parent
                 TASK_TABLE[target_idx].state = TaskState::Zombie;
                 TASK_TABLE[target_idx].exit_code = 128 + crate::errno::SIGKILL as i32;
@@ -293,7 +284,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             }
 
             // SIGCONT: resume a stopped process, mark for WCONTINUED
-            if sig == Signal::Cont {
+            if signum == 18 {
                 send_signal_to(target_idx, signum as u8);
                 if TASK_TABLE[target_idx].continued == false {
                     TASK_TABLE[target_idx].continued = true;

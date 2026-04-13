@@ -96,7 +96,7 @@ pub struct TaskSlot {
     pub mmap_base: usize,
     pub fs_ctx: FsContext,
     pub signal_hot: SignalHot,
-    pub signal_restorer: [usize; 32],
+    pub signal_restorer: [usize; 65],
 
     // ── Credentials (per-task, swapped on context switch) ────────────
     pub uid: u32,
@@ -174,7 +174,7 @@ impl TaskSlot {
             mmap_base: 0x10000000,
             fs_ctx: FsContext::new(),
             signal_hot: SignalHot::new(),
-            signal_restorer: [0; 32],
+            signal_restorer: [0; 65],
             uid: 0, euid: 0, suid: 0, gid: 0, egid: 0, sgid: 0,
             sid: 0,
             fds: [EMPTY_FD; MAX_FDS],
@@ -407,8 +407,20 @@ pub fn find_task_by_pid(pid: u32) -> Option<usize> {
 /// kill(), wake_sleepers() SIGALRM, notify_parent_child_exit() SIGCHLD, etc.
 #[inline]
 pub unsafe fn send_signal_to(task_idx: usize, signum: u8) {
-    TASK_TABLE[task_idx].signal_hot.pending =
-        TASK_TABLE[task_idx].signal_hot.pending.add(signum);
+    if signum >= 32 {
+        // RT signal: enqueue into rt_queue for proper queueing semantics
+        let cold = signal_cold_for(task_idx);
+        let info = rux_proc::signal::SigInfo {
+            signo: signum, code: rux_proc::signal::SigCode::Kernel,
+            _pad0: [0; 2], pid: rux_proc::id::Pid(0), uid: rux_proc::id::Uid(0),
+            _pad1: [0; 4], addr: 0, status: 0, _pad2: [0; 4],
+        };
+        let _ = cold.send_rt(&mut TASK_TABLE[task_idx].signal_hot, signum, info);
+    } else {
+        // Standard signal: coalescing (set pending bit only)
+        TASK_TABLE[task_idx].signal_hot.pending =
+            TASK_TABLE[task_idx].signal_hot.pending.add(signum);
+    }
     match TASK_TABLE[task_idx].state {
         TaskState::Sleeping | TaskState::WaitingForPoll
         | TaskState::WaitingForChild | TaskState::Stopped => {

@@ -35,7 +35,7 @@ pub struct ProcessState {
     /// Signal handler table and RT queue (cold path).
     pub signal_cold: rux_proc::signal::SignalCold,
     /// Per-signal sa_restorer address (x86_64 only — musl sets this for sigreturn trampoline).
-    pub signal_restorer: [usize; 32],
+    pub signal_restorer: [usize; 65],
     /// Real user ID.
     pub uid: u32,
     /// Effective user ID (used for permission checks).
@@ -62,7 +62,7 @@ impl ProcessState {
             child_available: false,
             signal_hot: rux_proc::signal::SignalHot::new(),
             signal_cold: rux_proc::signal::SignalCold::new(),
-            signal_restorer: [0; 32],
+            signal_restorer: [0; 65],
             uid: 0, euid: 0, suid: 0, gid: 0, egid: 0, sgid: 0,
             syscall_filter: 0,
         }
@@ -1346,7 +1346,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
             core::mem::size_of::<rux_proc::signal::SignalCold>(),
         );
     }
-    process().signal_restorer = [0; 32];
+    process().signal_restorer = [0; 65];
 
     // Note: ITIMER_REAL is preserved across exec (POSIX).
     // busybox timeout sets alarm() then exec's — the timer must survive.
