@@ -37,6 +37,8 @@ pub fn handle_syscall(frame: *mut u8) {
         let nr = *regs.add(8);   // x8
         // Save original syscall number for ERESTARTSYS restart
         crate::percpu::this_cpu().saved_syscall_nr = nr;
+        // Phase 1 coverage: record that this syscall nr was exercised.
+        crate::syscall::record_syscall(nr);
         let a0 = *regs.add(0);   // x0
         let a1 = *regs.add(1);   // x1
         let a2 = *regs.add(2);   // x2

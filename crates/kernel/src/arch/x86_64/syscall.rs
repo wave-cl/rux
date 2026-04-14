@@ -140,6 +140,9 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Save original syscall number for ERESTARTSYS restart (Linux orig_ax)
     unsafe { crate::percpu::this_cpu().saved_syscall_nr = nr; }
 
+    // Phase 1 coverage: record that this syscall nr was exercised.
+    crate::syscall::record_syscall(nr);
+
     // Process creation syscalls (handled before generic dispatch)
     match nr {
         // 56=clone(flags=rdi, stack=rsi, ptid=rdx, ctid=r10, tls=r8)

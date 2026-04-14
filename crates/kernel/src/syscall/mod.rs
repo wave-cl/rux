@@ -420,6 +420,57 @@ impl Syscall {
 /// Set to 1 for name+result only, 2 for full args. Toggle via `echo 1 > /proc/sys/kernel/strace`.
 pub static mut STRACE_ENABLED: u8 = 0;
 
+/// Per-syscall-number call counter, indexed by the raw Linux syscall
+/// number masked with 511. Incremented by each architecture's dispatch
+/// entry point before translation to the Syscall enum.
+///
+/// This is a coverage signal: which of the 512 possible Linux syscall
+/// numbers have been exercised at least once by tests. Read via the
+/// PR_GET_COVERAGE prctl (magic 0x52755802) which formats non-zero
+/// entries as "nr count\n" lines into a user buffer. The `tools/
+/// coverage_report.py` post-processor maps numbers back to names
+/// per architecture and prints the untested list.
+///
+/// Uses relaxed atomics so the counter is correct on SMP without
+/// being a contention hot-spot.
+pub static SYSCALL_COVERAGE: [core::sync::atomic::AtomicU32; 512] = {
+    // Initialize 512 atomics via const expression
+    const INIT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    [INIT; 512]
+};
+
+/// Record a syscall hit. Called from the architecture-specific dispatch
+/// entry point before any argument validation so we count everything,
+/// including calls that immediately fail with EFAULT or ENOSYS.
+#[inline(always)]
+pub fn record_syscall(nr: u64) {
+    SYSCALL_COVERAGE[(nr as usize) & 511]
+        .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Format a "nr count\n" line into the given buffer. Returns bytes written.
+/// Used by the PR_GET_COVERAGE prctl handler.
+fn format_cov_line(nr: u16, count: u32, out: &mut [u8]) -> usize {
+    let mut pos = 0;
+    // Decimal nr
+    let mut tmp = [0u8; 6];
+    let mut nr_len = 0;
+    let mut n = nr as u32;
+    if n == 0 { tmp[nr_len] = b'0'; nr_len += 1; }
+    while n > 0 { tmp[nr_len] = b'0' + (n % 10) as u8; nr_len += 1; n /= 10; }
+    for i in (0..nr_len).rev() { out[pos] = tmp[i]; pos += 1; }
+    out[pos] = b' '; pos += 1;
+    // Decimal count
+    let mut tmp2 = [0u8; 10];
+    let mut c_len = 0;
+    let mut c = count;
+    if c == 0 { tmp2[c_len] = b'0'; c_len += 1; }
+    while c > 0 { tmp2[c_len] = b'0' + (c % 10) as u8; c_len += 1; c /= 10; }
+    for i in (0..c_len).rev() { out[pos] = tmp2[i]; pos += 1; }
+    out[pos] = b'\n'; pos += 1;
+    pos
+}
+
 #[inline]
 pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
     unsafe {
@@ -693,6 +744,35 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             0x5275_5801 => unsafe {
                 // rux custom: PR_GET_STRACE — return current trace level
                 STRACE_ENABLED as isize
+            }
+            0x5275_5802 => {
+                // rux custom: PR_GET_COVERAGE — dump non-zero syscall counters
+                // into a user buffer as "nr count\n" lines. Returns bytes written
+                // (capped at the caller-provided length in a2). a1 = user buf ptr.
+                let buf = a1;
+                let cap = a2;
+                if buf == 0 || cap == 0 { return 0; }
+                if crate::uaccess::validate_user_ptr(buf, cap).is_err() {
+                    return crate::errno::EFAULT;
+                }
+                let mut written = 0usize;
+                for nr in 0..512 {
+                    let count = SYSCALL_COVERAGE[nr]
+                        .load(core::sync::atomic::Ordering::Relaxed);
+                    if count == 0 { continue; }
+                    // Format: "NR COUNT\n" (decimal, no padding)
+                    // Worst case: "512 4294967295\n" = 15 bytes
+                    let mut line = [0u8; 20];
+                    let n = format_cov_line(nr as u16, count, &mut line);
+                    if written + n > cap { break; }
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            line.as_ptr(), (buf + written) as *mut u8, n,
+                        );
+                    }
+                    written += n;
+                }
+                written as isize
             }
             _ => 0,
         }

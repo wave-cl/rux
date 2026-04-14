@@ -269,6 +269,7 @@ date 2>&1 | head -1
 df / 2>&1 | grep /dev
 du -s /bin 2>&1 | head -1
 uptime 2>&1 | head -1
+python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 exit
 CMDS
 )
@@ -416,6 +417,7 @@ diff /etc/hostname /etc/hostname > /dev/null 2>&1 && echo diff_same || echo diff
 nslookup example.com 10.0.2.3 > /tmp/ns.txt 2>&1 ; grep -c Address /tmp/ns.txt
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
 timeout 5 top -bn1 -d1 2>&1 | head -3
+python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 exit
 CMDS
 )
@@ -765,6 +767,7 @@ date 2>&1 | head -1
 df / 2>&1 | grep /dev
 du -s /bin 2>&1 | head -1
 uptime 2>&1 | head -1
+python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 exit
 CMDS
 )
@@ -906,6 +909,7 @@ echo tar_data > /tmp/tr.txt && tar cf /tmp/t.tar /tmp/tr.txt 2>/dev/null && tar 
 diff /etc/hostname /etc/hostname > /dev/null 2>&1 && echo diff_same || echo diff_differ
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 timeout 5 top -bn1 -d1 2>&1 | head -3
+python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 exit
 CMDS
 )
@@ -1117,6 +1121,32 @@ check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 
 fi  # RUN_AA64
+
+# ── Coverage report ────────────────────────────────────────────────
+# Extract PR_GET_COVERAGE dumps from per-group serial logs and hand
+# them to tools/coverage_report.py which maps syscall numbers back to
+# Linux names and reports the untested set.
+extract_cov() {
+    local serial="$1"
+    [ -f "$serial" ] || return
+    strings "$serial" 2>/dev/null | awk '/===COV===/{on=1;next}/===COV-END===/{on=0}on'
+}
+if $RUN_X86; then
+    { extract_cov /tmp/rux_serial_x86_64_core.log; \
+      extract_cov /tmp/rux_serial_x86_64_ext.log; } > /tmp/rux_coverage_x86_64.log
+    if [ -s /tmp/rux_coverage_x86_64.log ] && command -v python3 >/dev/null 2>&1; then
+        printf "\n\033[1m── coverage ──\033[0m\n"
+        python3 tools/coverage_report.py x86_64 /tmp/rux_coverage_x86_64.log
+    fi
+fi
+if $RUN_AA64; then
+    { extract_cov /tmp/rux_serial_aarch64_core.log; \
+      extract_cov /tmp/rux_serial_aarch64_ext.log; } > /tmp/rux_coverage_aarch64.log
+    if [ -s /tmp/rux_coverage_aarch64.log ] && command -v python3 >/dev/null 2>&1; then
+        [ "$RUN_X86" = true ] || printf "\n\033[1m── coverage ──\033[0m\n"
+        python3 tools/coverage_report.py aarch64 /tmp/rux_coverage_aarch64.log
+    fi
+fi
 
 # ── Summary ─────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
