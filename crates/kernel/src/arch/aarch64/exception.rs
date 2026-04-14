@@ -107,18 +107,20 @@ pub extern "C" fn exception_dispatch(exc_type: u64, esr: u64, far: u64, _frame: 
                             return;
                         }
                     }
-                    // Unresolvable user-space fault → SIGSEGV
-                    // Suppress log for NULL dereferences (common in thread cleanup)
-                    if far >= 0x1000 {
-                        unsafe {
-                            let r = _frame as *const u64;
-                            let elr = *r.add(31);
-                            super::console::write_str("rux: SIGSEGV addr=");
-                            write_hex(far as usize);
-                            super::console::write_str(" pc=");
-                            write_hex(elr as usize);
-                            super::console::write_str("\n");
-                        }
+                    // Unresolvable user-space fault → SIGSEGV.
+                    // Always log — the `far >= 0x1000` suppression that
+                    // used to live here hid the ruby post-exit bug
+                    // (sigaction-leak, fixed in faebc95) for several
+                    // sessions. NULL-deref "noise" during thread cleanup
+                    // is worth seeing; real bugs should not be filtered.
+                    unsafe {
+                        let r = _frame as *const u64;
+                        let elr = *r.add(31);
+                        super::console::write_str("rux: SIGSEGV addr=");
+                        write_hex(far as usize);
+                        super::console::write_str(" pc=");
+                        write_hex(elr as usize);
+                        super::console::write_str("\n");
                     }
                     crate::syscall::linux::exit_group(139);
                 }
