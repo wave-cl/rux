@@ -1,0 +1,28 @@
+PASS: getpid
+PASS: getppid
+PASS: getuid
+PASS: getgid
+PASS: geteuid
+PASS: getegid
+PASS: getcwd
+PASS: open(/etc/hostname)
+PASS: read(/etc/hostname)
+PASS: close
+PASS: open(missing)
+PASS: stat(missing)
+PASS: unlink(missing)
+PASS: chdir(missing)
+PASS: open(O_EXCL exists)
+PASS: mkdir(exists)
+PASS: pipe read after write-end close
+PASS: pipe EOF after drained
+PASS: kill(missing pid)
+PASS: kill(self, 0)
+PASS: timer_create(bad clockid) rejected
+PASS: timer_create(MONOTONIC)
+PASS: timer_delete(once)
+PASS: timer_delete(twice) rejected
+PASS: timer_settime(bad id) rejected
+PASS: ptrace TRACEME
+PASS: ptrace GETREGS(pid 1) fails
+conformance: passed=27 failed=0

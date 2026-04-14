@@ -282,7 +282,7 @@ curl -sk https://example.com 2>&1 | head -1
 python3 /usr/share/rux-tests/socketpair.py 2>&1
 python3 /usr/share/rux-tests/pipestress.py 2>&1
 python3 /usr/share/rux-tests/forkbomb.py 2>&1
-python3 /usr/share/rux-tests/syscall_conf.py 2>&1
+echo "===CONF==="; python3 /usr/share/rux-tests/syscall_conf.py 2>&1; echo "===CONF-END==="
 echo all_tests_done
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
@@ -790,7 +790,7 @@ python3 -c "import time;a=time.monotonic();time.sleep(0.1);d=time.monotonic()-a;
 python3 /usr/share/rux-tests/socketpair.py 2>&1
 python3 /usr/share/rux-tests/pipestress.py 2>&1
 python3 /usr/share/rux-tests/forkbomb.py 2>&1
-python3 /usr/share/rux-tests/syscall_conf.py 2>&1
+echo "===CONF==="; python3 /usr/share/rux-tests/syscall_conf.py 2>&1; echo "===CONF-END==="
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
@@ -1121,6 +1121,36 @@ check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 
 fi  # RUN_AA64
+
+# ── Differential conformance check (Phase 2) ──────────────────────
+# Compare each arch's conformance output against the committed Linux
+# golden at tests/golden/syscall_conf_linux.txt. Catches semantic
+# drift that the conformance script itself doesn't notice — if rux
+# starts returning a different errno than Linux, the script still
+# passes because we'd author it to match rux, but the diff catches it.
+diff_conformance() {
+    local arch="$1"
+    local serial="/tmp/rux_serial_${arch}_ext.log"
+    local golden="tests/golden/syscall_conf_linux.txt"
+    [ -f "$serial" ] || return
+    [ -f "$golden" ] || { fail "golden missing: $golden"; return; }
+    local rux_out="/tmp/rux_conf_${arch}.txt"
+    strings "$serial" 2>/dev/null \
+        | awk '/===CONF===/{on=1;next}/===CONF-END===/{on=0}on' \
+        > "$rux_out"
+    if [ ! -s "$rux_out" ]; then
+        fail "conformance vs linux ($arch): no output captured"
+        return
+    fi
+    if diff -u "$golden" "$rux_out" > /tmp/rux_conf_diff_${arch}.txt 2>&1; then
+        pass "conformance matches linux ($arch)"
+    else
+        fail "conformance diff vs linux ($arch)"
+        head -30 /tmp/rux_conf_diff_${arch}.txt | sed 's/^/    /'
+    fi
+}
+$RUN_X86 && diff_conformance x86_64
+$RUN_AA64 && diff_conformance aarch64
 
 # ── Coverage report ────────────────────────────────────────────────
 # Extract PR_GET_COVERAGE dumps from per-group serial logs and hand
