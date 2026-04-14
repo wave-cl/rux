@@ -97,12 +97,55 @@ $RUN_AA64 && cargo build --target aarch64-unknown-none -p rux-kernel --features 
 cleanup() { rm -f /tmp/rux_alpine_*.img; }
 trap cleanup EXIT
 
+# ── Grouped-boot QEMU runners ──────────────────────────────────────
+# Each call starts a fresh QEMU instance so a cascade failure in one
+# group can't poison later groups. Commands are read from stdin; output
+# goes to stdout. Per-group serial logs live at /tmp/rux_serial_${arch}_${tag}.log
+# and are also aggregated into /tmp/rux_serial_${arch}.log for dump_strace.
+
+run_qemu_x86() {
+    local tag="${1:-all}"
+    local rootfs="/tmp/rux_alpine_x86_64.img"
+    cp rootfs/alpine_x86_64.img "$rootfs"
+    debugfs -w -R "rm /etc/inittab" "$rootfs" 2>/dev/null
+    { sleep 5; \
+        [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
+        cat; \
+    } | "$QEMU_X86" -cpu max -smp 2 \
+        -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
+        -drive file="$rootfs",format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0 \
+        -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+        -chardev stdio,id=char0,logfile="/tmp/rux_serial_x86_64_${tag}.log" \
+        -serial chardev:char0 -display none \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+        -no-reboot -monitor none -m 128M 2>&1
+    # Append group log to the unified per-arch log so dump_strace can find it.
+    cat "/tmp/rux_serial_x86_64_${tag}.log" >> /tmp/rux_serial_x86_64.log 2>/dev/null || true
+}
+
+run_qemu_aa64() {
+    local tag="${1:-all}"
+    local rootfs="/tmp/rux_alpine_aarch64.img"
+    cp rootfs/alpine_aarch64.img "$rootfs"
+    debugfs -w -R "rm /etc/inittab" "$rootfs" 2>/dev/null
+    { sleep 30; \
+        [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
+        cat; \
+    } | "$QEMU_AA64" -machine virt -cpu max -smp 2 \
+        -kernel target/aarch64-unknown-none/debug/rux-kernel \
+        -drive file="$rootfs",format=raw,if=none,id=disk0 -device virtio-blk-device,drive=disk0 \
+        -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
+        -chardev stdio,id=char0,logfile="/tmp/rux_serial_aarch64_${tag}.log" \
+        -serial chardev:char0 -display none \
+        -semihosting -no-reboot -m 128M 2>&1
+    cat "/tmp/rux_serial_aarch64_${tag}.log" >> /tmp/rux_serial_aarch64.log 2>/dev/null || true
+}
+
 # ── x86_64 (Alpine Linux 3.21) ─────────────────────────────────────
 if $RUN_X86; then
 
-OUTPUT=$( { sleep 5; \
-    [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
-    cat <<'CMDS'
+: > /tmp/rux_serial_x86_64.log  # reset unified log for this arch
+OUTPUT=$(run_qemu_x86 core <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -226,6 +269,10 @@ date 2>&1 | head -1
 df / 2>&1 | grep /dev
 du -s /bin 2>&1 | head -1
 uptime 2>&1 | head -1
+exit
+CMDS
+)
+OUTPUT+=$(run_qemu_x86 ext <<'CMDS'
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -371,16 +418,7 @@ ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM'
 timeout 5 top -bn1 -d1 2>&1 | head -3
 exit
 CMDS
-} | \
-    { ROOTFS_TMP="/tmp/rux_alpine_x86_64.img"; cp rootfs/alpine_x86_64.img "$ROOTFS_TMP"; debugfs -w -R "rm /etc/inittab" "$ROOTFS_TMP" 2>/dev/null; \
-    "$QEMU_X86" -cpu max -smp 2 \
-    -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
-    -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0 \
-    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-    -chardev stdio,id=char0,logfile=/tmp/rux_serial_x86_64.log \
-    -serial chardev:char0 -display none \
-    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-    -no-reboot -monitor none -m 128M 2>&1; } || true )
+)
 
 echo "$OUTPUT" > /tmp/rux_test_x86_64.log
 
@@ -612,9 +650,8 @@ if $RUN_AA64; then
 printf "\n\033[1m── aarch64 ──\033[0m\n"
 CURRENT_ARCH=aarch64
 
-OUTPUT=$( { sleep 30; \
-    [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
-    cat <<'CMDS'
+: > /tmp/rux_serial_aarch64.log  # reset unified log for this arch
+OUTPUT=$(run_qemu_aa64 core <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -728,6 +765,10 @@ date 2>&1 | head -1
 df / 2>&1 | grep /dev
 du -s /bin 2>&1 | head -1
 uptime 2>&1 | head -1
+exit
+CMDS
+)
+OUTPUT+=$(run_qemu_aa64 ext <<'CMDS'
 echo "nameserver 10.0.2.3" > /etc/resolv.conf
 echo "http://dl-cdn.alpinelinux.org/alpine/v3.21/main" > /etc/apk/repositories
 wget -q -O - http://example.com 2>&1 | head -1
@@ -867,15 +908,7 @@ ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 timeout 5 top -bn1 -d1 2>&1 | head -3
 exit
 CMDS
-} | \
-    { ROOTFS_TMP="/tmp/rux_alpine_aarch64.img"; cp rootfs/alpine_aarch64.img "$ROOTFS_TMP"; debugfs -w -R "rm /etc/inittab" "$ROOTFS_TMP" 2>/dev/null; \
-    "$QEMU_AA64" -machine virt -cpu max -smp 2 \
-    -kernel target/aarch64-unknown-none/debug/rux-kernel \
-    -drive file="$ROOTFS_TMP",format=raw,if=none,id=disk0 -device virtio-blk-device,drive=disk0 \
-    -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
-    -chardev stdio,id=char0,logfile=/tmp/rux_serial_aarch64.log \
-    -serial chardev:char0 -display none \
-    -semihosting -no-reboot -m 128M 2>&1; } || true )
+)
 
 echo "$OUTPUT" > /tmp/rux_test_aarch64.log
 
