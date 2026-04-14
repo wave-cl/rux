@@ -335,6 +335,28 @@ for p in pids:
     except ChildProcessError:pass
 print('forkbomb_ok')
 PYTEST
+    cat > "$STAGING/usr/share/rux-tests/ptimer.py" << 'PYTEST'
+import ctypes,struct,os
+L=ctypes.CDLL(None,use_errno=True)
+S=L.syscall
+S.restype=ctypes.c_long
+a=os.uname().machine
+if a=='aarch64':C,T,G,D=107,110,108,111
+else:C,T,G,D=222,223,224,226
+ti=ctypes.c_int(-1)
+r=S(C,1,0,ctypes.byref(ti))
+if r!=0:print('timer_create_fail');exit()
+b=ctypes.create_string_buffer(struct.pack('qqqq',0,0,0,50000000))
+r=S(T,ti.value,0,b,0)
+if r!=0:print('timer_settime_fail');exit()
+o=ctypes.create_string_buffer(32)
+S(G,ti.value,o)
+v=struct.unpack('qqqq',o.raw)
+rm=v[2]*1000000000+v[3]
+k='ok' if rm>0 else 'zero'
+r=S(D,ti.value)
+print('posix_timer_'+k if r==0 else 'del_fail')
+PYTEST
 
     # Create ext2 image
     rm -f "$OUTPUT"
