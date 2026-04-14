@@ -401,6 +401,25 @@ if r!=0:print('waitid_fail');exit()
 status=ctypes.c_int.from_buffer(infop,24).value
 print('waitid_'+str(status))
 PYTEST
+    cat > "$STAGING/usr/share/rux-tests/ptrace_test.py" << 'PYTEST'
+import ctypes,os
+L=ctypes.CDLL(None,use_errno=True)
+S=L.syscall
+S.restype=ctypes.c_long
+PT = 117 if os.uname().machine=='aarch64' else 101
+# PTRACE_TRACEME = 0
+r=S(PT,0,0,0,0)
+if r!=0:print('traceme_fail');exit()
+# PTRACE_GETREGS = 12 — buffer is 4th arg (data), self pid
+me=os.getpid()
+buf=ctypes.create_string_buffer(272)
+r=S(PT,12,me,0,ctypes.addressof(buf))
+if r!=0:print('getregs_fail');exit()
+# Cross-process: pid 1 (init) — should fail with EPERM
+r2=S(PT,12,1,0,ctypes.addressof(buf))
+if r2==0:print('cross_should_fail');exit()
+print('ptrace_ok')
+PYTEST
     cat > "$STAGING/usr/share/rux-tests/pidfd_test.py" << 'PYTEST'
 import ctypes,os,signal,time
 L=ctypes.CDLL(None,use_errno=True)
