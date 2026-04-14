@@ -457,24 +457,30 @@ impl SignalCold {
     }
 
     /// Dequeue the next deliverable signal, returning its action and info.
-    pub fn dequeue_signal(&mut self, hot: &mut SignalHot) -> Option<(Signal, SignalAction, SigInfo)> {
+    /// For standard signals, `std_info` provides cached siginfo (if available).
+    pub fn dequeue_signal_with(&mut self, hot: &mut SignalHot, std_info: Option<&[SigInfo; 32]>) -> Option<(Signal, SignalAction, SigInfo)> {
         let signo = hot.next_deliverable()?;
 
         // Standard signal (1-31)
         if signo <= 31 {
             let sig = Signal::from_raw(signo)?;
             let action = self.actions[signo as usize];
-            let info = SigInfo {
-                signo,
-                code: SigCode::Kernel,
-                _pad0: [0; 2],
-                pid: Pid(0),
-                uid: Uid(0),
-                _pad1: [0; 4],
-                addr: 0,
-                status: 0,
-                _pad2: [0; 4],
+            let mut info = match std_info {
+                Some(cache) if cache[signo as usize].signo != 0 => cache[signo as usize],
+                _ => SigInfo {
+                    signo,
+                    code: SigCode::Kernel,
+                    _pad0: [0; 2],
+                    pid: Pid(0),
+                    uid: Uid(0),
+                    _pad1: [0; 4],
+                    addr: 0,
+                    status: 0,
+                    _pad2: [0; 4],
+                },
             };
+            // Always ensure signo matches the dequeued signal
+            info.signo = signo;
             hot.pending = hot.pending.remove(signo);
             return Some((sig, action, info));
         }
@@ -490,6 +496,11 @@ impl SignalCold {
         // Pending bit set but nothing in queue — clear stale bit
         hot.pending = hot.pending.remove(signo);
         None
+    }
+
+    /// Dequeue without external siginfo (backwards-compatible).
+    pub fn dequeue_signal(&mut self, hot: &mut SignalHot) -> Option<(Signal, SignalAction, SigInfo)> {
+        self.dequeue_signal_with(hot, None)
     }
 
     /// Set the handler for a signal (sigaction). Returns the old action.
@@ -541,7 +552,20 @@ pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
     exit_fn: fn(i32) -> !,
     stop_fn: impl FnOnce(u8),
 ) -> i64 {
-    let (sig, action, info) = match cold.dequeue_signal(hot) {
+    deliver_signal_full::<S>(hot, cold, restorer, syscall_result, exit_fn, stop_fn, None)
+}
+
+/// Full signal delivery with optional external siginfo for standard signals.
+pub unsafe fn deliver_signal_full<S: rux_arch::SignalOps>(
+    hot: &mut SignalHot,
+    cold: &mut SignalCold,
+    restorer: &[usize; 65],
+    syscall_result: i64,
+    exit_fn: fn(i32) -> !,
+    stop_fn: impl FnOnce(u8),
+    std_info: Option<&[SigInfo; 32]>,
+) -> i64 {
+    let (sig, action, info) = match cold.dequeue_signal_with(hot, std_info) {
         Some(v) => v,
         None => return syscall_result,
     };

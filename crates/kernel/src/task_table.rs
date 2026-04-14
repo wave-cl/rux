@@ -415,6 +415,22 @@ pub unsafe fn send_signal_to(task_idx: usize, signum: u8) {
     send_signal_to_with_info(task_idx, signum, info);
 }
 
+/// Per-task cached siginfo for pending standard signals (1-31).
+/// Indexed by [task_idx][signum]. Last-writer-wins (matches Linux coalescing).
+/// Accessed at send time (any context) and delivery time (syscall return).
+/// Note: placed inside a wrapper struct to control alignment without
+/// increasing BSS alignment requirements.
+#[repr(C)]
+struct StdSigInfoTable([[rux_proc::signal::SigInfo; 32]; MAX_PROCS]);
+static mut STD_SIGINFO: StdSigInfoTable =
+    StdSigInfoTable([[rux_proc::signal::SigInfo::EMPTY; 32]; MAX_PROCS]);
+
+/// Get the std_info cache for a task (for signal delivery).
+#[inline]
+pub unsafe fn std_siginfo_for(task_idx: usize) -> &'static [rux_proc::signal::SigInfo; 32] {
+    &*core::ptr::addr_of!(STD_SIGINFO.0[task_idx])
+}
+
 /// Send a signal with explicit SigInfo (for SI_TIMER, SI_USER, etc.).
 #[inline]
 pub unsafe fn send_signal_to_with_info(task_idx: usize, signum: u8, info: rux_proc::signal::SigInfo) {
@@ -423,10 +439,10 @@ pub unsafe fn send_signal_to_with_info(task_idx: usize, signum: u8, info: rux_pr
         let cold = signal_cold_for(task_idx);
         let _ = cold.send_rt(&mut TASK_TABLE[task_idx].signal_hot, signum, info);
     } else {
-        // Standard signal: coalescing (set pending bit only)
-        // SigInfo for standard signals is synthesized at delivery time.
+        // Standard signal: set pending bit + cache siginfo
         TASK_TABLE[task_idx].signal_hot.pending =
             TASK_TABLE[task_idx].signal_hot.pending.add(signum);
+        (*core::ptr::addr_of_mut!(STD_SIGINFO.0[task_idx]))[signum as usize] = info;
     }
     match TASK_TABLE[task_idx].state {
         TaskState::Sleeping | TaskState::WaitingForPoll
