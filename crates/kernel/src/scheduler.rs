@@ -62,6 +62,7 @@ pub unsafe fn locked_tick(elapsed_ns: u64) {
             let idx = crate::task_table::current_task_idx();
             if idx < crate::task_table::MAX_PROCS {
                 crate::task_table::TASK_TABLE[idx].cpu_time_ns += elapsed_ns;
+                crate::posix_timer::check_cpu_timers(idx);
             }
         }
         let sched = get();

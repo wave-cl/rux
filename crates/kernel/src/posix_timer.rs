@@ -23,12 +23,16 @@ const TIMER_ABSTIME: usize = 1;
 struct PosixTimer {
     active: bool,
     owner_idx: u16,     // task table index of creating process
-    clock_id: u8,       // CLOCK_REALTIME=0, CLOCK_MONOTONIC=1, etc.
+    clock_id: u8,       // CLOCK_REALTIME=0, CLOCK_MONOTONIC=1, CPUTIME=2/3
     signo: u8,          // signal to deliver (0 = SIGEV_NONE)
     sigev_notify: u8,   // SIGEV_SIGNAL=0, SIGEV_NONE=1, SIGEV_THREAD_ID=4
     target_idx: u16,    // task index for signal delivery (SIGEV_THREAD_ID)
+    // Wall-clock fields (ms, used for clock_id 0/1/4/6/7)
     interval_ms: u64,   // reload interval in ticks (0 = one-shot)
     deadline: u64,       // next expiry in ticks (0 = disarmed)
+    // CPU-time fields (ns, used for clock_id 2/3)
+    interval_ns: u64,    // reload interval in ns (0 = one-shot)
+    cpu_deadline_ns: u64,// next expiry as accumulated CPU ns (0 = disarmed)
     overrun: u32,        // overrun count
 }
 
@@ -36,8 +40,12 @@ impl PosixTimer {
     const EMPTY: Self = Self {
         active: false, owner_idx: 0, clock_id: 0, signo: 0,
         sigev_notify: 0, target_idx: 0,
-        interval_ms: 0, deadline: 0, overrun: 0,
+        interval_ms: 0, deadline: 0,
+        interval_ns: 0, cpu_deadline_ns: 0,
+        overrun: 0,
     };
+    /// True if this timer uses a CPU-time clock (CLOCK_PROCESS/THREAD_CPUTIME_ID).
+    fn is_cpu_clock(&self) -> bool { self.clock_id == 2 || self.clock_id == 3 }
 }
 
 static mut POSIX_TIMERS: [PosixTimer; MAX_POSIX_TIMERS] = [PosixTimer::EMPTY; MAX_POSIX_TIMERS];
@@ -45,7 +53,27 @@ static mut POSIX_TIMERS: [PosixTimer; MAX_POSIX_TIMERS] = [PosixTimer::EMPTY; MA
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn valid_clock(id: usize) -> bool {
-    matches!(id, 0 | 1 | 4 | 6 | 7) // REALTIME, MONOTONIC, MONOTONIC_RAW, BOOTTIME, REALTIME_ALARM (accept broadly)
+    matches!(id, 0 | 1 | 2 | 3 | 4 | 6 | 7) // REALTIME, MONOTONIC, PROC_CPUTIME, THREAD_CPUTIME, MONOTONIC_RAW, BOOTTIME, REALTIME_ALARM
+}
+
+/// Read accumulated CPU time (ns) for a CPU-time timer's reference clock.
+/// CLOCK_PROCESS_CPUTIME_ID (2): sum across all threads in the tgid.
+/// CLOCK_THREAD_CPUTIME_ID  (3): just the target task.
+unsafe fn cpu_time_baseline(timer: &PosixTimer) -> u64 {
+    if timer.clock_id == 3 {
+        // Per-thread: target task's CPU time
+        TASK_TABLE[timer.target_idx as usize].cpu_time_ns
+    } else {
+        // Per-process: sum across thread group
+        let tgid = TASK_TABLE[timer.owner_idx as usize].tgid;
+        let mut ns = 0u64;
+        for i in 0..crate::task_table::MAX_PROCS {
+            if TASK_TABLE[i].active && TASK_TABLE[i].tgid == tgid {
+                ns += TASK_TABLE[i].cpu_time_ns;
+            }
+        }
+        ns
+    }
 }
 
 /// Read itimerspec from user pointer: {interval: {sec,nsec}, value: {sec,nsec}}
@@ -59,12 +87,29 @@ unsafe fn read_itimerspec(ptr: usize) -> (u64, u64) {
     (interval_ms, value_ms)
 }
 
+/// Read itimerspec as nanoseconds (used for CPU-time clocks).
+unsafe fn read_itimerspec_ns(ptr: usize) -> (u64, u64) {
+    let int_sec: u64 = crate::uaccess::get_user(ptr);
+    let int_nsec: u64 = crate::uaccess::get_user(ptr + 8);
+    let val_sec: u64 = crate::uaccess::get_user(ptr + 16);
+    let val_nsec: u64 = crate::uaccess::get_user(ptr + 24);
+    (int_sec * 1_000_000_000 + int_nsec, val_sec * 1_000_000_000 + val_nsec)
+}
+
 /// Write itimerspec to user pointer from (interval_ms, remaining_ms).
 unsafe fn write_itimerspec(ptr: usize, interval_ms: u64, remaining_ms: u64) {
     crate::uaccess::put_user(ptr, interval_ms / 1000);                 // interval.tv_sec
     crate::uaccess::put_user(ptr + 8, (interval_ms % 1000) * 1_000_000); // interval.tv_nsec
     crate::uaccess::put_user(ptr + 16, remaining_ms / 1000);            // value.tv_sec
     crate::uaccess::put_user(ptr + 24, (remaining_ms % 1000) * 1_000_000); // value.tv_nsec
+}
+
+/// Write itimerspec from nanoseconds.
+unsafe fn write_itimerspec_ns(ptr: usize, interval_ns: u64, remaining_ns: u64) {
+    crate::uaccess::put_user(ptr, interval_ns / 1_000_000_000);
+    crate::uaccess::put_user(ptr + 8, interval_ns % 1_000_000_000);
+    crate::uaccess::put_user(ptr + 16, remaining_ns / 1_000_000_000);
+    crate::uaccess::put_user(ptr + 24, remaining_ns % 1_000_000_000);
 }
 
 // ── Syscall handlers ───────────────────────────────────────────────────
@@ -137,6 +182,8 @@ pub fn sys_timer_create(clockid: usize, sevp: usize, timerid_ptr: usize) -> isiz
             target_idx,
             interval_ms: 0,
             deadline: 0,
+            interval_ns: 0,
+            cpu_deadline_ns: 0,
             overrun: 0,
         };
         // Write timer ID to user
@@ -159,7 +206,35 @@ pub fn sys_timer_settime(timerid: usize, flags: usize, new_ptr: usize, old_ptr: 
 
         let now = crate::arch::Arch::ticks();
 
-        // Write old value if requested
+        if t.is_cpu_clock() {
+            // CPU-time timer path
+            if old_ptr != 0 {
+                if crate::uaccess::validate_user_ptr(old_ptr, 32).is_err() {
+                    return crate::errno::EFAULT;
+                }
+                let baseline = cpu_time_baseline(t);
+                let remaining = if t.cpu_deadline_ns > baseline {
+                    t.cpu_deadline_ns - baseline
+                } else { 0 };
+                write_itimerspec_ns(old_ptr, t.interval_ns, remaining);
+            }
+            let (interval_ns, value_ns) = read_itimerspec_ns(new_ptr);
+            t.interval_ns = interval_ns;
+            t.overrun = 0;
+            if value_ns > 0 {
+                let baseline = cpu_time_baseline(t);
+                t.cpu_deadline_ns = if flags & TIMER_ABSTIME != 0 {
+                    value_ns // absolute ns of accumulated CPU time
+                } else {
+                    baseline + value_ns
+                };
+            } else {
+                t.cpu_deadline_ns = 0; // disarm
+            }
+            return 0;
+        }
+
+        // Wall-clock timer path
         if old_ptr != 0 {
             if crate::uaccess::validate_user_ptr(old_ptr, 32).is_err() {
                 return crate::errno::EFAULT;
@@ -177,14 +252,19 @@ pub fn sys_timer_settime(timerid: usize, flags: usize, new_ptr: usize, old_ptr: 
 
         if value_ms > 0 {
             if flags & TIMER_ABSTIME != 0 {
-                // Absolute time: convert to deadline. For simplicity, treat
-                // as ms offset from boot (CLOCK_MONOTONIC) or epoch-based.
-                // Since our ticks() is ms-since-boot, absolute MONOTONIC
-                // deadlines map directly. For REALTIME, this is approximate.
-                t.deadline = value_ms;
-                if t.deadline <= now {
-                    // Already expired — fire immediately on next tick
-                    t.deadline = now + 1;
+                if t.clock_id == 0 {
+                    // CLOCK_REALTIME: value_ms is unix-epoch ms.
+                    // Convert to monotonic deadline by subtracting boot epoch.
+                    let boot_ms = crate::syscall::process::boot_epoch() * 1000;
+                    if value_ms <= boot_ms {
+                        t.deadline = now + 1;
+                    } else {
+                        let monotonic_target = value_ms - boot_ms;
+                        t.deadline = if monotonic_target <= now { now + 1 } else { monotonic_target };
+                    }
+                } else {
+                    // CLOCK_MONOTONIC etc.: value_ms is already ms-since-boot.
+                    t.deadline = if value_ms <= now { now + 1 } else { value_ms };
                 }
             } else {
                 t.deadline = now + value_ms;
@@ -208,11 +288,19 @@ pub fn sys_timer_gettime(timerid: usize, value_ptr: usize) -> isize {
         if !t.active || t.owner_idx != current_task_idx() as u16 {
             return crate::errno::EINVAL;
         }
-        let now = crate::arch::Arch::ticks();
-        let remaining = if t.deadline > 0 && t.deadline > now {
-            t.deadline - now
-        } else { 0 };
-        write_itimerspec(value_ptr, t.interval_ms, remaining);
+        if t.is_cpu_clock() {
+            let baseline = cpu_time_baseline(t);
+            let remaining = if t.cpu_deadline_ns > baseline {
+                t.cpu_deadline_ns - baseline
+            } else { 0 };
+            write_itimerspec_ns(value_ptr, t.interval_ns, remaining);
+        } else {
+            let now = crate::arch::Arch::ticks();
+            let remaining = if t.deadline > 0 && t.deadline > now {
+                t.deadline - now
+            } else { 0 };
+            write_itimerspec(value_ptr, t.interval_ms, remaining);
+        }
     }
     0
 }
@@ -227,6 +315,7 @@ pub fn sys_timer_delete(timerid: usize) -> isize {
         }
         t.active = false;
         t.deadline = 0;
+        t.cpu_deadline_ns = 0;
         // Lazy removal: stale deadline queue entries are skipped in wake_sleepers
     }
     0
@@ -296,6 +385,63 @@ pub unsafe fn cleanup_posix_timers(task_idx: usize) {
         if POSIX_TIMERS[i].active && POSIX_TIMERS[i].owner_idx == task_idx as u16 {
             POSIX_TIMERS[i].active = false;
             POSIX_TIMERS[i].deadline = 0;
+            POSIX_TIMERS[i].cpu_deadline_ns = 0;
+        }
+    }
+}
+
+/// Called from the scheduler tick after CPU time accounting.
+/// Checks all CPU-time POSIX timers owned by tasks in `task_idx`'s
+/// thread group (for CLOCK_PROCESS_CPUTIME_ID) or by `task_idx`
+/// directly (for CLOCK_THREAD_CPUTIME_ID).
+pub unsafe fn check_cpu_timers(task_idx: usize) {
+    if task_idx >= crate::task_table::MAX_PROCS { return; }
+    if !TASK_TABLE[task_idx].active { return; }
+    let my_tgid = TASK_TABLE[task_idx].tgid;
+
+    for i in 0..MAX_POSIX_TIMERS {
+        let t = &mut POSIX_TIMERS[i];
+        if !t.active || t.cpu_deadline_ns == 0 { continue; }
+        if !t.is_cpu_clock() { continue; }
+
+        // Only check timers belonging to this task's process or thread.
+        let belongs = if t.clock_id == 3 {
+            t.target_idx as usize == task_idx
+        } else {
+            // Per-process: any task in the same tgid as the timer's owner
+            TASK_TABLE[t.owner_idx as usize].tgid == my_tgid
+        };
+        if !belongs { continue; }
+
+        let baseline = cpu_time_baseline(t);
+        if baseline < t.cpu_deadline_ns { continue; }
+
+        // Fire signal
+        if t.signo > 0 {
+            let deliver_to = t.target_idx as usize;
+            let info = rux_proc::signal::SigInfo {
+                signo: t.signo,
+                code: rux_proc::signal::SigCode::Timer,
+                _pad0: [0; 2],
+                pid: rux_proc::id::Pid(0),
+                uid: rux_proc::id::Uid(0),
+                _pad1: [0; 4],
+                addr: i,
+                status: t.overrun as i32,
+                _pad2: [0; 4],
+            };
+            crate::task_table::send_signal_to_with_info(deliver_to, t.signo, info);
+        }
+
+        // Re-arm or disarm
+        if t.interval_ns > 0 {
+            let elapsed = baseline - t.cpu_deadline_ns;
+            if elapsed > t.interval_ns {
+                t.overrun += (elapsed / t.interval_ns) as u32;
+            }
+            t.cpu_deadline_ns = baseline + t.interval_ns;
+        } else {
+            t.cpu_deadline_ns = 0;
         }
     }
 }
