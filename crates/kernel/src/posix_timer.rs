@@ -446,3 +446,94 @@ pub unsafe fn check_cpu_timers(task_idx: usize) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_clock_accepts_known_ids() {
+        // REALTIME, MONOTONIC, PROCESS_CPUTIME, THREAD_CPUTIME,
+        // MONOTONIC_RAW, BOOTTIME, REALTIME_ALARM
+        for id in [0, 1, 2, 3, 4, 6, 7] {
+            assert!(valid_clock(id), "clockid {} should be valid", id);
+        }
+    }
+
+    #[test]
+    fn valid_clock_rejects_unknown_ids() {
+        for id in [5, 8, 99, 100, usize::MAX] {
+            assert!(!valid_clock(id), "clockid {} should be invalid", id);
+        }
+    }
+
+    #[test]
+    fn is_cpu_clock_classification() {
+        let mut t = PosixTimer::EMPTY;
+        t.clock_id = 0;  // REALTIME
+        assert!(!t.is_cpu_clock());
+        t.clock_id = 1;  // MONOTONIC
+        assert!(!t.is_cpu_clock());
+        t.clock_id = 2;  // PROCESS_CPUTIME
+        assert!(t.is_cpu_clock());
+        t.clock_id = 3;  // THREAD_CPUTIME
+        assert!(t.is_cpu_clock());
+        t.clock_id = 4;  // MONOTONIC_RAW
+        assert!(!t.is_cpu_clock());
+    }
+
+    #[test]
+    fn empty_timer_is_inactive() {
+        let t = PosixTimer::EMPTY;
+        assert!(!t.active);
+        assert_eq!(t.deadline, 0);
+        assert_eq!(t.cpu_deadline_ns, 0);
+        assert_eq!(t.overrun, 0);
+    }
+
+    #[test]
+    fn cleanup_clears_only_owner() {
+        // Pick slot indices well outside anything the main suite touches.
+        // The tests run serially (--test-threads=1) but we still pick fresh
+        // slots and clean up afterwards to stay hermetic.
+        const SLOT_A: usize = 100;
+        const SLOT_B: usize = 101;
+        const SLOT_C: usize = 102;
+        unsafe {
+            POSIX_TIMERS[SLOT_A] = PosixTimer {
+                active: true, owner_idx: 77, clock_id: 1, signo: 14,
+                sigev_notify: 0, target_idx: 77,
+                interval_ms: 0, deadline: 1000,
+                interval_ns: 0, cpu_deadline_ns: 0, overrun: 0,
+            };
+            POSIX_TIMERS[SLOT_B] = PosixTimer {
+                active: true, owner_idx: 88, clock_id: 1, signo: 14,
+                sigev_notify: 0, target_idx: 88,
+                interval_ms: 0, deadline: 2000,
+                interval_ns: 0, cpu_deadline_ns: 0, overrun: 0,
+            };
+            POSIX_TIMERS[SLOT_C] = PosixTimer {
+                active: true, owner_idx: 77, clock_id: 3, signo: 14,
+                sigev_notify: 0, target_idx: 77,
+                interval_ms: 0, deadline: 0,
+                interval_ns: 1_000_000, cpu_deadline_ns: 5_000_000, overrun: 0,
+            };
+
+            cleanup_posix_timers(77);
+
+            // task 77's slots (A, C) are cleared
+            assert!(!POSIX_TIMERS[SLOT_A].active);
+            assert_eq!(POSIX_TIMERS[SLOT_A].deadline, 0);
+            assert!(!POSIX_TIMERS[SLOT_C].active);
+            assert_eq!(POSIX_TIMERS[SLOT_C].cpu_deadline_ns, 0);
+            // task 88's slot (B) is untouched
+            assert!(POSIX_TIMERS[SLOT_B].active);
+            assert_eq!(POSIX_TIMERS[SLOT_B].deadline, 2000);
+
+            // Cleanup
+            POSIX_TIMERS[SLOT_A] = PosixTimer::EMPTY;
+            POSIX_TIMERS[SLOT_B] = PosixTimer::EMPTY;
+            POSIX_TIMERS[SLOT_C] = PosixTimer::EMPTY;
+        }
+    }
+}

@@ -352,4 +352,60 @@ mod tests {
             syscall::dispatch(Syscall::Close, fd as usize, 0, 0, 0, 0);
         }
     }
+
+    // ── pid hash ──────────────────────────────────────────────────────
+    #[test]
+    fn test_pid_hash_insert_lookup_remove() {
+        setup();
+        use crate::task_table::{
+            find_task_by_pid, pid_hash_insert, pid_hash_remove, TASK_TABLE, MAX_PROCS,
+        };
+        unsafe {
+            // Use a slot well past the usual test range to avoid clashes.
+            const SLOT: usize = MAX_PROCS - 1;
+            const TEST_PID: u32 = 54321;
+
+            // Stash whatever's in the slot so we can restore it.
+            let saved_active = TASK_TABLE[SLOT].active;
+            let saved_pid = TASK_TABLE[SLOT].pid;
+
+            TASK_TABLE[SLOT].active = true;
+            TASK_TABLE[SLOT].pid = TEST_PID;
+            pid_hash_insert(TEST_PID, SLOT);
+
+            // Lookup via the public wrapper — should find our slot.
+            assert_eq!(find_task_by_pid(TEST_PID), Some(SLOT));
+
+            // Unknown pid returns None.
+            assert_eq!(find_task_by_pid(65535), None);
+
+            // Remove and verify.
+            pid_hash_remove(TEST_PID);
+            assert_eq!(find_task_by_pid(TEST_PID), None);
+
+            // Restore.
+            TASK_TABLE[SLOT].active = saved_active;
+            TASK_TABLE[SLOT].pid = saved_pid;
+        }
+    }
+
+    // ── Signal coalescing for standard signals ───────────────────────
+    #[test]
+    fn test_signal_coalescing() {
+        setup();
+        use rux_proc::signal::{SignalHot, SignalSet};
+        let mut hot = SignalHot::new();
+
+        // Send SIGTERM (15) twice — should coalesce to one pending bit.
+        hot.pending = hot.pending.add(15);
+        hot.pending = hot.pending.add(15);
+
+        // Only one signal pending (bit 15 set).
+        assert!(hot.pending.contains(15));
+        assert_eq!(hot.pending, SignalSet::EMPTY.add(15));
+
+        // Removing it clears the pending bit.
+        hot.pending = hot.pending.remove(15);
+        assert!(!hot.pending.contains(15));
+    }
 }

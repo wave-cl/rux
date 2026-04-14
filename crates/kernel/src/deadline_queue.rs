@@ -116,3 +116,105 @@ pub unsafe fn dq_pop() -> Entry {
 pub unsafe fn dq_insert(deadline: u64, task_idx: u16, kind: u8) {
     (*(&raw mut DEADLINE_QUEUE)).insert(deadline, task_idx, kind);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_peek_returns_max() {
+        let q = DeadlineQueue::new();
+        assert_eq!(q.peek_deadline(), u64::MAX);
+    }
+
+    #[test]
+    fn insert_single_then_peek() {
+        let mut q = DeadlineQueue::new();
+        q.insert(100, 5, KIND_WAKE);
+        assert_eq!(q.peek_deadline(), 100);
+    }
+
+    #[test]
+    fn pop_returns_minimum() {
+        let mut q = DeadlineQueue::new();
+        q.insert(300, 0, KIND_WAKE);
+        q.insert(100, 1, KIND_WAKE);
+        q.insert(200, 2, KIND_WAKE);
+        assert_eq!(q.pop().deadline, 100);
+        assert_eq!(q.pop().deadline, 200);
+        assert_eq!(q.pop().deadline, 300);
+    }
+
+    #[test]
+    fn pop_preserves_task_idx_and_kind() {
+        let mut q = DeadlineQueue::new();
+        q.insert(50, 7, KIND_ITIMER);
+        q.insert(10, 3, KIND_POSIX_TIMER);
+        let first = q.pop();
+        assert_eq!(first.deadline, 10);
+        assert_eq!(first.task_idx, 3);
+        assert_eq!(first.kind, KIND_POSIX_TIMER);
+        let second = q.pop();
+        assert_eq!(second.deadline, 50);
+        assert_eq!(second.task_idx, 7);
+        assert_eq!(second.kind, KIND_ITIMER);
+    }
+
+    #[test]
+    fn many_inserts_pop_in_order() {
+        let mut q = DeadlineQueue::new();
+        // Insert 50 deadlines in reverse order
+        for d in (1..=50u64).rev() {
+            q.insert(d * 10, d as u16, KIND_WAKE);
+        }
+        // Pop them — should come out in ascending order
+        for d in 1..=50u64 {
+            let e = q.pop();
+            assert_eq!(e.deadline, d * 10);
+            assert_eq!(e.task_idx, d as u16);
+        }
+        assert_eq!(q.peek_deadline(), u64::MAX);
+    }
+
+    #[test]
+    fn duplicate_deadlines_both_pop() {
+        let mut q = DeadlineQueue::new();
+        q.insert(100, 1, KIND_WAKE);
+        q.insert(100, 2, KIND_WAKE);
+        q.insert(100, 3, KIND_WAKE);
+        assert_eq!(q.pop().deadline, 100);
+        assert_eq!(q.pop().deadline, 100);
+        assert_eq!(q.pop().deadline, 100);
+        assert_eq!(q.peek_deadline(), u64::MAX);
+    }
+
+    #[test]
+    fn capacity_exhaustion_drops_silently() {
+        let mut q = DeadlineQueue::new();
+        for i in 0..MAX_DEADLINES {
+            q.insert(i as u64 + 1, i as u16, KIND_WAKE);
+        }
+        // One more insert past capacity — should silently drop
+        q.insert(99999, 0, KIND_WAKE);
+        // We should still get exactly MAX_DEADLINES entries out
+        let mut popped = 0;
+        while q.peek_deadline() != u64::MAX {
+            q.pop();
+            popped += 1;
+        }
+        assert_eq!(popped, MAX_DEADLINES);
+    }
+
+    #[test]
+    fn interleaved_insert_pop() {
+        let mut q = DeadlineQueue::new();
+        q.insert(50, 1, KIND_WAKE);
+        q.insert(30, 2, KIND_WAKE);
+        assert_eq!(q.pop().deadline, 30);
+        q.insert(10, 3, KIND_WAKE);
+        q.insert(40, 4, KIND_WAKE);
+        assert_eq!(q.pop().deadline, 10);
+        assert_eq!(q.pop().deadline, 40);
+        assert_eq!(q.pop().deadline, 50);
+    }
+}
