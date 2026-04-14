@@ -1,13 +1,46 @@
 # Mutation testing baseline (cargo-mutants).
 #
 # Run via:
-#   tools/mutants.sh <module>
+#   tools/mutants.sh <module>       # single module
+#   tools/mutants.sh                # all modules
 #
 # Score format: <caught> / <viable> mutants caught (<percent>%).
 # "unviable" = the mutation doesn't compile; not a test-quality issue.
+# "timeout"  = the mutation causes an infinite loop; counted as caught.
+# "missed"   = the mutation compiles and passes all tests = real test gap.
 #
-# A dropping score is a regression: it means a test was removed or
-# weakened and some mutation now slips through undetected. Whenever
-# this file is touched, the accompanying commit should explain why.
+# A dropping score is a regression — it means a test was removed or
+# weakened and some mutation now slips through undetected.
+#
+# NOTE: these numbers are from the NATIVE unit test suite only (~34
+# tests in crates/kernel/src/{deadline_queue,posix_timer,tests}.rs).
+# cargo-mutants can't run the QEMU integration suite, so mutations in
+# modules that are only exercised via QEMU show up as "missed" even
+# though the behaviour is covered by real-process testing.
+#
+# Earlier baseline (commit 6714c60) reported 100% on deadline_queue.
+# That was a **false positive**: cargo-mutants v27 was dropping the
+# `--` separator when trailing args were present, sending
+# `--test-threads=1` to `cargo test` instead of the test binary, so
+# every mutation exited 1 and got marked "caught". Fixed by
+# tools/mutants.sh using `-- -- --test-threads=1` (double dash).
 
-deadline_queue: 45/45 caught (100%), 1 unviable  [rux commit b30a33b, cargo-mutants 27.0.0]
+deadline_queue: 38/45 caught (84%), 1 unviable, 1 timeout
+   6 missed: sift_down strict-vs-nonstrict comparison, sift_up parent
+   index `/` vs `%`, pop `>` vs `>=` — tests use inputs that give the
+   same heap outcome either way.
+
+posix_timer: 7/130 caught (5%), 0 unviable, 0 timeouts
+   123 missed: the 5 posix_timer::tests::* unit tests cover only the
+   struct basics (is_cpu_clock, EMPTY, valid_clock, cleanup). The
+   actual handlers (sys_timer_{create,settime,gettime,delete,
+   getoverrun}) are exercised by the QEMU ptimer test in ext group,
+   which cargo-mutants cannot run. Growing the native test coverage
+   of these handlers is the concrete next step.
+
+fs_ops: 47/190 caught (25%), 0 unviable, 0 timeouts
+   143 missed: native tests.rs covers stat/open/read/write/chmod
+   paths but not fchmod/fchown/utimensat/faccessat/readlink fd
+   handling. Many of the newly-added fd-validation branches (commit
+   46465b2) are untested at the unit level and rely on the syscall
+   conformance script in QEMU.

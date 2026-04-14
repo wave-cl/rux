@@ -24,15 +24,23 @@ HOST_TARGET="${HOST_TARGET:-aarch64-apple-darwin}"
 TIMEOUT="${MUTANTS_TIMEOUT:-60}"
 
 # Modules with enough native test coverage to produce meaningful signal.
-# Each entry is: <short_name>:<source_file>:<test_filter>
+# Each entry is: <short_name>:<source_file>
 MODULES="
-deadline_queue:crates/kernel/src/deadline_queue.rs:deadline_queue::
+deadline_queue:crates/kernel/src/deadline_queue.rs
+posix_timer:crates/kernel/src/posix_timer.rs
+fs_ops:crates/kernel/src/syscall/fs_ops.rs
 "
 
 run_one() {
     name="$1"
     file="$2"
-    filter="$3"
+    # Note: "$3" (test filter) was a trap — cargo-mutants v27 drops
+    # the `--` separator when trailing args are passed, which sent
+    # `--test-threads=1` to `cargo test` instead of the test binary
+    # and made `cargo test` exit 1 on arg parse. Every mutation was
+    # then reported as "caught" (100% false positive). Use double
+    # `-- --` to force cargo-mutants to preserve the separator, and
+    # drop the filter (runs the whole 34-test native suite).
     printf '\n\033[1m── cargo-mutants: %s ──\033[0m\n' "$name"
 
     cargo mutants \
@@ -42,11 +50,10 @@ run_one() {
         --timeout "$TIMEOUT" \
         --cargo-arg=--features=native \
         --cargo-arg=--target="$HOST_TARGET" \
-        -- --test-threads=1 "$filter"
+        -- -- --test-threads=1
 }
 
 if [ $# -gt 0 ]; then
-    # Single module mode: look it up in MODULES.
     want="$1"
     found=""
     for line in $MODULES; do
@@ -65,17 +72,9 @@ if [ $# -gt 0 ]; then
         done
         exit 2
     fi
-    name="${found%%:*}"
-    rest="${found#*:}"
-    file="${rest%%:*}"
-    filter="${rest#*:}"
-    run_one "$name" "$file" "$filter"
+    run_one "${found%%:*}" "${found#*:}"
 else
     for line in $MODULES; do
-        name="${line%%:*}"
-        rest="${line#*:}"
-        file="${rest%%:*}"
-        filter="${rest#*:}"
-        run_one "$name" "$file" "$filter"
+        run_one "${line%%:*}" "${line#*:}"
     done
 fi
