@@ -1178,6 +1178,43 @@ if $RUN_AA64; then
     fi
 fi
 
+# ── Fuzzing (Phase 4, opt-in) ─────────────────────────────────────
+# Set FUZZ_SECONDS=N to run each libfuzzer target for N seconds after
+# the QEMU suite completes. Default off — fuzzing takes minutes, not
+# a good fit for the every-run test loop, but invaluable on commits
+# that touch signal/fd/pid code. Each target asserts "no panic".
+run_fuzz_targets() {
+    # Note: `return 0` not bare `return` — bare return would propagate
+    # the failing `-gt 0` test's exit 1 and `set -e` would kill the script.
+    [ "${FUZZ_SECONDS:-0}" -gt 0 ] || return 0
+    command -v cargo-fuzz >/dev/null 2>&1 || {
+        printf "  [fuzz] cargo-fuzz not installed, skipping\n"
+        return 0
+    }
+    printf "\n\033[1m── fuzz (%ss each) ──\033[0m\n" "$FUZZ_SECONDS"
+    # cargo fuzz runs from the crate root
+    local here="$PWD"
+    cd crates/proc || return
+    for target in fdtable signals sigqueue pidbitmap; do
+        local out
+        out=$(cargo fuzz run "$target" -- -max_total_time="$FUZZ_SECONDS" 2>&1)
+        # libfuzzer exits non-zero on crash and prints "SUMMARY:" / "ERROR:"
+        if printf '%s' "$out" | grep -qE 'panicked|^SUMMARY: libFuzzer|^ERROR:|^==[0-9]+==ERROR'; then
+            FAIL=$((FAIL + 1))
+            printf "  \033[31m✗\033[0m fuzz %s\n" "$target"
+            printf '%s\n' "$out" | tail -20 | sed 's/^/      /'
+        else
+            PASS=$((PASS + 1))
+            # Extract "Done N runs in S second(s)" line for signal
+            local runs
+            runs=$(printf '%s' "$out" | awk '/Done .* runs/{print}' | tail -1)
+            printf "  \033[32m✓\033[0m fuzz %s %s\n" "$target" "$runs"
+        fi
+    done
+    cd "$here"
+}
+run_fuzz_targets
+
 # ── Summary ─────────────────────────────────────────────────────────
 printf "\n\033[1m%d passed, %d failed\033[0m\n" "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then
