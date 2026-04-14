@@ -785,9 +785,19 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             }
         }
 
-        // tgkill(tgid, tid, sig) / tkill(tid, sig) — route to kill()
-        Syscall::Tgkill => posix::kill(a1 as isize, a2),
-        Syscall::Tkill => posix::kill(a0 as isize, a1),
+        // tgkill(tgid, tid, sig) / tkill(tid, sig) — route to kill().
+        // Unlike kill, tkill/tgkill target a specific thread and do NOT
+        // have the pid<=0 broadcast semantics. Reject invalid tids with
+        // EINVAL up-front (matches Linux and was caught by the
+        // conformance script's tkill(-1, 0) assertion).
+        Syscall::Tgkill => {
+            if (a1 as isize) <= 0 { return crate::errno::EINVAL; }
+            posix::kill(a1 as isize, a2)
+        }
+        Syscall::Tkill => {
+            if (a0 as isize) <= 0 { return crate::errno::EINVAL; }
+            posix::kill(a0 as isize, a1)
+        }
 
         // Dispatched by arch entry point, never reaches generic dispatch
         Syscall::Vfork | Syscall::Execve | Syscall::Sigreturn => 0,
@@ -825,7 +835,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         }
         Syscall::Dup3 => posix::dup3(a0, a1, a2),
         Syscall::Sysctl => 0, // stub — OpenRC queries kernel params
-        Syscall::Flock => 0, // stub — single-process, locking is a no-op
+        // Flock: single-process, locking is a no-op, but still
+        // validate fd so flock(-1, ...) reports EBADF like Linux.
+        Syscall::Flock => unsafe {
+            match rux_fs::fdtable::get_fd(a0) {
+                Some(_) => 0,
+                None => crate::errno::EBADF,
+            }
+        },
         Syscall::SetItimer => unsafe {
             // setitimer(which, new_value, old_value)
             // Only ITIMER_REAL (which=0) is implemented — sends SIGALRM on wall clock expiry
@@ -919,8 +936,17 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // No-op stubs: safe to accept silently (single-process, no swap, etc.)
         Syscall::GetPriority => 20, // nice=0 → getpriority returns 20 (Linux: 20-nice)
         Syscall::SetPriority | Syscall::SetGroups |
-        Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync | Syscall::Syncfs |
-        Syscall::Fallocate | Syscall::RestartSyscall | Syscall::Membarrier => 0,
+        Syscall::Sync | Syscall::Syncfs |
+        Syscall::RestartSyscall | Syscall::Membarrier => 0,
+        // fd-validating stubs: return EBADF on invalid fd so misuse is
+        // caught, but treat the actual sync/fallocate as a no-op since
+        // rux has neither a page cache nor sparse files.
+        Syscall::Fsync | Syscall::Fdatasync | Syscall::Fallocate => unsafe {
+            match rux_fs::fdtable::get_fd(a0) {
+                Some(_) => 0,
+                None => crate::errno::EBADF,
+            }
+        },
         // Unsupported: return ENOSYS
         Syscall::Getxattr | Syscall::Setxattr | Syscall::Fgetxattr | Syscall::Fsetxattr |
         Syscall::Lgetxattr | Syscall::Lsetxattr | Syscall::Listxattr | Syscall::Flistxattr |

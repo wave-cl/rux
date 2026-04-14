@@ -456,6 +456,13 @@ pub fn utimensat(dirfd: usize, path_ptr: usize, times_ptr: usize, _flags: usize)
     unsafe {
         use rux_fs::FileSystem;
         let now = super::current_time_secs();
+        // Validate dirfd up-front. AT_FDCWD (-100) is the only negative
+        // value that's legal; everything else must be an open fd.
+        // Without this check, utimensat(-1, NULL, ...) would silently
+        // return success instead of EBADF.
+        if (dirfd as isize) != -100 && fdt::get_fd(dirfd).is_none() {
+            return crate::errno::EBADF;
+        }
         if path_ptr == 0 { return 0; }
         let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_at(dirfd, path) {
@@ -545,6 +552,12 @@ pub fn link_at(olddirfd: usize, old_ptr: usize, newdirfd: usize, new_ptr: usize)
 /// faccessat(dirfd, path, amode, flags) — check file accessibility
 pub fn faccessat(dirfd: usize, path_ptr: usize, amode: usize) -> isize {
     unsafe {
+        // Validate dirfd (AT_FDCWD=-100 is the one legal negative).
+        // Without this, faccessat(-1, "x", 0, 0) returned ENOENT from
+        // path lookup instead of EBADF from the dirfd check.
+        if (dirfd as isize) != -100 && fdt::get_fd(dirfd).is_none() {
+            return crate::errno::EBADF;
+        }
         let path = crate::uaccess::read_user_cstr(path_ptr);
         if path.is_empty() { return crate::errno::ENOENT; }
         let ino = match super::resolve_at(dirfd, path) {

@@ -13,3 +13,4 @@ user/ld-musl-*-stripped*
 rootfs/*.img
 mutants.out/
 mutants.out.old/
+tools/__pycache__/

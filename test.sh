@@ -4,6 +4,13 @@
 #   bash test.sh                    # run both arches
 #   TEST_ARCH=x86_64 bash test.sh   # x86_64 only
 #   TEST_ARCH=aarch64 bash test.sh  # aarch64 only
+#
+# Logs per run (always persisted, so later debugging can grep them
+# instead of re-running the suite):
+#   /tmp/rux_check_summary.log   ← pass/fail lines from this script
+#   /tmp/rux_serial_<arch>.log   ← raw QEMU serial (whole suite)
+#   /tmp/rux_serial_<arch>_<g>.log ← raw QEMU serial (per group)
+#   /tmp/rux_test_<arch>.log     ← captured OUTPUT buffer for diffing
 set -e
 
 QEMU_X86="${QEMU_X86:-/opt/local/bin/qemu-system-x86_64}"
@@ -11,8 +18,21 @@ QEMU_AA64="${QEMU_AA64:-/opt/local/bin/qemu-system-aarch64}"
 PASS=0
 FAIL=0
 
-pass() { PASS=$((PASS + 1)); printf "  \033[32m✓\033[0m %s\n" "$1"; }
-fail() { FAIL=$((FAIL + 1)); printf "  \033[31m✗\033[0m %s\n" "$1"; }
+# Persist the pass/fail summary to a log so diagnostics don't require a
+# re-run. The file is rewritten on every invocation; grep it with:
+#   grep -E '✓|✗' /tmp/rux_check_summary.log
+SUMMARY_LOG=/tmp/rux_check_summary.log
+: > "$SUMMARY_LOG"
+pass() {
+    PASS=$((PASS + 1))
+    printf "  \033[32m✓\033[0m %s\n" "$1"
+    printf "✓ %s\n" "$1" >> "$SUMMARY_LOG"
+}
+fail() {
+    FAIL=$((FAIL + 1))
+    printf "  \033[31m✗\033[0m %s\n" "$1"
+    printf "✗ %s\n" "$1" >> "$SUMMARY_LOG"
+}
 
 # When a check fails and STRACE_DUMP=1 is set (default on), print the most
 # recent N strace lines from the captured serial log. The kernel's
@@ -415,9 +435,14 @@ echo gzip_data > /tmp/gz.txt && gzip /tmp/gz.txt && gunzip /tmp/gz.txt.gz && cat
 echo tar_data > /tmp/tr.txt && tar cf /tmp/t.tar /tmp/tr.txt 2>/dev/null && tar tf /tmp/t.tar
 diff /etc/hostname /etc/hostname > /dev/null 2>&1 && echo diff_same || echo diff_differ
 nslookup example.com 10.0.2.3 > /tmp/ns.txt 2>&1 ; grep -c Address /tmp/ns.txt
+# NOTE: coverage dump goes BEFORE ruby/top. Those two have flaky
+# user-space SIGSEGV bugs on both arches (rip jumps into kernel text,
+# killing the shell mid-group) that would otherwise swallow the dump.
+# Keeping ruby/top here to preserve their own coverage signal but the
+# dump has to precede them to be captured reliably.
+python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+); puts RUBY_PLATFORM' 2>&1
 timeout 5 top -bn1 -d1 2>&1 | head -3
-python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 exit
 CMDS
 )
@@ -907,9 +932,10 @@ echo '1 2 3' > /tmp/awk1.txt && awk '{print $2}' < /tmp/awk1.txt
 echo gzip_data > /tmp/gz.txt && gzip /tmp/gz.txt && gunzip /tmp/gz.txt.gz && cat /tmp/gz.txt
 echo tar_data > /tmp/tr.txt && tar cf /tmp/t.tar /tmp/tr.txt 2>/dev/null && tar tf /tmp/t.tar
 diff /etc/hostname /etc/hostname > /dev/null 2>&1 && echo diff_same || echo diff_differ
+# Coverage dump BEFORE ruby/top — same user-SIGSEGV workaround as x86_64.
+python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 ruby -e 'puts "ruby:" + (6*7).to_s; puts (1..10).reduce(:+)' 2>&1
 timeout 5 top -bn1 -d1 2>&1 | head -3
-python3 -c "import ctypes; b=ctypes.create_string_buffer(8192); n=ctypes.CDLL(None).prctl(0x52755802, ctypes.addressof(b), 8192, 0, 0); print('===COV===\n'+b.raw[:n].decode(),end=''); print('===COV-END===')"
 exit
 CMDS
 )

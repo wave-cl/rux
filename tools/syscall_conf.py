@@ -120,5 +120,91 @@ NR_PT = 117 if mach == 'aarch64' else 101
 check('ptrace TRACEME', S(NR_PT, 0, 0, 0, 0) == 0)
 check('ptrace GETREGS(pid 1) fails', S(NR_PT, 12, 1, 0, ctypes.addressof(buf)) != 0)
 
+# ── Batch: untested-syscall errno paths ────────────────────────────────
+# These target syscalls Phase 1 coverage flagged as never touched by
+# the integration tests. Most hit the EBADF branch with -1 fd — the
+# cheapest way to exercise dispatch without needing real resources.
+# Raw syscall numbers (via S) to avoid relying on libc wrapper quirks.
+
+# Per-arch syscall numbers
+if mach == 'aarch64':
+    NR_DUP, NR_DUP3 = 23, 24
+    NR_READV, NR_WRITEV = 65, 66
+    NR_PREAD, NR_PWRITE = 67, 68
+    NR_FSYNC, NR_FDATASYNC = 82, 83
+    NR_FTRUNCATE, NR_TRUNCATE = 46, 45
+    NR_FCHMOD, NR_FCHOWN, NR_FCHDIR = 52, 55, 50
+    NR_UTIMENSAT, NR_FACCESSAT = 88, 48
+    NR_MMAP, NR_MUNMAP = 222, 215
+    NR_MADVISE, NR_MINCORE = 233, 232
+    NR_GETSID, NR_FLOCK, NR_TKILL = 156, 32, 130
+else:  # x86_64
+    NR_DUP, NR_DUP3 = 32, 292
+    NR_READV, NR_WRITEV = 19, 20
+    NR_PREAD, NR_PWRITE = 17, 18
+    NR_FSYNC, NR_FDATASYNC = 74, 75
+    NR_FTRUNCATE, NR_TRUNCATE = 77, 76
+    NR_FCHMOD, NR_FCHOWN, NR_FCHDIR = 91, 93, 81
+    NR_UTIMENSAT, NR_FACCESSAT = 280, 269
+    NR_MMAP, NR_MUNMAP = 9, 11
+    NR_MADVISE, NR_MINCORE = 28, 27
+    NR_GETSID, NR_FLOCK, NR_TKILL = 124, 73, 200
+
+# fd duplication
+expect_errno('dup(-1)',       S(NR_DUP, -1), errno.EBADF)
+expect_ok   ('dup(stdin)',    S(NR_DUP, 0))
+expect_errno('dup3(-1, 5, 0)',S(NR_DUP3, -1, 5, 0), errno.EBADF)
+
+# vector I/O — pass a valid iovec so we're sure the EBADF comes from fd
+iov = (ctypes.c_long * 2)(ctypes.addressof(buf), 8)
+expect_errno('readv(-1)',  S(NR_READV, -1, ctypes.addressof(iov), 1), errno.EBADF)
+expect_errno('writev(-1)', S(NR_WRITEV, -1, ctypes.addressof(iov), 1), errno.EBADF)
+
+# positional I/O
+expect_errno('pread64(-1)',  S(NR_PREAD,  -1, ctypes.addressof(buf), 8, 0), errno.EBADF)
+expect_errno('pwrite64(-1)', S(NR_PWRITE, -1, ctypes.addressof(buf), 8, 0), errno.EBADF)
+
+# file sync / resize
+expect_errno('fsync(-1)',         S(NR_FSYNC, -1),     errno.EBADF)
+expect_errno('fdatasync(-1)',     S(NR_FDATASYNC, -1), errno.EBADF)
+expect_errno('ftruncate(-1)',     S(NR_FTRUNCATE, -1, 0), errno.EBADF)
+expect_errno('truncate(missing)', S(NR_TRUNCATE, b'/no/such/file', 0), errno.ENOENT)
+
+# metadata
+expect_errno('fchmod(-1)', S(NR_FCHMOD, -1, 0o644), errno.EBADF)
+expect_errno('fchown(-1)', S(NR_FCHOWN, -1, 0, 0),  errno.EBADF)
+expect_errno('fchdir(-1)', S(NR_FCHDIR, -1),        errno.EBADF)
+
+# path metadata via dirfd (AT_FDCWD bypass — pass -1 as dirfd)
+expect_errno('utimensat(-1)', S(NR_UTIMENSAT, -1, 0, 0, 0), errno.EBADF)
+expect_errno('faccessat(-1)', S(NR_FACCESSAT, -1, b'x', 0, 0), errno.EBADF)
+
+# memory advice / inspection — need a valid anon page first.
+# Use libc mmap/madvise/mincore rather than raw syscall(): ctypes can't
+# reliably marshal variadic syscall(..) args with default argtypes,
+# which on some hosts turns mmap's flags arg into garbage and trips
+# EFAULT before we ever reach madvise.
+L.mmap.restype = ctypes.c_void_p
+L.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int,
+                   ctypes.c_int, ctypes.c_int, ctypes.c_long]
+L.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+L.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+L.mincore.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p]
+PROT_RW = 3
+MAP_PRIV_ANON = 0x22
+addr = L.mmap(None, 4096, PROT_RW, MAP_PRIV_ANON, -1, 0)
+if addr and addr != (1 << 64) - 1:  # not MAP_FAILED
+    check('madvise(MADV_NORMAL)', L.madvise(addr, 4096, 0) == 0)
+    vec = ctypes.create_string_buffer(1)
+    check('mincore(anon)', L.mincore(addr, 4096, vec) == 0)
+    L.munmap(addr, 4096)
+
+# sessions / file locks / signals
+expect_errno('getsid(missing)', S(NR_GETSID, 999999), errno.ESRCH)
+expect_ok   ('getsid(self)',    S(NR_GETSID, 0))
+expect_errno('flock(-1)',       S(NR_FLOCK, -1, 1),   errno.EBADF)
+# tkill(-1, 0) is EINVAL on Linux (negative tid)
+check('tkill(-1) rejected', S(NR_TKILL, -1, 0) != 0)
+
 # ── Final summary ──────────────────────────────────────────────────────
 print(f'conformance: passed={P} failed={F}')

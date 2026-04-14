@@ -25,4 +25,26 @@ PASS: timer_delete(twice) rejected
 PASS: timer_settime(bad id) rejected
 PASS: ptrace TRACEME
 PASS: ptrace GETREGS(pid 1) fails
-conformance: passed=27 failed=0
+PASS: dup(-1)
+PASS: dup(stdin)
+PASS: dup3(-1, 5, 0)
+PASS: readv(-1)
+PASS: writev(-1)
+PASS: pread64(-1)
+PASS: pwrite64(-1)
+PASS: fsync(-1)
+PASS: fdatasync(-1)
+PASS: ftruncate(-1)
+PASS: truncate(missing)
+PASS: fchmod(-1)
+PASS: fchown(-1)
+PASS: fchdir(-1)
+PASS: utimensat(-1)
+PASS: faccessat(-1)
+PASS: madvise(MADV_NORMAL)
+PASS: mincore(anon)
+PASS: getsid(missing)
+PASS: getsid(self)
+PASS: flock(-1)
+PASS: tkill(-1) rejected
+conformance: passed=49 failed=0

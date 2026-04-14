@@ -306,8 +306,13 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 437] = {
     t[34] = Syscall::Mkdirat;    t[35] = Syscall::Unlinkat;
     t[36] = Syscall::Symlinkat;  t[37] = Syscall::Linkat;
     t[38] = Syscall::Renameat;   t[49] = Syscall::Chdir;
-    // Permissions
-    t[52] = Syscall::Fchmodat;   t[53] = Syscall::Fchmod;
+    // Permissions (Linux generic aarch64 ABI: fchmod=52, fchmodat=53,
+    // fchown=55, fchownat=54). These were previously swapped for
+    // fchmod/fchmodat — userspace calling fchmod(fd, 0o644) landed in
+    // the fchmodat handler, which read 0o644 as a user path pointer
+    // and tripped a kernel data abort on dereference. Caught by the
+    // conformance script's fchmod(-1, 0o644) → EBADF assertion.
+    t[52] = Syscall::Fchmod;     t[53] = Syscall::Fchmodat;
     t[54] = Syscall::Fchownat;   t[55] = Syscall::Fchown;
     t[88] = Syscall::Utimensat;
     // Memory
