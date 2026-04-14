@@ -848,7 +848,8 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Lremovexattr |
         Syscall::Personality => 0, // PER_LINUX = 0 (current personality)
         Syscall::Capget => 0,     // Report success (all capabilities available)
-        Syscall::Capset | Syscall::Seccomp => crate::errno::ENOSYS,
+        Syscall::Capset => 0,     // Accept capability drops silently
+        Syscall::Seccomp => 0,    // Accept seccomp probes silently
 
         // ── Phase 2 wrappers ─────────────────────────────────────
         Syscall::Pwrite64 => posix::pwrite64(a0, a1, a2, a3),
@@ -957,7 +958,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                             signum as u8, info,
                         );
                     } else {
-                        crate::task_table::send_signal_to(idx, signum as u8);
+                        crate::task_table::send_signal_to_with_info(idx, signum as u8, info);
                     }
                     0
                 }
@@ -1044,7 +1045,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::InotifyRmWatch => 0,
 
         // ── Batch 2: misc ─────────────────────────────────────────
-        Syscall::Syslog => crate::errno::ENOSYS,
+        Syscall::Syslog => 0, // stub — dmesg queries return empty
         Syscall::Reboot => {
             // reboot(magic, magic2, cmd, arg)
             // Linux requires magic=0xfee1dead, magic2=one of several values

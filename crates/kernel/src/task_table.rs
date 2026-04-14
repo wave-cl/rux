@@ -407,17 +407,24 @@ pub fn find_task_by_pid(pid: u32) -> Option<usize> {
 /// kill(), wake_sleepers() SIGALRM, notify_parent_child_exit() SIGCHLD, etc.
 #[inline]
 pub unsafe fn send_signal_to(task_idx: usize, signum: u8) {
+    let info = rux_proc::signal::SigInfo {
+        signo: signum, code: rux_proc::signal::SigCode::Kernel,
+        _pad0: [0; 2], pid: rux_proc::id::Pid(0), uid: rux_proc::id::Uid(0),
+        _pad1: [0; 4], addr: 0, status: 0, _pad2: [0; 4],
+    };
+    send_signal_to_with_info(task_idx, signum, info);
+}
+
+/// Send a signal with explicit SigInfo (for SI_TIMER, SI_USER, etc.).
+#[inline]
+pub unsafe fn send_signal_to_with_info(task_idx: usize, signum: u8, info: rux_proc::signal::SigInfo) {
     if signum >= 32 {
-        // RT signal: enqueue into rt_queue for proper queueing semantics
+        // RT signal: enqueue into rt_queue with full SigInfo
         let cold = signal_cold_for(task_idx);
-        let info = rux_proc::signal::SigInfo {
-            signo: signum, code: rux_proc::signal::SigCode::Kernel,
-            _pad0: [0; 2], pid: rux_proc::id::Pid(0), uid: rux_proc::id::Uid(0),
-            _pad1: [0; 4], addr: 0, status: 0, _pad2: [0; 4],
-        };
         let _ = cold.send_rt(&mut TASK_TABLE[task_idx].signal_hot, signum, info);
     } else {
         // Standard signal: coalescing (set pending bit only)
+        // SigInfo for standard signals is synthesized at delivery time.
         TASK_TABLE[task_idx].signal_hot.pending =
             TASK_TABLE[task_idx].signal_hot.pending.add(signum);
     }

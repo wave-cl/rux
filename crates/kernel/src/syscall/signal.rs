@@ -141,8 +141,21 @@ pub fn kill(pid: isize, signum: usize) -> isize {
         }
     }
 
+    // Build SigInfo for kill()-originated signals
+    let kill_info = unsafe {
+        let idx = crate::task_table::current_task_idx();
+        SigInfo {
+            signo: signum as u8,
+            code: SigCode::User,
+            _pad0: [0; 2],
+            pid: rux_proc::id::Pid(crate::task_table::TASK_TABLE[idx].pid),
+            uid: rux_proc::id::Uid(crate::task_table::TASK_TABLE[idx].uid),
+            _pad1: [0; 4], addr: 0, status: 0, _pad2: [0; 4],
+        }
+    };
+
     // RT signals (32-64) and standard signals (1-31) both route through
-    // send_signal_to which handles queueing for RT.
+    // send_signal_to_with_info which handles queueing for RT.
     let sig = Signal::from_raw(signum as u8); // None for RT signals
 
     // Send to process group: pid==0 (own group) or pid<-1 (group -pid)
@@ -161,7 +174,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                     && check_kill_permission(i)
                 {
                     found = true;
-                    send_signal_to(i, signum as u8);
+                    send_signal_to_with_info(i, signum as u8, kill_info);
                 }
             }
             return if found { 0 } else { crate::errno::ESRCH };
@@ -177,7 +190,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
                     && TASK_TABLE[i].state != TaskState::Zombie
                     && check_kill_permission(i)
                 {
-                    send_signal_to(i, signum as u8);
+                    send_signal_to_with_info(i, signum as u8, kill_info);
                 }
             }
         }
@@ -285,7 +298,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
 
             // SIGCONT: resume a stopped process, mark for WCONTINUED
             if signum == 18 {
-                send_signal_to(target_idx, signum as u8);
+                send_signal_to_with_info(target_idx, signum as u8, kill_info);
                 if TASK_TABLE[target_idx].continued == false {
                     TASK_TABLE[target_idx].continued = true;
                     notify_parent_child_exit(TASK_TABLE[target_idx].ppid, 0xFFFF);
@@ -294,7 +307,7 @@ pub fn kill(pid: isize, signum: usize) -> isize {
             }
 
             // For other signals: set pending and wake if blocked.
-            send_signal_to(target_idx, signum as u8);
+            send_signal_to_with_info(target_idx, signum as u8, kill_info);
         }
         0
     }

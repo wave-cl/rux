@@ -14,6 +14,7 @@ const MAX_POSIX_TIMERS: usize = 128;
 /// SIGEV_* notification modes (from <signal.h>).
 const SIGEV_SIGNAL: i32 = 0;
 const SIGEV_NONE: i32 = 1;
+const SIGEV_THREAD_ID: i32 = 4;
 
 /// TIMER_ABSTIME flag for timer_settime.
 const TIMER_ABSTIME: usize = 1;
@@ -21,9 +22,11 @@ const TIMER_ABSTIME: usize = 1;
 #[derive(Clone, Copy)]
 struct PosixTimer {
     active: bool,
-    owner_idx: u16,     // task table index
+    owner_idx: u16,     // task table index of creating process
     clock_id: u8,       // CLOCK_REALTIME=0, CLOCK_MONOTONIC=1, etc.
     signo: u8,          // signal to deliver (0 = SIGEV_NONE)
+    sigev_notify: u8,   // SIGEV_SIGNAL=0, SIGEV_NONE=1, SIGEV_THREAD_ID=4
+    target_idx: u16,    // task index for signal delivery (SIGEV_THREAD_ID)
     interval_ms: u64,   // reload interval in ticks (0 = one-shot)
     deadline: u64,       // next expiry in ticks (0 = disarmed)
     overrun: u32,        // overrun count
@@ -32,6 +35,7 @@ struct PosixTimer {
 impl PosixTimer {
     const EMPTY: Self = Self {
         active: false, owner_idx: 0, clock_id: 0, signo: 0,
+        sigev_notify: 0, target_idx: 0,
         interval_ms: 0, deadline: 0, overrun: 0,
     };
 }
@@ -74,32 +78,51 @@ pub fn sys_timer_create(clockid: usize, sevp: usize, timerid_ptr: usize) -> isiz
 
     // Parse sigevent (if provided)
     let mut signo: u8 = 14; // default: SIGALRM
+    let mut notify_mode: u8 = SIGEV_SIGNAL as u8;
+    let mut target_tid: u32 = 0;
     if sevp != 0 {
         if crate::uaccess::validate_user_ptr(sevp, 64).is_err() {
             return crate::errno::EFAULT;
         }
         unsafe {
-            // struct sigevent layout (Linux x86_64):
+            // struct sigevent layout (Linux x86_64/aarch64):
             //   sigev_value:  offset 0  (8 bytes, union sigval)
             //   sigev_signo:  offset 8  (4 bytes)
             //   sigev_notify: offset 12 (4 bytes)
+            //   sigev_notify_thread_id / sigev_notify_function: offset 16
             let notify: i32 = crate::uaccess::get_user(sevp + 12);
             let sig: i32 = crate::uaccess::get_user(sevp + 8);
             match notify {
-                n if n == SIGEV_SIGNAL => {
+                n if n == SIGEV_SIGNAL || n == SIGEV_THREAD_ID => {
                     if sig < 1 || sig > 64 { return crate::errno::EINVAL; }
                     signo = sig as u8;
+                    notify_mode = n as u8;
+                    if n == SIGEV_THREAD_ID {
+                        target_tid = crate::uaccess::get_user(sevp + 16);
+                    }
                 }
                 n if n == SIGEV_NONE => {
-                    signo = 0; // no signal delivery
+                    signo = 0;
+                    notify_mode = SIGEV_NONE as u8;
                 }
-                _ => return crate::errno::EINVAL, // SIGEV_THREAD etc. not supported
+                _ => return crate::errno::EINVAL,
             }
         }
     }
 
     unsafe {
         let idx = current_task_idx();
+
+        // Resolve target task for SIGEV_THREAD_ID
+        let target_idx = if notify_mode == SIGEV_THREAD_ID as u8 {
+            match crate::task_table::find_task_by_pid(target_tid) {
+                Some(ti) => ti as u16,
+                None => return crate::errno::EINVAL,
+            }
+        } else {
+            idx as u16
+        };
+
         // Allocate a free slot
         let slot = match (0..MAX_POSIX_TIMERS).find(|&i| !POSIX_TIMERS[i].active) {
             Some(i) => i,
@@ -110,6 +133,8 @@ pub fn sys_timer_create(clockid: usize, sevp: usize, timerid_ptr: usize) -> isiz
             owner_idx: idx as u16,
             clock_id: clockid as u8,
             signo,
+            sigev_notify: notify_mode,
+            target_idx,
             interval_ms: 0,
             deadline: 0,
             overrun: 0,
@@ -233,7 +258,19 @@ pub unsafe fn handle_posix_timer_expiry(task_idx: u16, now: u64) {
 
         // Deliver signal (if not SIGEV_NONE)
         if t.signo > 0 {
-            crate::task_table::send_signal_to(task_idx as usize, t.signo);
+            let deliver_to = t.target_idx as usize;
+            let info = rux_proc::signal::SigInfo {
+                signo: t.signo,
+                code: rux_proc::signal::SigCode::Timer,
+                _pad0: [0; 2],
+                pid: rux_proc::id::Pid(0),
+                uid: rux_proc::id::Uid(0),
+                _pad1: [0; 4],
+                addr: i,         // timer ID (slot index)
+                status: t.overrun as i32,
+                _pad2: [0; 4],
+            };
+            crate::task_table::send_signal_to_with_info(deliver_to, t.signo, info);
         }
 
         // Re-arm or disarm

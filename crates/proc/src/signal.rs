@@ -593,12 +593,17 @@ pub unsafe fn deliver_signal_ex<S: rux_arch::SignalOps>(
     S::sig_write_user_sp(new_sp);
 
     if sa_siginfo {
-        // Write siginfo_t above the signal frame
+        // Write Linux siginfo_t (128 bytes) above the signal frame
         let si = new_sp + S::SIGNAL_FRAME_SIZE;
         let si_ptr = si as *mut u8;
-        for i in 0..128 { *si_ptr.add(i) = 0; } // zero the struct
-        *(si as *mut i32) = signum as i32;         // si_signo (offset 0)
-        *((si + 8) as *mut i32) = 0;              // si_code = SI_USER (offset 8)
+        for i in 0..128 { *si_ptr.add(i) = 0; }
+        *(si as *mut i32) = signum as i32;                 // si_signo  (offset 0)
+        *((si + 4) as *mut i32) = 0;                       // si_errno  (offset 4)
+        *((si + 8) as *mut i32) = info.code as i32;        // si_code   (offset 8)
+        *((si + 12) as *mut u32) = info.pid.0;             // si_pid    (offset 12)
+        *((si + 16) as *mut u32) = info.uid.0;             // si_uid    (offset 16)
+        *((si + 24) as *mut usize) = info.addr;            // si_value/si_addr (offset 24)
+        *((si + 28) as *mut i32) = info.status;            // si_int    (offset 28)
         S::sig_redirect_to_handler_siginfo(action.handler, signum, si);
     } else {
         S::sig_redirect_to_handler(action.handler, signum);
