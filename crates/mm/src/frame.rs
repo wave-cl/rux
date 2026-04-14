@@ -441,19 +441,6 @@ impl BuddyAllocator {
         None
     }
 
-    fn merge_level(&mut self, order: u8) {
-        let blocks_at_level = (self.total_frames as usize) >> order;
-        let pairs = blocks_at_level / 2;
-        for i in 0..pairs {
-            let left = i * 2;
-            let right = i * 2 + 1;
-            if self.is_free(order, left) && self.is_free(order, right) {
-                self.clear_free(order, left);
-                self.clear_free(order, right);
-                self.set_free(order + 1, i);
-            }
-        }
-    }
 }
 
 impl FrameAllocator for BuddyAllocator {

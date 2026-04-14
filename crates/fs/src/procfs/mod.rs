@@ -1078,13 +1078,3 @@ fn fmt_usize(buf: &mut [u8], n: usize) -> usize {
     fmt_u64(buf, n as u64)
 }
 
-fn fmt_hex(buf: &mut [u8], mut n: usize) -> usize {
-    if n == 0 { buf[0] = b'0'; return 1; }
-    let hex = b"0123456789abcdef";
-    let mut tmp = [0u8; 16];
-    let mut i = 16;
-    while n > 0 { i -= 1; tmp[i] = hex[n & 0xF]; n >>= 4; }
-    let len = (16 - i).min(buf.len());
-    buf[..len].copy_from_slice(&tmp[i..i + len]);
-    len
-}
