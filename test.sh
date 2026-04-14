@@ -13,11 +13,37 @@ FAIL=0
 
 pass() { PASS=$((PASS + 1)); printf "  \033[32m✓\033[0m %s\n" "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf "  \033[31m✗\033[0m %s\n" "$1"; }
+
+# When a check fails and STRACE_DUMP=1 is set (default on), print the most
+# recent N strace lines from the captured serial log. The kernel's
+# STRACE_ENABLED is toggled to level 1 at the start of each test boot via
+# prctl 0x52755800; level 1 emits "[strace] pid={pid} {name} = {result}"
+# with the noisy syscalls (read/write/sigprocmask/etc) filtered out.
+STRACE_DUMP=${STRACE_DUMP:-1}
+STRACE_DUMP_LINES=${STRACE_DUMP_LINES:-30}
+dump_strace() {
+    [ "$STRACE_DUMP" = "1" ] || return
+    local serial="/tmp/rux_serial_${1:-x86_64}.log"
+    [ -f "$serial" ] || return
+    # Strings filter binary noise; tail of [strace] lines = "what was
+    # happening in the kernel just before the failed check"
+    strings "$serial" 2>/dev/null \
+        | grep -F '[strace]' \
+        | tail -n "$STRACE_DUMP_LINES" \
+        | sed 's/^/      /'
+}
+
+# Set CURRENT_ARCH before a block of check() calls so dump_strace can
+# read the right serial log. Defaults to x86_64.
+CURRENT_ARCH=x86_64
 check() {
-    if echo "$OUTPUT" | grep -qF "$2"; then
+    # 2>/dev/null on echo prevents 'broken pipe' noise when $OUTPUT is large
+    # (several MB with STRACE=1); grep -q exits early on the first match.
+    if printf '%s' "$OUTPUT" 2>/dev/null | grep -qF "$2" 2>/dev/null; then
         pass "$1"
     else
         fail "$1: expected '$2'"
+        dump_strace "$CURRENT_ARCH"
     fi
 }
 
@@ -74,7 +100,9 @@ trap cleanup EXIT
 # ── x86_64 (Alpine Linux 3.21) ─────────────────────────────────────
 if $RUN_X86; then
 
-OUTPUT=$( { sleep 5; cat <<'CMDS'
+OUTPUT=$( { sleep 5; \
+    [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
+    cat <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -206,6 +234,7 @@ curl -sk https://example.com 2>&1 | head -1
 python3 /usr/share/rux-tests/socketpair.py 2>&1
 python3 /usr/share/rux-tests/pipestress.py 2>&1
 python3 /usr/share/rux-tests/forkbomb.py 2>&1
+python3 /usr/share/rux-tests/syscall_conf.py 2>&1
 echo all_tests_done
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
@@ -356,6 +385,7 @@ CMDS
 echo "$OUTPUT" > /tmp/rux_test_x86_64.log
 
 printf "\n\033[1m── x86_64 ──\033[0m\n"
+CURRENT_ARCH=x86_64
 
 # Boot
 check "boot banner"             "rux 0.64.0 (x86_64)"
@@ -571,6 +601,8 @@ check "ruby platform"        "x86_64-linux"
 check "socketpair"           "sp_hello_sp_reply_sp"
 check "pipe stress 20"       "pipestress_20"
 check "fork bomb 30"         "forkbomb_ok"
+check "syscall conformance"  "conformance: passed="
+check "syscall conformance: zero failures"  "failed=0"
 check "all tests done"       "all_tests_done"
 
 fi  # RUN_X86
@@ -578,8 +610,11 @@ fi  # RUN_X86
 # ── aarch64 (Alpine Linux 3.21) ────────────────────────────────────
 if $RUN_AA64; then
 printf "\n\033[1m── aarch64 ──\033[0m\n"
+CURRENT_ARCH=aarch64
 
-OUTPUT=$( { sleep 30; cat <<'CMDS'
+OUTPUT=$( { sleep 30; \
+    [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
+    cat <<'CMDS'
 cat /etc/alpine-release
 uname -a
 cat /etc/passwd
@@ -711,6 +746,7 @@ python3 -c "import time;a=time.monotonic();time.sleep(0.1);d=time.monotonic()-a;
 python3 /usr/share/rux-tests/socketpair.py 2>&1
 python3 /usr/share/rux-tests/pipestress.py 2>&1
 python3 /usr/share/rux-tests/forkbomb.py 2>&1
+python3 /usr/share/rux-tests/syscall_conf.py 2>&1
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
@@ -1042,6 +1078,8 @@ check "ruby reduce"          "55"
 check "socketpair"           "sp_hello_sp_reply_sp"
 check "pipe stress 20"       "pipestress_20"
 check "fork bomb 30"         "forkbomb_ok"
+check "syscall conformance"  "conformance: passed="
+check "syscall conformance: zero failures"  "failed=0"
 check "all tests done"       "all_tests_done"
 check "envp inheritance"     "rux123"
 
