@@ -1159,8 +1159,11 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 3: timer/clock ──────────────────────────────────
         Syscall::ClockSettime => crate::errno::EPERM, // not allowed
         Syscall::ClockGettime2 => posix::clock_gettime(a0, a1), // alias
-        Syscall::TimerCreate | Syscall::TimerSettime | Syscall::TimerGettime |
-        Syscall::TimerGetoverrun | Syscall::TimerDelete => crate::errno::ENOSYS,
+        Syscall::TimerCreate => crate::posix_timer::sys_timer_create(a0, a1, a2),
+        Syscall::TimerSettime => crate::posix_timer::sys_timer_settime(a0, a1, a2, a3),
+        Syscall::TimerGettime => crate::posix_timer::sys_timer_gettime(a0, a1),
+        Syscall::TimerGetoverrun => crate::posix_timer::sys_timer_getoverrun(a0),
+        Syscall::TimerDelete => crate::posix_timer::sys_timer_delete(a0),
 
         // ── Batch 3: filesystem extended ──────────────────────────
         Syscall::Readahead => 0, // advisory — no-op

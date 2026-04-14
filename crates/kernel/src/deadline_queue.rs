@@ -13,6 +13,7 @@ const MAX_DEADLINES: usize = 192;
 /// Entry kind: distinguishes sleep deadlines from interval timers.
 pub const KIND_WAKE: u8 = 0;
 pub const KIND_ITIMER: u8 = 1;
+pub const KIND_POSIX_TIMER: u8 = 2;
 
 #[derive(Clone, Copy)]
 pub struct Entry {

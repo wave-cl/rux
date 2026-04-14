@@ -111,6 +111,7 @@ pub fn exit(status: i32) -> ! {
             close_all_pipes();
             close_all_sockets();
             restore_console_fds();
+            crate::posix_timer::cleanup_posix_timers(idx);
 
             TASK_TABLE[idx].exit_code = status;
             let my_pid = TASK_TABLE[idx].pid;

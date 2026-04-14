@@ -470,6 +470,9 @@ pub unsafe fn wake_sleepers() {
                 t.itimer_real_deadline = 0;
             }
             send_signal_to(i, 14);
+        } else if entry.kind == crate::deadline_queue::KIND_POSIX_TIMER {
+            if !t.active { continue; }
+            crate::posix_timer::handle_posix_timer_expiry(entry.task_idx, now);
         }
     }
 }

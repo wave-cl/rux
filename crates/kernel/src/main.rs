@@ -17,6 +17,7 @@ mod syscall;
 mod uaccess;
 mod task_table;
 mod deadline_queue;
+mod posix_timer;
 mod percpu;
 mod fork;
 mod idle;
