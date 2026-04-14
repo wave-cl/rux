@@ -12,35 +12,64 @@
 # A dropping score is a regression — it means a test was removed or
 # weakened and some mutation now slips through undetected.
 #
-# NOTE: these numbers are from the NATIVE unit test suite only (~34
-# tests in crates/kernel/src/{deadline_queue,posix_timer,tests}.rs).
-# cargo-mutants can't run the QEMU integration suite, so mutations in
-# modules that are only exercised via QEMU show up as "missed" even
-# though the behaviour is covered by real-process testing.
+# NOTE: these numbers are from the NATIVE unit test suite only (~83
+# tests in crates/kernel/src/{deadline_queue,posix_timer,tests}.rs
+# after the 2026-04-14 test expansion). cargo-mutants can't run the
+# QEMU integration suite, so mutations in branches that are ONLY
+# exercised via QEMU (signal delivery, full process lifecycle) still
+# show up as "missed" even though the behaviour is actually covered
+# by real-process testing.
 #
-# Earlier baseline (commit 6714c60) reported 100% on deadline_queue.
-# That was a **false positive**: cargo-mutants v27 was dropping the
-# `--` separator when trailing args were present, sending
-# `--test-threads=1` to `cargo test` instead of the test binary, so
-# every mutation exited 1 and got marked "caught". Fixed by
-# tools/mutants.sh using `-- -- --test-threads=1` (double dash).
+# Earlier history:
+#  - commit 6714c60: first "100% on deadline_queue" run was a FALSE
+#    POSITIVE. cargo-mutants v27 was dropping the `--` separator when
+#    trailing args were present, sending `--test-threads=1` to
+#    `cargo test` itself. The arg parser exited 1, so every mutation
+#    got marked caught regardless of real test outcome.
+#  - commit d918a15: fixed with `-- -- --test-threads=1`. First real
+#    scores: deadline_queue 84%, fs_ops 25%, posix_timer 5%.
+#  - this commit:   raised scores via targeted native tests that
+#    exercise the paths cargo-mutants flagged as "missed".
 
-deadline_queue: 38/45 caught (84%), 1 unviable, 1 timeout
-   6 missed: sift_down strict-vs-nonstrict comparison, sift_up parent
-   index `/` vs `%`, pop `>` vs `>=` — tests use inputs that give the
-   same heap outcome either way.
+deadline_queue: 40/45 caught (89%), 1 unviable, 1 timeout [10 tests]
+   +2 tests vs d918a15 baseline. Killed 2 inner-comparison `<`/`<=`
+   mutations in sift_down by adding a test that pins the exact
+   task_idx sequence for duplicate-deadline pops.
+   5 remaining missed mutations are effectively EQUIVALENT:
+     * pop:54   `>` vs `>=`   — both leave heap[0] untouched when len=0
+     * sift_up:73   `/` vs `%` — both produce pop orders ordered by
+                                 deadline; sift_down repairs the heap
+     * sift_down:86,89  outer `<` vs `<=` bounds checks read stale
+                        heap[len] data which is EMPTY (u64::MAX) and
+                        fails the inner comparison either way
+   Equivalent mutations can only be killed by restructuring the API
+   to expose internal heap state — not worth it for a private data
+   structure.
 
-posix_timer: 7/130 caught (5%), 0 unviable, 0 timeouts
-   123 missed: the 5 posix_timer::tests::* unit tests cover only the
-   struct basics (is_cpu_clock, EMPTY, valid_clock, cleanup). The
-   actual handlers (sys_timer_{create,settime,gettime,delete,
-   getoverrun}) are exercised by the QEMU ptimer test in ext group,
-   which cargo-mutants cannot run. Growing the native test coverage
-   of these handlers is the concrete next step.
+fs_ops: 97/190 caught (51%), 0 unviable, 0 timeouts [+28 tests]
+   Baseline: 25%. Added native tests for fchmod/fchown/fchdir/
+   utimensat/faccessat fd-validation branches (covering the 7 bugs
+   fixed in commit 46465b2), plus chdir relative-path concatenation,
+   chdir empty/non-directory error paths, fstat fd variants, statx
+   happy/missing paths, lstat, mkdir_at, unlink_at, creat, ftruncate
+   happy path, truncate missing, fstatat AT_FDCWD, chmod missing.
+   93 still missed: statx/fstatat flag-handling branches, rename_at2
+   internals, link_at/symlink_at (no native tests), readlink/readlink_at
+   buffer-size handling. Those are reachable but each needs careful
+   setup and the ROI drops sharply after the first 28 tests.
 
-fs_ops: 47/190 caught (25%), 0 unviable, 0 timeouts
-   143 missed: native tests.rs covers stat/open/read/write/chmod
-   paths but not fchmod/fchown/utimensat/faccessat/readlink fd
-   handling. Many of the newly-added fd-validation branches (commit
-   46465b2) are untested at the unit level and rely on the syscall
-   conformance script in QEMU.
+posix_timer: 66/130 caught (51%), 0 unviable, 0 timeouts [+19 tests]
+   Baseline: 5% (the worst in the suite — the module's 5 unit tests
+   covered only the PosixTimer struct, not the sys_timer_* handlers).
+   Added 19 native tests via syscall::dispatch exercising
+   sys_timer_create (valid/bad clock, NULL tid_ptr, CPU clock,
+   SIGEV_SIGNAL/NONE/unknown/bad-signo), sys_timer_delete (roundtrip,
+   out-of-range, double-delete), sys_timer_settime (arm/disarm,
+   interval periodic, bad id, NULL, old_value readback),
+   sys_timer_gettime (armed remaining time, bad id), and
+   sys_timer_getoverrun (fresh, bad id). Score jumped 5% → 51%.
+   64 still missed: CPU-time clock paths (needs scheduler state
+   manipulation), handle_posix_timer_expiry (signal delivery needs
+   full signal plumbing), read_itimerspec ms↔ns arithmetic, long-run
+   overrun scenarios. Those are genuinely hard to cover natively
+   because they depend on real passage of time or real process state.

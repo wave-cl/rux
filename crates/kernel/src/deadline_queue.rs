@@ -188,6 +188,51 @@ mod tests {
         assert_eq!(q.peek_deadline(), u64::MAX);
     }
 
+    /// Pins the exact task_idx sequence for duplicate-deadline pops.
+    /// This is a regression guard against silently flipping the `<` in
+    /// sift_down to `<=` (or vice-versa) — both produce valid min-heaps
+    /// but yield different pop orders for ties. Mutation testing
+    /// surfaced that nothing distinguished the two before.
+    ///
+    /// With the current strict-`<` comparison, sift_down only replaces
+    /// the parent when a child is *strictly* smaller, so equal-deadline
+    /// children never bubble up. For the sequence 1@100, 2@100, 3@100
+    /// the pop order is 1, 3, 2 (not 1, 2, 3).
+    #[test]
+    fn duplicate_deadlines_preserve_strict_ordering() {
+        let mut q = DeadlineQueue::new();
+        q.insert(100, 1, KIND_WAKE);
+        q.insert(100, 2, KIND_WAKE);
+        q.insert(100, 3, KIND_WAKE);
+        assert_eq!(q.pop().task_idx, 1);
+        assert_eq!(q.pop().task_idx, 3);
+        assert_eq!(q.pop().task_idx, 2);
+    }
+
+    /// Larger duplicate-deadline heap to exercise both strict-`<`
+    /// branches in sift_down (left AND right). Without this, mutating
+    /// the child comparisons to `<=` goes undetected because the
+    /// smaller tests never reach a node with two live children at the
+    /// same deadline.
+    ///
+    /// With strict `<`, sift_down never swaps equal-deadline children,
+    /// so after pop'ing the root and moving the last entry into its
+    /// place, the new root sticks even if it has a larger task_idx.
+    /// The resulting pop sequence for inserts [1..=7]@100 is
+    /// 1, 7, 6, 5, 4, 3, 2 — a pattern no other test asserts.
+    #[test]
+    fn duplicate_deadlines_sift_down_full_sequence() {
+        let mut q = DeadlineQueue::new();
+        for idx in 1..=7u16 {
+            q.insert(100, idx, KIND_WAKE);
+        }
+        let mut seq = [0u16; 7];
+        for s in seq.iter_mut() {
+            *s = q.pop().task_idx;
+        }
+        assert_eq!(seq, [1, 7, 6, 5, 4, 3, 2]);
+    }
+
     #[test]
     fn capacity_exhaustion_drops_silently() {
         let mut q = DeadlineQueue::new();
