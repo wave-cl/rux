@@ -64,6 +64,45 @@ pub fn handle_syscall(frame: *mut u8) {
                 }
             }
             221 => { crate::syscall::generic_exec::<super::Aarch64>(a0 as usize, a1 as usize, a2 as usize) as i64 }
+            // 281 = execveat(dirfd, path, argv, envp, flags)
+            281 => {
+                let dirfd = a0 as i32;
+                let path = a1 as usize;
+                if path == 0 || crate::uaccess::validate_user_ptr(path, 1).is_err() {
+                    crate::errno::EFAULT as i64
+                } else {
+                    let first: u8 = crate::uaccess::get_user(path);
+                    if dirfd != -100 && first != b'/' {
+                        crate::errno::ENOSYS as i64
+                    } else {
+                        crate::syscall::generic_exec::<super::Aarch64>(path, a2 as usize, a3 as usize) as i64
+                    }
+                }
+            }
+            // 435 = clone3(clone_args, size)
+            435 => {
+                let args_ptr = a0 as usize;
+                let size = a1 as usize;
+                if size < 64 || crate::uaccess::validate_user_ptr(args_ptr, size).is_err() {
+                    crate::errno::EINVAL as i64
+                } else {
+                    let flags: u64 = crate::uaccess::get_user(args_ptr);
+                    let ptid: u64 = crate::uaccess::get_user(args_ptr + 24);
+                    let ctid: u64 = crate::uaccess::get_user(args_ptr + 32);
+                    let stack: u64 = crate::uaccess::get_user(args_ptr + 40);
+                    let stack_size: u64 = crate::uaccess::get_user(args_ptr + 48);
+                    let tls: u64 = crate::uaccess::get_user(args_ptr + 64);
+                    let sp = if stack != 0 { stack + stack_size } else { 0 };
+                    if flags & crate::errno::CLONE_VM as u64 != 0 {
+                        crate::fork::sys_clone(
+                            flags as usize, sp as usize,
+                            ptid as usize, ctid as usize, tls as usize
+                        ) as i64
+                    } else {
+                        crate::fork::sys_fork() as i64
+                    }
+                }
+            }
             139 => {
                 // rt_sigreturn — restore pre-signal state (reads signal frame from user stack)
                 crate::uaccess::stac();

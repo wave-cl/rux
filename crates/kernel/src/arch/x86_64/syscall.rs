@@ -155,6 +155,43 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
         }
         57 | 58 => return unsafe { crate::fork::sys_fork() } as i64,
         59 => { return unsafe { crate::syscall::generic_exec::<super::X86_64>(a0 as usize, a1 as usize, a2 as usize) } as i64; }
+        // 322 = execveat(dirfd, path, argv, envp, flags)
+        322 => unsafe {
+            let dirfd = a0 as i32;
+            let path = a1 as usize;
+            // Only support AT_FDCWD (-100) or absolute paths
+            if path == 0 { return crate::errno::EFAULT as i64; }
+            if crate::uaccess::validate_user_ptr(path, 1).is_err() {
+                return crate::errno::EFAULT as i64;
+            }
+            let first: u8 = crate::uaccess::get_user(path);
+            if dirfd != -100 && first != b'/' {
+                return crate::errno::ENOSYS as i64;
+            }
+            return crate::syscall::generic_exec::<super::X86_64>(path, a2 as usize, a3 as usize) as i64;
+        }
+        // 435 = clone3(clone_args, size)
+        435 => unsafe {
+            let args_ptr = a0 as usize;
+            let size = a1 as usize;
+            if size < 64 || crate::uaccess::validate_user_ptr(args_ptr, size).is_err() {
+                return crate::errno::EINVAL as i64;
+            }
+            let flags: u64 = crate::uaccess::get_user(args_ptr);
+            let ptid: u64 = crate::uaccess::get_user(args_ptr + 24);
+            let ctid: u64 = crate::uaccess::get_user(args_ptr + 32);
+            let stack: u64 = crate::uaccess::get_user(args_ptr + 40);
+            let stack_size: u64 = crate::uaccess::get_user(args_ptr + 48);
+            let tls: u64 = crate::uaccess::get_user(args_ptr + 64);
+            let sp = if stack != 0 { stack + stack_size } else { 0 };
+            if flags & crate::errno::CLONE_VM as u64 != 0 {
+                return crate::fork::sys_clone(
+                    flags as usize, sp as usize,
+                    ptid as usize, ctid as usize, tls as usize
+                ) as i64;
+            }
+            return crate::fork::sys_fork() as i64;
+        }
         _ => {}
     }
 
