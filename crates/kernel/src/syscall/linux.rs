@@ -254,9 +254,51 @@ pub fn vmsplice(fd: usize, iov_ptr: usize, iovcnt: usize, _flags: usize) -> isiz
     }
 }
 
+/// Permission check for process_vm_readv/writev: root, same-task, or
+/// matching real/saved uid. Mirrors check_kill_permission in signal.rs.
+unsafe fn check_pvm_permission(target_idx: usize) -> bool {
+    let me = super::process();
+    if me.euid == 0 { return true; }
+    let target = &crate::task_table::TASK_TABLE[target_idx];
+    me.euid == target.uid || me.euid == target.suid
+        || me.uid == target.uid || me.uid == target.suid
+}
+
+/// Copy `n` bytes between a local virtual address (current AS) and a
+/// remote virtual address belonging to a task identified by `remote_pt`.
+/// Walks the remote page table per-page (4 KB) and uses identity-mapped
+/// physical memory for the actual copy. Returns bytes successfully copied
+/// (may be short if a remote page is unmapped or read-only on write).
+unsafe fn copy_cross_as(
+    remote_pt: &crate::arch::PageTable,
+    local: usize, remote: usize, n: usize,
+    to_local: bool,
+) -> usize {
+    use rux_klib::VirtAddr;
+    let mut copied = 0usize;
+    while copied < n {
+        let r_va = remote + copied;
+        let page_off = r_va & 0xFFF;
+        let in_page = (4096 - page_off).min(n - copied);
+        let pa = if to_local {
+            remote_pt.translate(VirtAddr::new(r_va))
+        } else {
+            remote_pt.translate_writable(VirtAddr::new(r_va))
+        };
+        let phys = match pa { Ok(p) => p.as_usize(), Err(_) => return copied };
+        let phys_ptr = phys as *mut u8;
+        let local_ptr = (local + copied) as *mut u8;
+        if to_local {
+            core::ptr::copy(phys_ptr, local_ptr, in_page);
+        } else {
+            core::ptr::copy(local_ptr as *const u8, phys_ptr, in_page);
+        }
+        copied += in_page;
+    }
+    copied
+}
+
 /// process_vm_readv/process_vm_writev common implementation.
-/// Cross-process access requires a page-table switch we don't have, so
-/// only same-process (debug self-introspection) is supported.
 /// `to_local`: true → readv (remote→local), false → writev (local→remote)
 unsafe fn process_vm_rw(
     pid: usize,
@@ -265,18 +307,33 @@ unsafe fn process_vm_rw(
     to_local: bool,
 ) -> isize {
     let me = crate::task_table::current_pid();
-    if pid as u32 != me {
-        if crate::task_table::find_task_by_pid(pid as u32).is_none() {
-            return crate::errno::ESRCH;
-        }
-        return crate::errno::EPERM;
-    }
+    let same_pid = pid as u32 == me;
+
+    // Resolve target task and check permissions
+    let target_pt_root: u64 = if same_pid {
+        0 // unused — fast path
+    } else {
+        let idx = match crate::task_table::find_task_by_pid(pid as u32) {
+            Some(i) => i,
+            None => return crate::errno::ESRCH,
+        };
+        if !check_pvm_permission(idx) { return crate::errno::EPERM; }
+        crate::task_table::TASK_TABLE[idx].pt_root
+    };
+
     let lcnt = liovcnt.min(64);
     let rcnt = riovcnt.min(64);
     if crate::uaccess::validate_user_ptr(local, lcnt * 16).is_err()
         || crate::uaccess::validate_user_ptr(remote, rcnt * 16).is_err() {
         return crate::errno::EFAULT;
     }
+
+    // Build a non-installed page table handle for cross-AS walks
+    let remote_pt: Option<crate::arch::PageTable> = if same_pid { None } else {
+        Some(crate::arch::PageTable::from_root(
+            rux_klib::PhysAddr::new(target_pt_root as usize)))
+    };
+
     let liov = local as *const [usize; 2];
     let riov = remote as *const [usize; 2];
     let mut total: isize = 0;
@@ -290,16 +347,33 @@ unsafe fn process_vm_rw(
         let lbase = (*liov.add(li))[0] + loff;
         let rbase = (*riov.add(ri))[0] + roff;
         let n = (llen - loff).min(rlen - roff);
-        if crate::uaccess::validate_user_ptr(lbase, n).is_err()
-            || crate::uaccess::validate_user_ptr(rbase, n).is_err() {
+
+        // Local buffer is always in the current AS — validate normally.
+        if crate::uaccess::validate_user_ptr(lbase, n).is_err() {
             return if total > 0 { total } else { crate::errno::EFAULT };
         }
-        if to_local {
-            core::ptr::copy(rbase as *const u8, lbase as *mut u8, n);
+
+        let copied = if same_pid {
+            // Both ranges in current AS; remote validation is the same as local
+            if crate::uaccess::validate_user_ptr(rbase, n).is_err() {
+                return if total > 0 { total } else { crate::errno::EFAULT };
+            }
+            if to_local {
+                core::ptr::copy(rbase as *const u8, lbase as *mut u8, n);
+            } else {
+                core::ptr::copy(lbase as *const u8, rbase as *mut u8, n);
+            }
+            n
         } else {
-            core::ptr::copy(lbase as *const u8, rbase as *mut u8, n);
+            // Cross-AS: walk the remote page table per-page
+            copy_cross_as(remote_pt.as_ref().unwrap(), lbase, rbase, n, to_local)
+        };
+
+        total += copied as isize;
+        if copied < n {
+            // Short copy — return what we got
+            return total;
         }
-        total += n as isize;
         loff += n; roff += n;
         if loff == llen { li += 1; loff = 0; }
         if roff == rlen { ri += 1; roff = 0; }
