@@ -1,4 +1,4 @@
 [package]
 name = "rux-drivers"
-version = "0.65.0"
+version = "0.66.0"
 edition = "2021"
