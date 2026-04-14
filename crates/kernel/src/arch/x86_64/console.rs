@@ -76,7 +76,7 @@ pub fn read_byte() -> u8 {
             use rux_arch::TimerOps;
             let deadline = super::X86_64::ticks() + 1000; // 1s timeout (re-check)
             crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
-            crate::deadline_queue::DEADLINE_QUEUE.insert(
+            crate::deadline_queue::dq_insert(
                 deadline, task_idx as u16, crate::deadline_queue::KIND_WAKE,
             );
             crate::task_table::poll_wait_register(task_idx);

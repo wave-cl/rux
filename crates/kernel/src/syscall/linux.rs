@@ -387,7 +387,7 @@ pub fn sysinfo(info_ptr: usize) -> isize {
         // sharedram = 0, bufferram = 0
         // totalswap = 0, freeswap = 0
         // procs (unsigned short) — at offset 8*w on 64-bit
-        let procs = crate::task_table::TASK_TABLE.iter()
+        let procs = (*(&raw const crate::task_table::TASK_TABLE)).iter()
             .filter(|t| t.active && t.state != crate::task_table::TaskState::Zombie)
             .count();
         *((info_ptr + 8 * w) as *mut u16) = procs as u16;

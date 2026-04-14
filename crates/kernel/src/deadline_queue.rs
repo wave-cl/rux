@@ -97,3 +97,22 @@ impl DeadlineQueue {
 }
 
 pub static mut DEADLINE_QUEUE: DeadlineQueue = DeadlineQueue::new();
+
+// ── Safe accessors ────────────────────────────────────────────────────
+// Wrap the static-mut access so call sites don't trip the
+// `static_mut_refs` lint (which becomes a hard error in future editions).
+
+#[inline]
+pub unsafe fn dq_peek_deadline() -> u64 {
+    (*(&raw const DEADLINE_QUEUE)).peek_deadline()
+}
+
+#[inline]
+pub unsafe fn dq_pop() -> Entry {
+    (*(&raw mut DEADLINE_QUEUE)).pop()
+}
+
+#[inline]
+pub unsafe fn dq_insert(deadline: u64, task_idx: u16, kind: u8) {
+    (*(&raw mut DEADLINE_QUEUE)).insert(deadline, task_idx, kind);
+}

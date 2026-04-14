@@ -684,7 +684,7 @@ pub fn signalfd_read(fd: usize, buf: usize) -> isize {
                     crate::task_table::TaskState::Sleeping;
                 crate::task_table::TASK_TABLE[task_idx].wake_at = sig_deadline;
                 if sig_deadline > 0 {
-                    crate::deadline_queue::DEADLINE_QUEUE.insert(
+                    crate::deadline_queue::dq_insert(
                         sig_deadline, task_idx as u16, crate::deadline_queue::KIND_WAKE,
                     );
                 }

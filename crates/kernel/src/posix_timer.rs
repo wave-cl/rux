@@ -4,7 +4,7 @@
 //! Stores timers in a global table indexed by timer ID.  Expiry is driven
 //! by the deadline queue (KIND_POSIX_TIMER) and processed in wake_sleepers().
 
-use crate::deadline_queue::{DEADLINE_QUEUE, KIND_POSIX_TIMER};
+use crate::deadline_queue::{dq_insert, KIND_POSIX_TIMER};
 use crate::task_table::{current_task_idx, TASK_TABLE};
 use rux_arch::TimerOps;
 
@@ -269,7 +269,7 @@ pub fn sys_timer_settime(timerid: usize, flags: usize, new_ptr: usize, old_ptr: 
             } else {
                 t.deadline = now + value_ms;
             }
-            DEADLINE_QUEUE.insert(t.deadline, t.owner_idx, KIND_POSIX_TIMER);
+            dq_insert(t.deadline, t.owner_idx, KIND_POSIX_TIMER);
         } else {
             t.deadline = 0; // disarm
         }
@@ -370,7 +370,7 @@ pub unsafe fn handle_posix_timer_expiry(task_idx: u16, now: u64) {
                 t.overrun += (elapsed / t.interval_ms) as u32;
             }
             t.deadline = now + t.interval_ms;
-            DEADLINE_QUEUE.insert(t.deadline, task_idx, KIND_POSIX_TIMER);
+            dq_insert(t.deadline, task_idx, KIND_POSIX_TIMER);
         } else {
             t.deadline = 0; // one-shot: done
         }

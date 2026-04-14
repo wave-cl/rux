@@ -473,7 +473,7 @@ impl Tty {
                         crate::task_table::TaskState::WaitingForPoll;
                     crate::task_table::TASK_TABLE[task_idx].wake_at = deadline;
                     if deadline > 0 {
-                        crate::deadline_queue::DEADLINE_QUEUE.insert(
+                        crate::deadline_queue::dq_insert(
                             deadline, task_idx as u16, crate::deadline_queue::KIND_WAKE,
                         );
                     }

@@ -16,7 +16,7 @@ pub extern "C" fn idle_loop() -> ! {
             // Tickless idle (Linux NO_HZ): stop timer before halting if no
             // pending deadlines AND at least one task has been created (post-boot).
             // Don't stop during early boot when the timer is needed for init.
-            if crate::deadline_queue::DEADLINE_QUEUE.peek_deadline() == u64::MAX
+            if crate::deadline_queue::dq_peek_deadline() == u64::MAX
                 && crate::scheduler::get().cfs.nr_running(0) == 0
                 && IDLE_TICKS.load(Ordering::Relaxed) > 100
             {

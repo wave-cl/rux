@@ -469,10 +469,10 @@ pub unsafe fn notify_parent_child_exit(child_ppid: u32, exit_status: i32) {
 /// Called from timer tick interrupt handler.
 pub unsafe fn wake_sleepers() {
     use rux_arch::TimerOps;
-    use crate::deadline_queue::{DEADLINE_QUEUE, KIND_WAKE, KIND_ITIMER};
+    use crate::deadline_queue::{dq_peek_deadline, dq_pop, dq_insert, KIND_WAKE, KIND_ITIMER};
     let now = crate::arch::Arch::ticks();
-    while DEADLINE_QUEUE.peek_deadline() <= now {
-        let entry = DEADLINE_QUEUE.pop();
+    while dq_peek_deadline() <= now {
+        let entry = dq_pop();
         let i = entry.task_idx as usize;
         if i >= MAX_PROCS { continue; }
         let t = &mut TASK_TABLE[i];
@@ -488,7 +488,7 @@ pub unsafe fn wake_sleepers() {
             if !t.active || t.itimer_real_deadline == 0 { continue; }
             if t.itimer_real_interval > 0 {
                 t.itimer_real_deadline = now + t.itimer_real_interval;
-                DEADLINE_QUEUE.insert(t.itimer_real_deadline, entry.task_idx, KIND_ITIMER);
+                dq_insert(t.itimer_real_deadline, entry.task_idx, KIND_ITIMER);
             } else {
                 t.itimer_real_deadline = 0;
             }
