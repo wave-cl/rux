@@ -89,6 +89,14 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         Arch::write_str(msg);
         Arch::write_str("\n");
     }
-    // Spin instead of exit — allows GDB to attach and inspect
+    // With `--features debug-spin`, halt here so gdb can inspect the
+    // panic state via the gdbstub (tools/debug_qemu.sh). Default is
+    // to exit QEMU cleanly so test.sh can detect the failure.
+    #[cfg(feature = "debug-spin")]
+    {
+        Arch::write_str("[debug-spin] halted for gdb attach\n");
+        loop { core::hint::spin_loop(); }
+    }
+    #[cfg(not(feature = "debug-spin"))]
     Arch::exit(Arch::EXIT_FAILURE);
 }

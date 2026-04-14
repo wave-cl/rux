@@ -7,6 +7,11 @@ edition = "2021"
 default = ["net"]
 native = []
 net = ["rux-net"]
+# Panic-then-spin: instead of Arch::exit(EXIT_FAILURE), halt the CPU
+# in an infinite loop after printing the panic message. Enables gdb
+# attach to inspect the crash state via tools/debug_qemu.sh. Build
+# with `--features debug-spin` when you need this.
+debug-spin = []
 
 [dependencies]
 rux-klib = { path = "../klib" }
