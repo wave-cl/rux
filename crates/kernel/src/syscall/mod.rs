@@ -1173,11 +1173,12 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 3: filesystem extended ──────────────────────────
         Syscall::Readahead => 0, // advisory — no-op
         Syscall::FallocateRange => 0, // same as fallocate
-        Syscall::Quotactl => crate::errno::ENOSYS,
-        Syscall::OpenByHandleAt | Syscall::NameToHandleAt => crate::errno::ENOSYS,
+        Syscall::Quotactl => crate::errno::ENOSYS, // no quota subsystem
+        // No filehandle infrastructure — match what tmpfs/ext2 return.
+        Syscall::OpenByHandleAt | Syscall::NameToHandleAt => crate::errno::EOPNOTSUPP,
 
         // ── Batch 3: misc Linux ───────────────────────────────────
-        Syscall::Kcmp => unsafe {
+        Syscall::Kcmp => {
             // kcmp(pid1, pid2, type, idx1, idx2): both pids must exist; report "same"
             if crate::task_table::find_task_by_pid(a0 as u32).is_none()
                 || crate::task_table::find_task_by_pid(a1 as u32).is_none() {
@@ -1187,6 +1188,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Getrandom2 => posix::getrandom(a0, a1, a2), // alias
         Syscall::Pidfd => memory::pidfd_open(a0, a1),
         Syscall::PidfdSendSignal => memory::pidfd_send_signal(a0, a1, a2, a3),
+        // io_uring not implemented; programs (e.g. liburing) fall back to epoll.
         Syscall::IoUringSetup | Syscall::IoUringEnter | Syscall::IoUringRegister => crate::errno::ENOSYS,
         Syscall::Close2 => posix::close(a0), // alias
         Syscall::Dup3_2 => posix::dup3(a0, a1, a2), // alias

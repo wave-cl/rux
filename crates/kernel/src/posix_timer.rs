@@ -25,6 +25,7 @@ struct PosixTimer {
     owner_idx: u16,     // task table index of creating process
     clock_id: u8,       // CLOCK_REALTIME=0, CLOCK_MONOTONIC=1, CPUTIME=2/3
     signo: u8,          // signal to deliver (0 = SIGEV_NONE)
+    #[allow(dead_code)] // retained for future SIGEV_NONE handling
     sigev_notify: u8,   // SIGEV_SIGNAL=0, SIGEV_NONE=1, SIGEV_THREAD_ID=4
     target_idx: u16,    // task index for signal delivery (SIGEV_THREAD_ID)
     // Wall-clock fields (ms, used for clock_id 0/1/4/6/7)

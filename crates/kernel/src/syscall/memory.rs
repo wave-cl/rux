@@ -196,7 +196,7 @@ pub fn epoll_wait(epfd: usize, events_ptr: usize, maxevents: usize, timeout: usi
     // Compute absolute deadline for scheduler-based sleeping
     let deadline = if timeout_ms > 0 {
         use rux_arch::TimerOps;
-        unsafe { crate::arch::Arch::ticks() + timeout_ms as u64 }
+        crate::arch::Arch::ticks() + timeout_ms as u64
     } else {
         0
     };
@@ -594,12 +594,14 @@ pub fn pidfd_send_signal(pidfd: usize, sig: usize, _info: usize, _flags: usize) 
     super::signal::kill(pid as isize, sig)
 }
 
+#[allow(dead_code)] // hooked into fd_table close path in a later pass
 pub fn pidfd_close(fd: usize) {
     if let Some(idx) = find_pidfd(fd) {
         unsafe { PIDFDS[idx].active = false; }
     }
 }
 
+#[allow(dead_code)] // used by future fd-type dispatch
 pub fn is_pidfd(fd: usize) -> bool { find_pidfd(fd).is_some() }
 
 // ── signalfd ──────────────────────────────────────────────────────
@@ -926,17 +928,15 @@ pub fn mmap(addr: usize, len: usize, prot: usize, mmap_flags: usize, fd: usize, 
         }
 
         // Track in VMA list
-        unsafe {
-            use rux_mm::vma::{Vma, VmaKind, VmaOps};
-            let kind = if mmap_flags & MAP_SHARED != 0 { VmaKind::Shared }
-                else if mmap_flags & MAP_ANONYMOUS != 0 { VmaKind::Anonymous }
-                else { VmaKind::FileBacked };
-            let _ = crate::task_table::vma_list(crate::task_table::current_task_idx()).insert(Vma {
-                start: rux_klib::VirtAddr::new(result),
-                end: rux_klib::VirtAddr::new(result + aligned_len),
-                flags: pg_flags, kind, _pad: [0; 3], inode: 0, offset: offset as u64,
-            });
-        }
+        use rux_mm::vma::{Vma, VmaKind, VmaOps};
+        let kind = if mmap_flags & MAP_SHARED != 0 { VmaKind::Shared }
+            else if mmap_flags & MAP_ANONYMOUS != 0 { VmaKind::Anonymous }
+            else { VmaKind::FileBacked };
+        let _ = crate::task_table::vma_list(crate::task_table::current_task_idx()).insert(Vma {
+            start: rux_klib::VirtAddr::new(result),
+            end: rux_klib::VirtAddr::new(result + aligned_len),
+            flags: pg_flags, kind, _pad: [0; 3], inode: 0, offset: offset as u64,
+        });
         result as isize
     }
 }
@@ -1377,10 +1377,8 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
 
     // Deadline: absolute tick count when timeout expires (0 = non-blocking)
     let deadline: u64 = if needs_blocking && timeout_ms > 0 {
-        unsafe {
-            use rux_arch::TimerOps;
-            crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64
-        }
+        use rux_arch::TimerOps;
+        crate::arch::Arch::ticks() + timeout_ms.min(30_000) as u64
     } else { 0 };
 
     loop {
@@ -1444,7 +1442,7 @@ pub fn poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
 
         if ready > 0 { return ready as isize; }
         if deadline == 0 { return 0; }
-        unsafe {
+        {
             use rux_arch::TimerOps;
             if crate::arch::Arch::ticks() >= deadline { return 0; }
         }

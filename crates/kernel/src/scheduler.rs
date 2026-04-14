@@ -132,7 +132,7 @@ pub unsafe fn init_idle_sched() {
         + crate::task_table::KSTACK_SIZE;
     sched.tasks[0].saved_sp = crate::arch::Arch::init_task_stack(
         idle_stack_top,
-        crate::idle::idle_loop as usize,
+        crate::idle::idle_loop as *const () as usize,
         0, // nice
     );
     // Slot 0 is already marked active in Scheduler::new().

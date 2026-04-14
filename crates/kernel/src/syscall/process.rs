@@ -155,8 +155,8 @@ pub fn exit(status: i32) -> ! {
                 sched.tasks[idx].entity.state = rux_sched::TaskState::Dead;
                 sched.tasks[idx].active = false;
                 sched.dequeue_current();
-                sched.need_resched |= 1u64 << unsafe { crate::percpu::cpu_id() as u32 };
-                unsafe { set_current_need_resched(); }
+                sched.need_resched |= 1u64 << (crate::percpu::cpu_id() as u32);
+                set_current_need_resched();
                 sched.schedule();
                 // Bug indicator: schedule() should never return for a dead task.
                 use rux_arch::ConsoleOps;

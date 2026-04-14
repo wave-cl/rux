@@ -5,6 +5,7 @@ const PL011_BASE: usize = 0x0900_0000;
 const UARTDR: usize   = PL011_BASE + 0x00;   // Data register
 const UARTFR: usize   = PL011_BASE + 0x18;   // Flag register
 const UARTIMSC: usize = PL011_BASE + 0x38;   // Interrupt mask set/clear
+#[allow(dead_code)]
 const UARTCR: usize   = PL011_BASE + 0x30;   // Control register
 const UARTICR: usize  = PL011_BASE + 0x44;   // Interrupt clear register
 const UARTFR_TXFF: u32 = 1 << 5;             // Transmit FIFO full

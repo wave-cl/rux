@@ -353,7 +353,7 @@ pub fn sys_connect(fd: usize, addr_ptr: usize, _addrlen: usize) -> isize {
                 rux_net::poll(crate::arch::Arch::ticks());
                 if rux_net::tcp_is_established(handle) { SOCKETS[idx].connected = true; return 0; }
                 if !rux_net::tcp_is_active(handle) { return crate::errno::ECONNREFUSED; }
-                unsafe { net_wait(); }
+                net_wait();
             }
             return crate::errno::ETIMEDOUT;
         }
@@ -412,7 +412,7 @@ pub fn sys_sendto(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_ptr:
                         }
                         Err(_) => {
                             // TX buffer full — yield to scheduler then retry
-                            unsafe { net_wait(); }
+                            net_wait();
                         }
                     }
                 }
@@ -478,7 +478,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_pt
                         return 0;
                     }
                     if nonblock { return crate::errno::EAGAIN; }
-                    unsafe { net_wait(); }
+                    net_wait();
                 }
                 return crate::errno::EAGAIN;
             } else if sock.sock_type == SOCK_DGRAM {
@@ -503,7 +503,7 @@ pub fn sys_recvfrom(fd: usize, buf_ptr: usize, len: usize, flags: usize, addr_pt
                         Err(_) => {}
                     }
                     if nonblock { return crate::errno::EAGAIN; }
-                    unsafe { net_wait(); }
+                    net_wait();
                 }
                 return crate::errno::EAGAIN;
             }
@@ -589,7 +589,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                     return new_fd as isize;
                 }
                 if nonblock { return crate::errno::EAGAIN; }
-                unsafe { net_wait(); }
+                net_wait();
             }
             return crate::errno::EAGAIN;
         }
@@ -673,7 +673,7 @@ pub fn sys_accept(fd: usize, addr_ptr: usize, addrlen_ptr: usize) -> isize {
                     return new_fd as isize;
                 }
                 if nonblock { return crate::errno::EAGAIN; }
-                unsafe { net_wait(); }
+                net_wait();
             }
             return crate::errno::EAGAIN;
         }
