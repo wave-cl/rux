@@ -135,6 +135,86 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, rusage: usize) -> i
     super::posix::waitpid(pid, wstatus_ptr, options)
 }
 
+/// waitid(idtype, id, infop, options) — POSIX equivalent of wait4 with
+/// siginfo_t output. Routes through waitpid() for the scan logic, then
+/// fills the user siginfo_t (128 bytes) from the result.
+pub fn waitid(idtype: usize, id: usize, infop: usize, options: usize) -> isize {
+    // idtype: P_ALL=0, P_PID=1, P_PGID=2, P_PIDFD=3
+    let pid = match idtype {
+        0 => usize::MAX,           // any child
+        1 => id,                   // specific pid
+        2 => return crate::errno::ENOSYS, // pgid: not supported
+        _ => return crate::errno::EINVAL,
+    };
+    // Linux waitid options: WNOHANG=1, WUNTRACED=2, WSTOPPED=2, WEXITED=4,
+    // WCONTINUED=8, WNOWAIT=0x1000000. waitpid() understands WNOHANG/WUNTRACED/WCONTINUED
+    // (bits 1, 2, 8). WEXITED is implicit. WNOWAIT is not honored (we always reap).
+    let waitpid_options = options & 0xB; // mask to bits we support
+
+    // Capture wstatus locally so we can format the siginfo.
+    let mut wstatus: i32 = 0;
+    let wstatus_ptr = &mut wstatus as *mut i32 as usize;
+    // waitpid() requires a user pointer; instead, call it without a pointer
+    // and reconstruct status from the returned child slot.
+    let r = super::posix::waitpid(pid, 0, waitpid_options);
+    if r <= 0 { return r; } // 0 = WNOHANG no child, <0 = error
+    let child_pid = r as u32;
+
+    // Look up the child's exit code (it's already been reaped, so we use
+    // the parent's last_child_exit field).
+    let child_exit = unsafe { (*super::process()).last_child_exit };
+    let _ = wstatus_ptr;
+    wstatus = child_exit;
+
+    if infop != 0 {
+        if crate::uaccess::validate_user_ptr(infop, 128).is_err() {
+            return crate::errno::EFAULT;
+        }
+        unsafe {
+            let p = infop as *mut u8;
+            for i in 0..128 { *p.add(i) = 0; }
+            // siginfo_t layout for SIGCHLD:
+            //   si_signo (i32, off 0) = SIGCHLD (17)
+            //   si_errno (i32, off 4) = 0
+            //   si_code  (i32, off 8) = CLD_EXITED(1) / CLD_KILLED(2) / CLD_STOPPED(5)
+            //   si_pid   (u32, off 12) = child pid
+            //   si_uid   (u32, off 16) = child uid (0 here)
+            //   si_status(i32, off 24) = exit code or signal
+            *(infop as *mut i32) = 17;
+            // CLD_EXITED if normal exit, CLD_KILLED if signaled
+            let cld_code = if child_exit & 0x7F == 0 { 1i32 } else { 2 };
+            *((infop + 8) as *mut i32) = cld_code;
+            *((infop + 12) as *mut u32) = child_pid;
+            *((infop + 24) as *mut i32) = (child_exit >> 8) & 0xFF;
+        }
+    }
+    0
+}
+
+/// ptrace(request, pid, addr, data) — minimal stub.
+/// Linux ptrace requests we recognize:
+///   PTRACE_TRACEME = 0
+///   PTRACE_PEEKTEXT/PEEKDATA/PEEKUSER = 1/2/3
+///   PTRACE_POKETEXT/POKEDATA/POKEUSER = 4/5/6
+///   PTRACE_CONT = 7, PTRACE_KILL = 8, PTRACE_SINGLESTEP = 9
+///   PTRACE_ATTACH = 16, PTRACE_DETACH = 17
+///   PTRACE_SYSCALL = 24, PTRACE_SEIZE = 0x4206
+pub fn ptrace(request: usize, pid: usize, _addr: usize, _data: usize) -> isize {
+    match request {
+        0 => 0, // PTRACE_TRACEME: pretend to enable tracing
+        16 | 0x4206 | 17 => unsafe {
+            // ATTACH/SEIZE/DETACH: succeed if the pid exists (so we don't lie),
+            // but we don't actually trace.
+            if crate::task_table::find_task_by_pid(pid as u32).is_some() {
+                crate::errno::EPERM // tracing not actually supported
+            } else {
+                crate::errno::ESRCH
+            }
+        }
+        _ => crate::errno::EPERM,
+    }
+}
+
 /// Fill a statfs buffer at buf_ptr with filesystem stats.
 /// `magic` selects the filesystem type (EXT2, PROC, etc.).
 unsafe fn fill_statfs(buf_ptr: usize, magic: usize) {

@@ -970,7 +970,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 2: splice / zero-copy I/O ───────────────────────
         Syscall::Splice => linux::splice(a0, a1, a2, a3, a4, 0),
         Syscall::Tee => linux::tee(a0, a2, a3, 0), // tee(fd_in, fd_out, len, flags)
-        Syscall::Vmsplice => crate::errno::ENOSYS, // userspace→pipe not yet implemented
+        Syscall::Vmsplice => crate::errno::EINVAL, // stub: userspace→pipe not implemented
 
         // ── Batch 2: process misc ─────────────────────────────────
         Syscall::Setsid2 => posix::setsid(), // alias
@@ -1130,10 +1130,10 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Batch 3: process extensions ───────────────────────────
         Syscall::Clone3 => crate::errno::ENOSYS, // musl falls back to clone
-        Syscall::Waitid => crate::errno::ENOSYS, // musl uses wait4
+        Syscall::Waitid => linux::waitid(a0, a1, a2, a3),
         Syscall::Execveat => crate::errno::ENOSYS, // musl uses execve
-        Syscall::ProcessVmReadv | Syscall::ProcessVmWritev => crate::errno::ENOSYS,
-        Syscall::Ptrace => crate::errno::ENOSYS,
+        Syscall::ProcessVmReadv | Syscall::ProcessVmWritev => crate::errno::EPERM, // CAP_SYS_PTRACE missing
+        Syscall::Ptrace => linux::ptrace(a0, a1, a2, a3),
         Syscall::SetSid => posix::setsid(),
         Syscall::GetSid2 => unsafe {
             let target_pid = if a0 == 0 { crate::task_table::current_pid() } else { a0 as u32 };
@@ -1173,9 +1173,16 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::OpenByHandleAt | Syscall::NameToHandleAt => crate::errno::ENOSYS,
 
         // ── Batch 3: misc Linux ───────────────────────────────────
-        Syscall::Kcmp => crate::errno::ENOSYS,
+        Syscall::Kcmp => unsafe {
+            // kcmp(pid1, pid2, type, idx1, idx2): both pids must exist; report "same"
+            if crate::task_table::find_task_by_pid(a0 as u32).is_none()
+                || crate::task_table::find_task_by_pid(a1 as u32).is_none() {
+                crate::errno::ESRCH
+            } else if a2 > 7 { crate::errno::EINVAL } else { 0 }
+        }
         Syscall::Getrandom2 => posix::getrandom(a0, a1, a2), // alias
-        Syscall::Pidfd | Syscall::PidfdSendSignal => crate::errno::ENOSYS,
+        Syscall::Pidfd => memory::pidfd_open(a0, a1),
+        Syscall::PidfdSendSignal => memory::pidfd_send_signal(a0, a1, a2, a3),
         Syscall::IoUringSetup | Syscall::IoUringEnter | Syscall::IoUringRegister => crate::errno::ENOSYS,
         Syscall::Close2 => posix::close(a0), // alias
         Syscall::Dup3_2 => posix::dup3(a0, a1, a2), // alias

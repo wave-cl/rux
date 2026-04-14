@@ -548,6 +548,60 @@ pub fn timerfd_has_data(fd: usize) -> bool {
     }).unwrap_or(false)
 }
 
+// ── pidfd ─────────────────────────────────────────────────────────
+
+const MAX_PIDFD: usize = 16;
+
+struct PidFdSlot {
+    active: bool,
+    fd: usize,
+    pid: u32,
+}
+
+static mut PIDFDS: [PidFdSlot; MAX_PIDFD] = {
+    const EMPTY: PidFdSlot = PidFdSlot { active: false, fd: 0, pid: 0 };
+    [EMPTY; MAX_PIDFD]
+};
+
+/// pidfd_open(pid, flags) → fd
+pub fn pidfd_open(pid: usize, flags: usize) -> isize {
+    if crate::task_table::find_task_by_pid(pid as u32).is_none() {
+        return crate::errno::ESRCH;
+    }
+    unsafe {
+        let idx = match (0..MAX_PIDFD).find(|&i| !PIDFDS[i].active) {
+            Some(i) => i,
+            None => return crate::errno::ENOMEM,
+        };
+        let fd = alloc_virtual_fd(flags);
+        if fd < 0 { return fd; }
+        PIDFDS[idx] = PidFdSlot { active: true, fd: fd as usize, pid: pid as u32 };
+        fd
+    }
+}
+
+fn find_pidfd(fd: usize) -> Option<usize> {
+    unsafe { (0..MAX_PIDFD).find(|&i| PIDFDS[i].active && PIDFDS[i].fd == fd) }
+}
+
+/// pidfd_send_signal(pidfd, sig, info, flags) → 0 or -errno
+pub fn pidfd_send_signal(pidfd: usize, sig: usize, _info: usize, _flags: usize) -> isize {
+    let idx = match find_pidfd(pidfd) {
+        Some(i) => i,
+        None => return crate::errno::EBADF,
+    };
+    let pid = unsafe { PIDFDS[idx].pid };
+    super::signal::kill(pid as isize, sig)
+}
+
+pub fn pidfd_close(fd: usize) {
+    if let Some(idx) = find_pidfd(fd) {
+        unsafe { PIDFDS[idx].active = false; }
+    }
+}
+
+pub fn is_pidfd(fd: usize) -> bool { find_pidfd(fd).is_some() }
+
 // ── signalfd ──────────────────────────────────────────────────────
 
 const MAX_SIGNALFD: usize = 8;
