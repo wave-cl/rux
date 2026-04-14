@@ -1,6 +1,6 @@
 [package]
 name = "rux-mm"
-version = "0.57.0"
+version = "0.64.0"
 edition = "2021"
 
 [dependencies]
