@@ -136,83 +136,160 @@ pub fn wait4(pid: usize, wstatus_ptr: usize, options: usize, rusage: usize) -> i
 }
 
 /// waitid(idtype, id, infop, options) — POSIX equivalent of wait4 with
-/// siginfo_t output. Routes through waitpid() for the scan logic, then
-/// fills the user siginfo_t (128 bytes) from the result.
+/// siginfo_t output. Routes through waitpid() for the scan logic, using
+/// the infop buffer itself as a scratch wstatus pointer (overwritten with
+/// the formatted siginfo_t afterwards).
 pub fn waitid(idtype: usize, id: usize, infop: usize, options: usize) -> isize {
     // idtype: P_ALL=0, P_PID=1, P_PGID=2, P_PIDFD=3
     let pid = match idtype {
-        0 => usize::MAX,           // any child
-        1 => id,                   // specific pid
-        2 => return crate::errno::ENOSYS, // pgid: not supported
+        0 => usize::MAX,
+        1 => id,
+        2 => return crate::errno::ENOSYS,
         _ => return crate::errno::EINVAL,
     };
-    // Linux waitid options: WNOHANG=1, WUNTRACED=2, WSTOPPED=2, WEXITED=4,
-    // WCONTINUED=8, WNOWAIT=0x1000000. waitpid() understands WNOHANG/WUNTRACED/WCONTINUED
-    // (bits 1, 2, 8). WEXITED is implicit. WNOWAIT is not honored (we always reap).
-    let waitpid_options = options & 0xB; // mask to bits we support
+    if infop != 0 && crate::uaccess::validate_user_ptr(infop, 128).is_err() {
+        return crate::errno::EFAULT;
+    }
+    // Mask to waitpid()-supported bits: WNOHANG=1, WUNTRACED=2, WCONTINUED=8.
+    let waitpid_options = options & 0xB;
 
-    // Capture wstatus locally so we can format the siginfo.
-    let mut wstatus: i32 = 0;
-    let wstatus_ptr = &mut wstatus as *mut i32 as usize;
-    // waitpid() requires a user pointer; instead, call it without a pointer
-    // and reconstruct status from the returned child slot.
-    let r = super::posix::waitpid(pid, 0, waitpid_options);
-    if r <= 0 { return r; } // 0 = WNOHANG no child, <0 = error
+    // Use infop as scratch wstatus storage (4 bytes at offset 0). waitpid()
+    // writes the encoded status (exit_code << 8) there. We then overwrite
+    // the whole 128-byte siginfo_t with proper fields.
+    let r = super::posix::waitpid(pid, infop, waitpid_options);
+    if r <= 0 { return r; }
     let child_pid = r as u32;
 
-    // Look up the child's exit code (it's already been reaped, so we use
-    // the parent's last_child_exit field).
-    let child_exit = unsafe { (*super::process()).last_child_exit };
-    let _ = wstatus_ptr;
-    wstatus = child_exit;
-
     if infop != 0 {
-        if crate::uaccess::validate_user_ptr(infop, 128).is_err() {
-            return crate::errno::EFAULT;
-        }
         unsafe {
+            let wstatus = *(infop as *const u32);
             let p = infop as *mut u8;
             for i in 0..128 { *p.add(i) = 0; }
-            // siginfo_t layout for SIGCHLD:
-            //   si_signo (i32, off 0) = SIGCHLD (17)
-            //   si_errno (i32, off 4) = 0
-            //   si_code  (i32, off 8) = CLD_EXITED(1) / CLD_KILLED(2) / CLD_STOPPED(5)
-            //   si_pid   (u32, off 12) = child pid
-            //   si_uid   (u32, off 16) = child uid (0 here)
-            //   si_status(i32, off 24) = exit code or signal
+            // siginfo_t for SIGCHLD:
+            //   off 0  : si_signo  = SIGCHLD (17)
+            //   off 4  : si_errno  = 0
+            //   off 8  : si_code   = CLD_EXITED(1)/CLD_KILLED(2)/CLD_STOPPED(5)
+            //   off 12 : si_pid    = child pid
+            //   off 16 : si_uid    = 0
+            //   off 24 : si_status = exit code or terminating signal
             *(infop as *mut i32) = 17;
-            // CLD_EXITED if normal exit, CLD_KILLED if signaled
-            let cld_code = if child_exit & 0x7F == 0 { 1i32 } else { 2 };
+            let exit_code = (wstatus >> 8) as i32;
+            let term_sig = (wstatus & 0x7F) as i32;
+            let cld_code = if term_sig == 0 { 1i32 } else { 2 };
             *((infop + 8) as *mut i32) = cld_code;
             *((infop + 12) as *mut u32) = child_pid;
-            *((infop + 24) as *mut i32) = (child_exit >> 8) & 0xFF;
+            *((infop + 24) as *mut i32) = if term_sig == 0 { exit_code } else { term_sig };
         }
     }
     0
 }
 
-/// ptrace(request, pid, addr, data) — minimal stub.
-/// Linux ptrace requests we recognize:
-///   PTRACE_TRACEME = 0
-///   PTRACE_PEEKTEXT/PEEKDATA/PEEKUSER = 1/2/3
-///   PTRACE_POKETEXT/POKEDATA/POKEUSER = 4/5/6
-///   PTRACE_CONT = 7, PTRACE_KILL = 8, PTRACE_SINGLESTEP = 9
-///   PTRACE_ATTACH = 16, PTRACE_DETACH = 17
-///   PTRACE_SYSCALL = 24, PTRACE_SEIZE = 0x4206
+/// ptrace(request, pid, addr, data) — stub. We don't actually trace,
+/// but recognize common requests so probing programs see sensible errors.
 pub fn ptrace(request: usize, pid: usize, _addr: usize, _data: usize) -> isize {
     match request {
-        0 => 0, // PTRACE_TRACEME: pretend to enable tracing
-        16 | 0x4206 | 17 => unsafe {
-            // ATTACH/SEIZE/DETACH: succeed if the pid exists (so we don't lie),
-            // but we don't actually trace.
+        0 => 0,           // PTRACE_TRACEME: pretend to enable tracing
+        0x4200 => 0,      // PTRACE_SETOPTIONS: accept silently
+        // Memory peek/poke and register access: we don't support cross-AS access
+        1 | 2 | 3 | 4 | 5 | 6 | 12 | 13 | 14 | 15 | 24 => crate::errno::EPERM,
+        // Process-control requests: ESRCH if pid missing, else EPERM
+        7 | 8 | 9 | 16 | 17 | 0x4206 => unsafe {
             if crate::task_table::find_task_by_pid(pid as u32).is_some() {
-                crate::errno::EPERM // tracing not actually supported
+                crate::errno::EPERM
             } else {
                 crate::errno::ESRCH
             }
         }
-        _ => crate::errno::EPERM,
+        _ => crate::errno::EINVAL,
     }
+}
+
+/// vmsplice(fd, iov, iovcnt, flags) — write userspace iov[] into a pipe.
+/// Implemented as a loop of write() calls; the existing pipe write path
+/// handles fd validation, blocking, and SIGPIPE generation.
+pub fn vmsplice(fd: usize, iov_ptr: usize, iovcnt: usize, _flags: usize) -> isize {
+    let cnt = iovcnt.min(64);
+    if cnt == 0 { return 0; }
+    if crate::uaccess::validate_user_ptr(iov_ptr, cnt * 16).is_err() {
+        return crate::errno::EFAULT;
+    }
+    unsafe {
+        let iov = iov_ptr as *const [usize; 2];
+        let mut total: isize = 0;
+        for i in 0..cnt {
+            let base = (*iov.add(i))[0];
+            let len = (*iov.add(i))[1];
+            if base == 0 || len == 0 { continue; }
+            let n = super::file::write(fd, base, len);
+            if n < 0 { return if total > 0 { total } else { n }; }
+            total += n;
+            if (n as usize) < len { break; }
+        }
+        total
+    }
+}
+
+/// process_vm_readv/process_vm_writev common implementation.
+/// Cross-process access requires a page-table switch we don't have, so
+/// only same-process (debug self-introspection) is supported.
+/// `to_local`: true → readv (remote→local), false → writev (local→remote)
+unsafe fn process_vm_rw(
+    pid: usize,
+    local: usize, liovcnt: usize,
+    remote: usize, riovcnt: usize,
+    to_local: bool,
+) -> isize {
+    let me = crate::task_table::current_pid();
+    if pid as u32 != me {
+        if crate::task_table::find_task_by_pid(pid as u32).is_none() {
+            return crate::errno::ESRCH;
+        }
+        return crate::errno::EPERM;
+    }
+    let lcnt = liovcnt.min(64);
+    let rcnt = riovcnt.min(64);
+    if crate::uaccess::validate_user_ptr(local, lcnt * 16).is_err()
+        || crate::uaccess::validate_user_ptr(remote, rcnt * 16).is_err() {
+        return crate::errno::EFAULT;
+    }
+    let liov = local as *const [usize; 2];
+    let riov = remote as *const [usize; 2];
+    let mut total: isize = 0;
+    let mut li = 0usize; let mut ri = 0usize;
+    let mut loff = 0usize; let mut roff = 0usize;
+    while li < lcnt && ri < rcnt {
+        let llen = (*liov.add(li))[1];
+        let rlen = (*riov.add(ri))[1];
+        if llen == 0 { li += 1; loff = 0; continue; }
+        if rlen == 0 { ri += 1; roff = 0; continue; }
+        let lbase = (*liov.add(li))[0] + loff;
+        let rbase = (*riov.add(ri))[0] + roff;
+        let n = (llen - loff).min(rlen - roff);
+        if crate::uaccess::validate_user_ptr(lbase, n).is_err()
+            || crate::uaccess::validate_user_ptr(rbase, n).is_err() {
+            return if total > 0 { total } else { crate::errno::EFAULT };
+        }
+        if to_local {
+            core::ptr::copy(rbase as *const u8, lbase as *mut u8, n);
+        } else {
+            core::ptr::copy(lbase as *const u8, rbase as *mut u8, n);
+        }
+        total += n as isize;
+        loff += n; roff += n;
+        if loff == llen { li += 1; loff = 0; }
+        if roff == rlen { ri += 1; roff = 0; }
+    }
+    total
+}
+
+/// process_vm_readv(pid, local_iov, liovcnt, remote_iov, riovcnt, flags)
+pub fn process_vm_readv(pid: usize, l: usize, lc: usize, r: usize, rc: usize, _flags: usize) -> isize {
+    unsafe { process_vm_rw(pid, l, lc, r, rc, true) }
+}
+
+/// process_vm_writev(pid, local_iov, liovcnt, remote_iov, riovcnt, flags)
+pub fn process_vm_writev(pid: usize, l: usize, lc: usize, r: usize, rc: usize, _flags: usize) -> isize {
+    unsafe { process_vm_rw(pid, l, lc, r, rc, false) }
 }
 
 /// Fill a statfs buffer at buf_ptr with filesystem stats.

@@ -970,7 +970,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 2: splice / zero-copy I/O ───────────────────────
         Syscall::Splice => linux::splice(a0, a1, a2, a3, a4, 0),
         Syscall::Tee => linux::tee(a0, a2, a3, 0), // tee(fd_in, fd_out, len, flags)
-        Syscall::Vmsplice => crate::errno::EINVAL, // stub: userspace→pipe not implemented
+        Syscall::Vmsplice => linux::vmsplice(a0, a1, a2, a3),
 
         // ── Batch 2: process misc ─────────────────────────────────
         Syscall::Setsid2 => posix::setsid(), // alias
@@ -1020,7 +1020,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Batch 2: filesystem misc ──────────────────────────────
         Syscall::Chroot => 0, // stub: succeed (sshd privilege separation needs this)
-        Syscall::PivotRoot => crate::errno::ENOSYS, // no namespace support
+        Syscall::PivotRoot => crate::errno::EPERM, // no namespace support
         Syscall::Fadvise => 0, // advisory — safe to ignore
         Syscall::Inotify => {
             // inotify_init1(flags) → fd
@@ -1129,10 +1129,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Msgsnd | Syscall::Msgrcv | Syscall::Msgctl => crate::errno::EINVAL,
 
         // ── Batch 3: process extensions ───────────────────────────
-        Syscall::Clone3 => crate::errno::ENOSYS, // musl falls back to clone
+        // Clone3 (435) and Execveat (322/281) are dispatched at the arch
+        // entry point alongside clone/execve; reaching here means the arch
+        // stub returned an unsupported variant.
+        Syscall::Clone3 => crate::errno::ENOSYS,
         Syscall::Waitid => linux::waitid(a0, a1, a2, a3),
-        Syscall::Execveat => crate::errno::ENOSYS, // musl uses execve
-        Syscall::ProcessVmReadv | Syscall::ProcessVmWritev => crate::errno::EPERM, // CAP_SYS_PTRACE missing
+        Syscall::Execveat => crate::errno::ENOSYS,
+        Syscall::ProcessVmReadv => linux::process_vm_readv(a0, a1, a2, a3, a4, 0),
+        Syscall::ProcessVmWritev => linux::process_vm_writev(a0, a1, a2, a3, a4, 0),
         Syscall::Ptrace => linux::ptrace(a0, a1, a2, a3),
         Syscall::SetSid => posix::setsid(),
         Syscall::GetSid2 => unsafe {
@@ -1264,7 +1268,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             0
         }
 
-        Syscall::Rseq => crate::errno::ENOSYS,
+        Syscall::Rseq => {
+            // We don't implement restart-on-preemption; programs (e.g. glibc)
+            // degrade gracefully to fallback paths. Validate the pointer
+            // and return success so they don't keep retrying.
+            if a0 != 0 && crate::uaccess::validate_user_ptr(a0, a1).is_err() {
+                crate::errno::EFAULT
+            } else { 0 }
+        }
 
         // ── Architecture-specific ──────────────────────────────────
         Syscall::ArchSpecific(nr) => {
