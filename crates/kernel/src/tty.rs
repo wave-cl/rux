@@ -347,7 +347,7 @@ impl Tty {
     pub fn has_input(&self) -> bool {
         if self.line.len > 0 { return true; }
         if serial_has_data() { return true; }
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
         if unsafe { crate::arch::aarch64::console::hw_has_data() } { return true; }
         false
     }

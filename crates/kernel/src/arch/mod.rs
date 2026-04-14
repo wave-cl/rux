@@ -33,6 +33,8 @@ pub type PageTable = native::FlatPageTable;
 pub type ArchPte = rux_arch::x86_64::pte::X86_64Pte;
 #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
 pub type ArchPte = rux_arch::aarch64::pte::Aarch64Pte;
+#[cfg(feature = "native")]
+pub type ArchPte = native::NativePte;
 
 pub use rux_arch::StatLayout;
 
@@ -41,6 +43,8 @@ pub use rux_arch::StatLayout;
 pub use x86_64::syscall::{USER_REGS_SIZE, read_user_regs, write_user_regs};
 #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
 pub use aarch64::syscall::{USER_REGS_SIZE, read_user_regs, write_user_regs};
+#[cfg(feature = "native")]
+pub use native::{USER_REGS_SIZE, read_user_regs, write_user_regs};
 
 /// Re-export arch-specific device probes (used by boot.rs).
 #[cfg(all(target_arch = "x86_64", not(feature = "native"), feature = "net"))]

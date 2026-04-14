@@ -259,8 +259,8 @@ unsafe impl crate::arch::KernelMapOps for NativeArch {
 pub struct FlatPageTable;
 
 impl FlatPageTable {
-    pub fn new(_alloc: &mut dyn FrameAllocator) -> Option<Self> {
-        Some(Self)
+    pub fn new(_alloc: &mut dyn FrameAllocator) -> Result<Self, MemoryError> {
+        Ok(Self)
     }
     pub fn from_root(_pa: PhysAddr) -> Self {
         Self
@@ -274,17 +274,94 @@ impl FlatPageTable {
     ) -> Result<(), MemoryError> {
         Ok(())
     }
+    pub fn map_4k_raw(
+        &mut self,
+        _va: VirtAddr,
+        _pa: PhysAddr,
+        _raw_flags: u64,
+        _alloc: &mut dyn FrameAllocator,
+    ) -> Result<(), MemoryError> {
+        Ok(())
+    }
     pub fn unmap_4k(&mut self, _va: VirtAddr) -> Result<PhysAddr, MemoryError> {
         Ok(PhysAddr::new(0))
     }
+    pub fn write_leaf_pte(&mut self, _virt: VirtAddr, _raw: u64, _alloc: &mut dyn FrameAllocator) {}
+    /// # Safety
+    /// No-op on native — no real page table to remap.
+    pub unsafe fn remap(&self, _virt: VirtAddr, _new_phys: PhysAddr, _new_flags: u64) {}
+    pub fn cow_bit() -> u64 { 0 }
+    pub fn encode_prot_marker(_prot: u8) -> u64 { 0 }
+    pub fn pte_flags(_flags: MappingFlags) -> u64 { 0 }
     /// Identity-map translation in native mode: VA == PA.
     pub fn translate(&self, va: VirtAddr) -> Result<PhysAddr, MemoryError> {
         Ok(PhysAddr::new(va.as_usize()))
     }
+    pub fn translate_writable(&self, _va: VirtAddr) -> Result<PhysAddr, MemoryError> {
+        Err(MemoryError::NotMapped)
+    }
+    pub fn read_leaf_pte(&self, _va: VirtAddr) -> u64 { 0 }
+    pub fn decode_prot_marker(_raw: u64) -> (bool, u8) { (false, 0) }
+    pub fn prot_none_bit() -> u64 { 0 }
+    /// # Safety
+    /// No-op on native — there is no hardware TLB.
+    pub unsafe fn flush_tlb_all() {}
+    /// # Safety
+    /// No-op on native — no real page table to walk.
+    pub unsafe fn walk_user_pages_mut<F>(&self, _f: F)
+    where F: FnMut(VirtAddr, PhysAddr, &mut rux_arch::pte::PageTableEntry) {}
+    /// # Safety
+    /// No-op on native.
+    pub unsafe fn free_user_address_space_cow(
+        &self,
+        _alloc: &mut dyn FrameAllocator,
+        _should_free_leaf: &mut dyn FnMut(PhysAddr) -> bool,
+    ) {}
+    /// # Safety
+    /// No-op on native.
+    pub unsafe fn resolve_cow_fault(
+        &self,
+        _virt: VirtAddr,
+        _alloc: &mut dyn FrameAllocator,
+        _refcount_fn: impl Fn(PhysAddr) -> u32,
+    ) -> Result<Option<PhysAddr>, ()> { Err(()) }
     pub fn walk_user_pages<F: FnMut(VirtAddr, PhysAddr, MappingFlags)>(&self, _f: F) {}
     pub fn root_phys(&self) -> PhysAddr { PhysAddr::new(0) }
     pub fn free_user_address_space(&self, _alloc: &mut dyn FrameAllocator) {}
 }
+
+// ── NativePte — stub PageTableEntryOps impl ──────────────────────────
+/// Stub PTE ops for native mode. All methods are no-ops or return defaults.
+/// Callers of `ArchPte` under native are compiled but the code paths are
+/// never actually exercised (no real MMU).
+pub struct NativePte;
+
+impl rux_arch::pte::PageTableEntryOps for NativePte {
+    fn encode(_phys: rux_klib::PhysAddr, _flags: u64) -> rux_arch::pte::PageTableEntry {
+        rux_arch::pte::PageTableEntry::EMPTY
+    }
+    fn phys_addr(_e: rux_arch::pte::PageTableEntry) -> rux_klib::PhysAddr { rux_klib::PhysAddr::new(0) }
+    fn flags(_e: rux_arch::pte::PageTableEntry) -> u64 { 0 }
+    fn is_present(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn is_writable(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn is_user(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn is_huge(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn is_global(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn is_dirty(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn is_accessed(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn is_executable(_e: rux_arch::pte::PageTableEntry) -> bool { false }
+    fn set_present(_e: &mut rux_arch::pte::PageTableEntry, _v: bool) {}
+    fn set_writable(_e: &mut rux_arch::pte::PageTableEntry, _v: bool) {}
+}
+
+// ── user_regs shims (for ptrace GETREGS/SETREGS under native) ────────
+pub const USER_REGS_SIZE: usize = 216;
+/// # Safety
+/// No-op stub — native has no user register frame.
+pub unsafe fn read_user_regs(_buf: *mut u64) {}
+/// # Safety
+/// No-op stub — native has no user register frame.
+pub unsafe fn write_user_regs(_buf: *const u64) {}
 
 // ── MemoryLayout ─────────────────────────────────────────────────────
 

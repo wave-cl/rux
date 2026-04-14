@@ -92,9 +92,9 @@ pub unsafe fn locked_wake_task(idx: usize) {
 pub unsafe fn send_resched_ipi_if_remote(target_cpu: u32) {
     let my_cpu = crate::percpu::cpu_id() as u32;
     if target_cpu != my_cpu && crate::percpu::cpu(target_cpu as usize).online {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(feature = "native")))]
         crate::arch::x86_64::apic::send_reschedule(target_cpu as usize);
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(all(target_arch = "aarch64", not(feature = "native")))]
         crate::arch::aarch64::gic::send_reschedule(target_cpu as usize);
     }
 }
