@@ -290,6 +290,9 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 python3 /usr/share/rux-tests/ptimer.py 2>&1
+python3 /usr/share/rux-tests/cputimer.py 2>&1
+python3 /usr/share/rux-tests/waitid_test.py 2>&1
+python3 /usr/share/rux-tests/pidfd_test.py 2>&1
 python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',7777)); s.listen(1); print('listen_ok'); s.close()" 2>&1
 python3 -c "
 import socket,os
@@ -532,6 +535,9 @@ check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
 check "posix timer"          "posix_timer_ok"
+check "posix cpu timer"      "cputimer_ok"
+check "waitid"               "waitid_42"
+check "pidfd send signal"    "pidfd_ok"
 check "tcp listen"           "listen_ok"
 check "loopback tcp"         "loopback_tcp_ok"
 check "python json"          "json_ok"
@@ -777,6 +783,9 @@ os.close(r);os.close(w);ep.close()
 " 2>&1
 python3 -c "import threading; t=threading.Thread(target=lambda: print('thread_ok')); t.start(); t.join()" 2>&1
 python3 /usr/share/rux-tests/ptimer.py 2>&1
+python3 /usr/share/rux-tests/cputimer.py 2>&1
+python3 /usr/share/rux-tests/waitid_test.py 2>&1
+python3 /usr/share/rux-tests/pidfd_test.py 2>&1
 python3 -c "
 import socket,os
 s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -1002,6 +1011,9 @@ check "mincore"              "mincore_ok"
 check "epoll pipe"           "epoll_ok"
 check "python threading"     "thread_ok"
 check "posix timer"          "posix_timer_ok"
+check "posix cpu timer"      "cputimer_ok"
+check "waitid"               "waitid_42"
+check "pidfd send signal"    "pidfd_ok"
 check "loopback tcp"         "loopback_tcp_ok"
 check "python json"          "json_ok"
 check "python hashlib"       "hash_2cf24dba"

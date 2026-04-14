@@ -357,6 +357,69 @@ k='ok' if rm>0 else 'zero'
 r=S(D,ti.value)
 print('posix_timer_'+k if r==0 else 'del_fail')
 PYTEST
+    cat > "$STAGING/usr/share/rux-tests/cputimer.py" << 'PYTEST'
+import ctypes,struct,os,time,signal
+L=ctypes.CDLL(None,use_errno=True)
+S=L.syscall
+S.restype=ctypes.c_long
+a=os.uname().machine
+if a=='aarch64':C,T,G,D=107,110,108,111
+else:C,T,G,D=222,223,224,226
+# Ignore SIGALRM so default-terminate doesn't kill us
+signal.signal(signal.SIGALRM, signal.SIG_IGN)
+ti=ctypes.c_int(-1)
+r=S(C,3,0,ctypes.byref(ti))
+if r!=0:print('cputimer_create_fail');exit()
+# 30ms of CPU time, one-shot
+b=ctypes.create_string_buffer(struct.pack('qqqq',0,0,0,30000000))
+r=S(T,ti.value,0,b,0)
+if r!=0:print('cputimer_set_fail');exit()
+# Burn CPU and poll timer_gettime; expired timer reports remaining=0
+out=ctypes.create_string_buffer(32)
+deadline=time.monotonic()+3.0
+expired=False
+while time.monotonic()<deadline:
+    for _ in range(20000): pass
+    S(G,ti.value,out)
+    v=struct.unpack('qqqq',out.raw)
+    rem=v[2]*1000000000+v[3]
+    if rem==0:
+        expired=True
+        break
+S(D,ti.value)
+print('cputimer_ok' if expired else 'cputimer_fail')
+PYTEST
+    cat > "$STAGING/usr/share/rux-tests/waitid_test.py" << 'PYTEST'
+import ctypes,os
+L=ctypes.CDLL(None,use_errno=True)
+pid=os.fork()
+if pid==0:
+    os._exit(42)
+infop=ctypes.create_string_buffer(128)
+r=L.waitid(1,pid,infop,4)
+if r!=0:print('waitid_fail');exit()
+status=ctypes.c_int.from_buffer(infop,24).value
+print('waitid_'+str(status))
+PYTEST
+    cat > "$STAGING/usr/share/rux-tests/pidfd_test.py" << 'PYTEST'
+import ctypes,os,signal,time
+L=ctypes.CDLL(None,use_errno=True)
+S=L.syscall
+S.restype=ctypes.c_long
+pid=os.fork()
+if pid==0:
+    signal.signal(signal.SIGUSR1, lambda s,f: os._exit(7))
+    time.sleep(2)
+    os._exit(0)
+time.sleep(0.2)
+fd=S(434,pid,0)
+if fd<0:print('pidfd_open_fail');exit()
+r=S(424,fd,10,0,0)
+if r!=0:print('pidfd_send_fail');exit()
+_,st=os.waitpid(pid,0)
+os.close(fd)
+print('pidfd_ok' if os.WEXITSTATUS(st)==7 else 'pidfd_bad')
+PYTEST
 
     # Create ext2 image
     rm -f "$OUTPUT"
