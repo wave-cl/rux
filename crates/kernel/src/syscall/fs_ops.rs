@@ -32,6 +32,9 @@ unsafe fn synthetic_stat(buf: usize, mode: u32, fd: usize) {
 /// fstat(fd, statbuf) — POSIX.1
 pub fn fstat(fd: usize, buf: usize) -> isize {
     if buf == 0 { return crate::errno::EFAULT; }
+    // Bounds check: any fd >= MAX_FDS is invalid (would otherwise panic on
+    // out-of-bounds array access below).
+    if fd >= fdt::MAX_FDS { return crate::errno::EBADF; }
     if fd <= 2 && fdt::is_console_fd(fd) {
         unsafe { synthetic_stat(buf, 0o20666, fd); } // S_IFCHR | 0666
         return 0;
