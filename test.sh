@@ -453,7 +453,7 @@ printf "\n\033[1m── x86_64 ──\033[0m\n"
 CURRENT_ARCH=x86_64
 
 # Boot
-check "boot banner"             "rux 0.66.0 (x86_64)"
+check "boot banner"             "rux 0.67.0 (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -467,7 +467,7 @@ check "alpine issue"            "Alpine Linux"
 check "apk available"           "apk-tools"
 
 # Core commands
-check "uname"                   "rux rux 0.66.0"
+check "uname"                   "rux rux 0.67.0"
 check "cat /etc/passwd"         "root:"
 check "whoami"                  "root"
 check "hostname"                "rux"
@@ -509,7 +509,7 @@ check "proc/1/cmdline"          "init"
 check "stat"                    "File:"
 check "df"                      "/dev/vda"
 check "uptime"                  "up"
-check "proc/sys/kernel/osrelease" "0.66.0"
+check "proc/sys/kernel/osrelease" "0.67.0"
 check "proc/sys/kernel/hostname"  "rux"
 check "proc/sys/kernel/ostype"    "Linux"
 check "proc/sys dir"              "kernel"
@@ -943,7 +943,7 @@ CMDS
 echo "$OUTPUT" > /tmp/rux_test_aarch64.log
 
 # Boot
-check "boot banner"             "rux 0.66.0 (aarch64)"
+check "boot banner"             "rux 0.67.0 (aarch64)"
 check "MMU enabled"             "MMU enabled"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -956,7 +956,7 @@ check "alpine release"          "3.21"
 check "apk available"           "apk-tools"
 
 # Core commands
-check "uname"                   "rux rux 0.66.0"
+check "uname"                   "rux rux 0.67.0"
 check "cat /etc/passwd"         "root:"
 check "whoami"                  "root"
 check "hostname"                "rux"
@@ -997,7 +997,7 @@ check "proc/1/cmdline"          "init"
 check "stat"                    "File:"
 check "df"                      "/dev/vda"
 check "uptime"                  "up"
-check "proc/sys/kernel/osrelease" "0.66.0"
+check "proc/sys/kernel/osrelease" "0.67.0"
 check "proc/sys/kernel/hostname"  "rux"
 check "proc/sys/kernel/ostype"    "Linux"
 check "proc/sys dir"              "kernel"
