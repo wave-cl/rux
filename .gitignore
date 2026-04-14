@@ -11,3 +11,5 @@ crates/vfs/fuzz/corpus/
 crates/vfs/fuzz/artifacts/
 user/ld-musl-*-stripped*
 rootfs/*.img
+mutants.out/
+mutants.out.old/

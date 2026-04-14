@@ -1,0 +1,13 @@
+# Mutation testing baseline (cargo-mutants).
+#
+# Run via:
+#   tools/mutants.sh <module>
+#
+# Score format: <caught> / <viable> mutants caught (<percent>%).
+# "unviable" = the mutation doesn't compile; not a test-quality issue.
+#
+# A dropping score is a regression: it means a test was removed or
+# weakened and some mutation now slips through undetected. Whenever
+# this file is touched, the accompanying commit should explain why.
+
+deadline_queue: 45/45 caught (100%), 1 unviable  [rux commit b30a33b, cargo-mutants 27.0.0]
