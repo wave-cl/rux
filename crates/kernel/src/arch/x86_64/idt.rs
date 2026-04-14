@@ -397,19 +397,20 @@ unsafe fn interrupt_dispatch_inner(vector: u64, error_code: u64, frame: *mut u8)
             // Unresolvable user-space fault → kill process (SIGSEGV)
             if cr2 < 0x0000_8000_0000_0000u64 {
                 unsafe {
-                    // Suppress log for NULL dereferences (addr < 4096).
-                    // Common in thread cleanup during exit_group (e.g., Ruby GC).
-                    if cr2 >= 0x1000 {
-                        use rux_arch::ConsoleOps;
-                        let mut hb = [0u8; 16];
-                        let rip = *((frame as *const u64).add(17));
-                        crate::arch::Arch::write_str("rux: SIGSEGV addr=0x");
-                        crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, cr2 as usize));
-                        crate::arch::Arch::write_str(" rip=0x");
-                        crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, rip as usize));
-                        if !user { crate::arch::Arch::write_str(" KERNEL"); }
-                        crate::arch::Arch::write_str("\n");
-                    }
+                    // Print every user SIGSEGV including NULL derefs so
+                    // real kernel bugs can't hide behind "ruby GC does
+                    // NULL derefs, ignore it" suppression. We used to
+                    // skip the log when cr2 < 0x1000; that hid the
+                    // sigaction-leak bug for several sessions.
+                    use rux_arch::ConsoleOps;
+                    let mut hb = [0u8; 16];
+                    let rip = *((frame as *const u64).add(17));
+                    crate::arch::Arch::write_str("rux: SIGSEGV addr=0x");
+                    crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, cr2 as usize));
+                    crate::arch::Arch::write_str(" rip=0x");
+                    crate::arch::Arch::write_bytes(rux_klib::fmt::usize_to_hex(&mut hb, rip as usize));
+                    if !user { crate::arch::Arch::write_str(" KERNEL"); }
+                    crate::arch::Arch::write_str("\n");
                     crate::syscall::linux::exit_group(139);
                 }
             }

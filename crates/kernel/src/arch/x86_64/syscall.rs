@@ -268,15 +268,35 @@ unsafe impl rux_arch::SignalOps for super::X86_64 {
     unsafe fn sig_redirect_to_handler(handler: usize, signum: u8) {
         let kt = crate::percpu::this_cpu().syscall_kstack_top as usize;
         core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);
-        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);
+        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64); // RDI = sig
     }
 
     unsafe fn sig_redirect_to_handler_siginfo(handler: usize, signum: u8, siginfo_ptr: usize) {
+        // The C handler signature is:
+        //     void handler(int sig, siginfo_t *info, void *ucontext)
+        // SysV x86_64 ABI: RDI=sig, RSI=info, RDX=ucontext.
+        //
+        // syscall_entry_gs pushes registers in this order (relative to
+        // syscall_kstack_top / `kt`):
+        //   kt-8:   rcx (user RIP → overwritten with handler)
+        //   kt-16:  r11 (rflags)
+        //   kt-24:  rbx, kt-32: rbp, kt-40: r12, kt-48: r13, kt-56: r14, kt-64: r15
+        //   kt-72:  rax (syscall nr, then syscall result)
+        //   kt-80:  rdi (arg0) → signum
+        //   kt-88:  rsi (arg1) → siginfo_ptr
+        //   kt-96:  rdx (arg2) → ucontext (NULL)
+        //
+        // Prior code wrote siginfo_ptr to kt-72 (RAX) and 0 to kt-64 (R15),
+        // which left RSI untouched. When the SIGCHLD handler dereferenced
+        // info->field (e.g. si_pid), RSI was whatever leftover it inherited
+        // from the syscall args — frequently NULL — causing a faulting load
+        // at `NULL + field_offset` (0x11 for si_pid) and killing the shell
+        // right after its child exited. This was the ruby post-exit SIGSEGV.
         let kt = crate::percpu::this_cpu().syscall_kstack_top as usize;
         core::ptr::write_volatile((kt - 8) as *mut u64, handler as u64);
-        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);
-        core::ptr::write_volatile((kt - 72) as *mut u64, siginfo_ptr as u64);
-        core::ptr::write_volatile((kt - 64) as *mut u64, 0u64);
+        core::ptr::write_volatile((kt - 80) as *mut u64, signum as u64);      // RDI = sig
+        core::ptr::write_volatile((kt - 88) as *mut u64, siginfo_ptr as u64); // RSI = info
+        core::ptr::write_volatile((kt - 96) as *mut u64, 0u64);               // RDX = ucontext
     }
 
     unsafe fn sig_restore_frame(frame_addr: usize) -> (i64, u64) {

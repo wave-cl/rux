@@ -1590,16 +1590,21 @@ pub unsafe fn post_syscall<S: rux_arch::SignalOps>(result: i64) -> i64 {
 /// Deliver a pending signal to the user-space handler.
 /// Thin wrapper around `rux_proc::signal::deliver_signal` that supplies kernel state.
 pub unsafe fn generic_deliver_signal<S: rux_arch::SignalOps>(syscall_result: i64) -> i64 {
-    // Signal delivery uses process().signal_cold (global) rather than the
-    // per-task SIGNAL_COLD_BYTES slot. Copying >512 bytes on the aarch64
-    // syscall return path corrupts state. Since sigaction writes to both
-    // the per-task slot and process().signal_cold, and exec resets both,
-    // the global is correct for the current task during delivery.
+    // Signal delivery reads the sigaction table from the per-task
+    // SIGNAL_COLD_BYTES slot (via signal_cold_for), not from the
+    // global process().signal_cold. The global is NOT swapped by
+    // swap_process_state (it's a big struct, and doing a 512-byte
+    // memcpy on the aarch64 syscall return path corrupted state in
+    // earlier attempts), so it stays pinned to whichever task last
+    // called sigaction. Using the per-task slot directly fixes the
+    // "ruby's sigaction handler leaks into the parent shell and
+    // makes SIGCHLD jump to an unmapped address" bug.
     let idx = crate::task_table::current_task_idx();
     let std_info = crate::task_table::std_siginfo_for(idx);
+    let cold = crate::task_table::signal_cold_for(idx);
     rux_proc::signal::deliver_signal_full::<S>(
         &mut (*process()).signal_hot,
-        &mut (*process()).signal_cold,
+        cold,
         &(*process()).signal_restorer,
         syscall_result,
         |status| posix::exit(status),
