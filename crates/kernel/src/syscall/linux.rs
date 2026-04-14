@@ -184,16 +184,41 @@ pub fn waitid(idtype: usize, id: usize, infop: usize, options: usize) -> isize {
     0
 }
 
-/// ptrace(request, pid, addr, data) — stub. We don't actually trace,
-/// but recognize common requests so probing programs see sensible errors.
-pub fn ptrace(request: usize, pid: usize, _addr: usize, _data: usize) -> isize {
+/// ptrace(request, pid, addr, data) — partial implementation.
+/// PTRACE_TRACEME / SETOPTIONS succeed; PTRACE_GETREGS / SETREGS work for
+/// self-introspection (target_pid == current_pid); cross-process tracing
+/// is not supported and returns EPERM.
+pub fn ptrace(request: usize, pid: usize, _addr: usize, data: usize) -> isize {
     match request {
-        0 => 0,           // PTRACE_TRACEME: pretend to enable tracing
-        0x4200 => 0,      // PTRACE_SETOPTIONS: accept silently
-        // Memory peek/poke and register access: we don't support cross-AS access
-        1 | 2 | 3 | 4 | 5 | 6 | 12 | 13 | 14 | 15 | 24 => crate::errno::EPERM,
+        0 => 0,           // PTRACE_TRACEME
+        0x4200 => 0,      // PTRACE_SETOPTIONS
+        // PTRACE_GETREGS (12) / PTRACE_SETREGS (13) — self only.
+        // Linux signature: ptrace(req, pid, addr, data); the user buffer
+        // is `data` (4th arg), not `addr`.
+        12 => unsafe {
+            if pid as u32 != crate::task_table::current_pid() {
+                return crate::errno::EPERM;
+            }
+            if data == 0 || crate::uaccess::validate_user_ptr(data, crate::arch::USER_REGS_SIZE).is_err() {
+                return crate::errno::EFAULT;
+            }
+            crate::arch::read_user_regs(data as *mut u64);
+            0
+        }
+        13 => unsafe {
+            if pid as u32 != crate::task_table::current_pid() {
+                return crate::errno::EPERM;
+            }
+            if data == 0 || crate::uaccess::validate_user_ptr(data, crate::arch::USER_REGS_SIZE).is_err() {
+                return crate::errno::EFAULT;
+            }
+            crate::arch::write_user_regs(data as *const u64);
+            0
+        }
+        // Other memory/register operations: cross-AS access not supported.
+        1 | 2 | 3 | 4 | 5 | 6 | 14 | 15 | 24 => crate::errno::EPERM,
         // Process-control requests: ESRCH if pid missing, else EPERM
-        7 | 8 | 9 | 16 | 17 | 0x4206 => unsafe {
+        7 | 8 | 9 | 16 | 17 | 0x4206 => {
             if crate::task_table::find_task_by_pid(pid as u32).is_some() {
                 crate::errno::EPERM
             } else {

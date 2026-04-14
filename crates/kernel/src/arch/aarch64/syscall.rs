@@ -455,6 +455,41 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 437] = {
 
 /// Per-CPU exception frame pointer — per-CPU for SMP safety.
 pub static mut CURRENT_REGS_PTR_PERCPU: [*mut u64; crate::percpu::MAX_CPUS] = [core::ptr::null_mut(); crate::percpu::MAX_CPUS];
+
+/// Linux user_pt_regs size on aarch64 (regs[31] + sp + pc + pstate = 34 u64).
+pub const USER_REGS_SIZE: usize = 272;
+
+/// Read user register state at the time of the current syscall into the
+/// caller's buffer (Linux user_pt_regs layout, 34 u64).
+pub unsafe fn read_user_regs(buf: *mut u64) {
+    let regs = CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
+    if regs.is_null() { return; }
+    // x0..x30 → regs[0..31]
+    for i in 0..31 {
+        *buf.add(i) = *regs.add(i);
+    }
+    // sp (user) — read sp_el0
+    let sp: u64;
+    core::arch::asm!("mrs {}, sp_el0", out(reg) sp, options(nostack));
+    *buf.add(31) = sp;
+    // pc (user) — saved ELR_EL1
+    *buf.add(32) = *regs.add(31);
+    // pstate — saved SPSR_EL1
+    *buf.add(33) = *regs.add(32);
+}
+
+/// Write user register state from a Linux user_pt_regs buffer.
+pub unsafe fn write_user_regs(buf: *const u64) {
+    let regs = CURRENT_REGS_PTR_PERCPU[crate::percpu::cpu_id()];
+    if regs.is_null() { return; }
+    for i in 0..31 {
+        *regs.add(i) = *buf.add(i);
+    }
+    let sp = *buf.add(31);
+    core::arch::asm!("msr sp_el0, {}", in(reg) sp, options(nostack));
+    *regs.add(31) = *buf.add(32); // ELR
+    *regs.add(32) = *buf.add(33); // SPSR
+}
 /// Legacy alias.
 pub static mut CURRENT_REGS_PTR: *mut u64 = core::ptr::null_mut();
 

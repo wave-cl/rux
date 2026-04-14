@@ -317,6 +317,87 @@ fn translate_x86_64(nr: usize) -> crate::syscall::Syscall {
     SYSCALL_TABLE_X86.get(nr).copied().unwrap_or(Syscall::Unknown(nr))
 }
 
+/// Linux user_regs_struct size on x86_64 (27 u64 = 216 bytes).
+pub const USER_REGS_SIZE: usize = 216;
+
+/// Read user register state at the time of the current syscall into the
+/// caller's buffer (Linux user_regs_struct layout, 27 u64). Used by
+/// PTRACE_GETREGS for self-introspection.
+pub unsafe fn read_user_regs(buf: *mut u64) {
+    let pc = crate::percpu::this_cpu();
+    let kt = pc.syscall_kstack_top as usize;
+    let read = |off: usize| core::ptr::read_volatile((kt - off) as *const u64);
+    let saved_rip = read(8);
+    let saved_rflags = read(16);
+    let rbx = read(24);
+    let rbp = read(32);
+    let r12 = read(40);
+    let r13 = read(48);
+    let r14 = read(56);
+    let r15 = read(64);
+    let rax = read(72);
+    let rdi = read(80);
+    let rsi = read(88);
+    let rdx = read(96);
+    let r10 = read(104);
+    let r8  = read(112);
+    let r9  = read(120);
+    let rsp = pc.saved_user_rsp as u64;
+    let tls = crate::task_table::TASK_TABLE[crate::task_table::current_task_idx()].tls;
+    // Linux user_regs_struct order
+    *buf.add(0)  = r15;
+    *buf.add(1)  = r14;
+    *buf.add(2)  = r13;
+    *buf.add(3)  = r12;
+    *buf.add(4)  = rbp;
+    *buf.add(5)  = rbx;
+    *buf.add(6)  = saved_rflags; // r11 == RFLAGS at sysret time
+    *buf.add(7)  = r10;
+    *buf.add(8)  = r9;
+    *buf.add(9)  = r8;
+    *buf.add(10) = rax;       // ax (current syscall result, post-call)
+    *buf.add(11) = saved_rip; // cx == saved RIP at sysret time
+    *buf.add(12) = rdx;
+    *buf.add(13) = rsi;
+    *buf.add(14) = rdi;
+    *buf.add(15) = rax;       // orig_ax (syscall number when entered)
+    *buf.add(16) = saved_rip; // ip
+    *buf.add(17) = 0x33;      // cs (user code segment)
+    *buf.add(18) = saved_rflags; // flags
+    *buf.add(19) = rsp;       // sp
+    *buf.add(20) = 0x2B;      // ss (user data segment)
+    *buf.add(21) = tls;       // fs_base
+    *buf.add(22) = 0;         // gs_base
+    *buf.add(23) = 0;         // ds
+    *buf.add(24) = 0;         // es
+    *buf.add(25) = 0;         // fs
+    *buf.add(26) = 0;         // gs
+}
+
+/// Write user register state from a Linux user_regs_struct buffer.
+/// Used by PTRACE_SETREGS for self-introspection.
+pub unsafe fn write_user_regs(buf: *const u64) {
+    let pc = crate::percpu::this_cpu();
+    let kt = pc.syscall_kstack_top as usize;
+    let write = |off: usize, v: u64| core::ptr::write_volatile((kt - off) as *mut u64, v);
+    write(64,  *buf.add(0));   // r15
+    write(56,  *buf.add(1));   // r14
+    write(48,  *buf.add(2));   // r13
+    write(40,  *buf.add(3));   // r12
+    write(32,  *buf.add(4));   // rbp
+    write(24,  *buf.add(5));   // rbx
+    write(104, *buf.add(7));   // r10
+    write(120, *buf.add(8));   // r9
+    write(112, *buf.add(9));   // r8
+    write(72,  *buf.add(10));  // rax
+    write(96,  *buf.add(12));  // rdx
+    write(88,  *buf.add(13));  // rsi
+    write(80,  *buf.add(14));  // rdi
+    write(8,   *buf.add(16));  // saved RIP
+    write(16,  *buf.add(18));  // saved RFLAGS
+    pc.saved_user_rsp = *buf.add(19); // rsp
+}
+
 /// Compile-time syscall number → Syscall enum table for x86_64 Linux.
 /// Index = Linux syscall number. Unknown entries are Syscall::Unknown(0)
 /// (never returned — translate_x86_64 uses .get() which returns None for gaps).
@@ -513,7 +594,7 @@ pub fn handle_syscall(_vector: u64, _error_code: u64, frame: *mut u8) {
         let a2 = *regs.add(11);   // RDX
         let a3 = *regs.add(5);    // R10
         let a4 = *regs.add(7);    // R8
-        let a5 = *regs.add(6);    // R9
+        let _a5 = *regs.add(6);   // R9 (unused — vfork passes ≤5 args)
 
         let result = syscall_dispatch_linux(nr, a0, a1, a2, a3, a4);
         *regs.add(14) = result as u64;

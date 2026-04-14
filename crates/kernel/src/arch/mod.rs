@@ -36,6 +36,12 @@ pub type ArchPte = rux_arch::aarch64::pte::Aarch64Pte;
 
 pub use rux_arch::StatLayout;
 
+/// Re-export arch-specific user_regs helpers (for ptrace GETREGS/SETREGS).
+#[cfg(all(target_arch = "x86_64", not(feature = "native")))]
+pub use x86_64::syscall::{USER_REGS_SIZE, read_user_regs, write_user_regs};
+#[cfg(all(target_arch = "aarch64", not(feature = "native")))]
+pub use aarch64::syscall::{USER_REGS_SIZE, read_user_regs, write_user_regs};
+
 /// Re-export arch-specific device probes (used by boot.rs).
 #[cfg(all(target_arch = "x86_64", not(feature = "native"), feature = "net"))]
 pub use x86_64::probe_and_init_net;
