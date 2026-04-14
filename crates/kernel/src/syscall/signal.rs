@@ -99,20 +99,16 @@ pub fn sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, sigsetsize: us
     0
 }
 
-/// Linux check_kill_permission: root can signal anyone, non-root must
-/// match target's real UID. Currently all tasks run as euid 0 (root),
-/// so this always passes — but the structure is correct for when
-/// per-process credentials are added.
-///
-/// Note: TaskSlot doesn't store uid yet. When it does, check against
-/// the target's real uid and saved-set-user-ID.
+/// Linux check_kill_permission: root can signal anyone; otherwise the
+/// sender's real or effective uid must match the target's real or
+/// saved-set-user-id.
 #[inline]
-unsafe fn check_kill_permission(_target_idx: usize) -> bool {
-    let my_euid = super::process().euid;
-    if my_euid == 0 { return true; }
-    // TODO: when TaskSlot gains uid field, check:
-    // my_euid == TASK_TABLE[target_idx].uid || my_euid == TASK_TABLE[target_idx].saved_uid
-    false // non-root cannot signal others until per-task UIDs exist
+unsafe fn check_kill_permission(target_idx: usize) -> bool {
+    let me = super::process();
+    if me.euid == 0 { return true; }
+    let target = &crate::task_table::TASK_TABLE[target_idx];
+    me.euid == target.uid || me.euid == target.suid
+        || me.uid == target.uid || me.uid == target.suid
 }
 
 /// kill(pid, sig) — POSIX.1: send a signal.
