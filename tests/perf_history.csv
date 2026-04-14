@@ -1,0 +1,3 @@
+commit,date,arch,forkexit_us,getpid_ns,mmap4k_ns,openclose_ns
+b30a33b,2026-04-14T11:35:04Z,x86_64,1300,430,4000,18000
+b30a33b,2026-04-14T11:35:04Z,aarch64,420,930,5000,20000

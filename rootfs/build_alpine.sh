@@ -443,6 +443,9 @@ PYTEST
     # at the repo root. Copy it into the rootfs so rux runs exactly the same
     # script that we ran on Linux to capture the golden reference.
     cp "$(dirname "$0")/../tools/syscall_conf.py" "$STAGING/usr/share/rux-tests/syscall_conf.py"
+    # Phase 5 perf probe: userspace latency metrics (getpid, open+close,
+    # fork+exit, mmap+munmap). test.sh extracts and compares against history.
+    cp "$(dirname "$0")/../tools/perf_probe.py" "$STAGING/usr/share/rux-tests/perf_probe.py"
 
     # Create ext2 image
     rm -f "$OUTPUT"

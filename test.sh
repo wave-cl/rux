@@ -282,7 +282,7 @@ curl -sk https://example.com 2>&1 | head -1
 python3 /usr/share/rux-tests/socketpair.py 2>&1
 python3 /usr/share/rux-tests/pipestress.py 2>&1
 python3 /usr/share/rux-tests/forkbomb.py 2>&1
-echo "===CONF==="; python3 /usr/share/rux-tests/syscall_conf.py 2>&1; echo "===CONF-END==="
+echo "===CONF==="; python3 /usr/share/rux-tests/syscall_conf.py 2>&1; echo "===CONF-END==="; echo "===PERF==="; python3 /usr/share/rux-tests/perf_probe.py 2>&1; echo "===PERF-END==="
 echo all_tests_done
 perl -e 'print "perl:" . (6*7) . "\n"' 2>&1
 python3 --version 2>&1
@@ -790,7 +790,7 @@ python3 -c "import time;a=time.monotonic();time.sleep(0.1);d=time.monotonic()-a;
 python3 /usr/share/rux-tests/socketpair.py 2>&1
 python3 /usr/share/rux-tests/pipestress.py 2>&1
 python3 /usr/share/rux-tests/forkbomb.py 2>&1
-echo "===CONF==="; python3 /usr/share/rux-tests/syscall_conf.py 2>&1; echo "===CONF-END==="
+echo "===CONF==="; python3 /usr/share/rux-tests/syscall_conf.py 2>&1; echo "===CONF-END==="; echo "===PERF==="; python3 /usr/share/rux-tests/perf_probe.py 2>&1; echo "===PERF-END==="
 echo all_tests_done
 sh -c 'echo subshell_ok'
 sh -c 'echo fork1; echo fork2' | wc -l
@@ -1151,6 +1151,33 @@ diff_conformance() {
 }
 $RUN_X86 && diff_conformance x86_64
 $RUN_AA64 && diff_conformance aarch64
+
+# ── Performance regression check (Phase 5) ────────────────────────
+# Extract perf_probe output from the ext serial log, append to
+# tests/perf_history.csv, and alert if any metric regressed >25%
+# from the last commit's row for this arch. 25% is generous slack
+# because VMs on this hardware are noisy; tighten later once we have
+# several weeks of trend data.
+check_perf() {
+    local arch="$1"
+    local serial="/tmp/rux_serial_${arch}_ext.log"
+    [ -f "$serial" ] || return 0
+    local dump="/tmp/rux_perf_${arch}.txt"
+    strings "$serial" 2>/dev/null \
+        | awk '/===PERF===/{on=1;next}/===PERF-END===/{on=0}on' \
+        > "$dump"
+    if [ ! -s "$dump" ]; then return 0; fi
+    if python3 tools/perf_check.py "$arch" "$dump"; then
+        pass "perf no regression ($arch)"
+    else
+        fail "perf regression ($arch)"
+    fi
+}
+if $RUN_X86 || $RUN_AA64; then
+    printf "\n\033[1m── perf ──\033[0m\n"
+fi
+$RUN_X86 && check_perf x86_64
+$RUN_AA64 && check_perf aarch64
 
 # ── Coverage report ────────────────────────────────────────────────
 # Extract PR_GET_COVERAGE dumps from per-group serial logs and hand
