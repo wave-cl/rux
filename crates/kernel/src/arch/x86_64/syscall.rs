@@ -143,6 +143,14 @@ extern "C" fn syscall_dispatch_linux(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64
     // Phase 1 coverage: record that this syscall nr was exercised.
     crate::syscall::record_syscall(nr);
 
+    // nr 111 is getpgrp() — takes no args and returns current process's
+    // pgid. Dispatch to posix::getpgid(0). This is simpler than adding
+    // a separate enum variant because the Getpgid handler already
+    // special-cases pid==0 to mean "the caller's pgid."
+    if nr == 111 {
+        return crate::syscall::posix::getpgid(0) as i64;
+    }
+
     // Process creation syscalls (handled before generic dispatch)
     match nr {
         // 56=clone(flags=rdi, stack=rsi, ptid=rdx, ctid=r10, tls=r8)
@@ -497,9 +505,11 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     t[107] = Syscall::Geteuid;   t[108] = Syscall::Getegid;
     t[105] = Syscall::Setuid;    t[106] = Syscall::Setgid;
     t[113] = Syscall::Setreuid;  t[114] = Syscall::Setregid;
-    t[115] = Syscall::Getgroups; t[116] = Syscall::Getgroups;
-    // Process groups
-    t[109] = Syscall::Setpgid;   t[111] = Syscall::Getpgid;
+    // Linux x86_64: 115 getgroups, 116 setgroups.
+    t[115] = Syscall::Getgroups; t[116] = Syscall::SetGroups;
+    // Process groups. nr 111 (getpgrp) is handled in syscall_dispatch_linux
+    // as a special case because rux has no Getpgrp enum variant.
+    t[109] = Syscall::Setpgid;
     t[112] = Syscall::Setsid;    t[121] = Syscall::Getpgid;
     // Time / info
     t[96] = Syscall::Gettimeofday; t[97] = Syscall::Getrlimit;
@@ -558,8 +568,15 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     t[275] = Syscall::Splice;    t[278] = Syscall::Vmsplice;
     t[276] = Syscall::Tee;
     // Batch 2: process
-    t[148] = Syscall::SchedGetparam; t[142] = Syscall::SchedSetparam;
-    t[145] = Syscall::SchedGetscheduler; t[144] = Syscall::SchedSetscheduler;
+    // x86_64: 142 sched_setparam, 143 sched_getparam, 144 sched_setscheduler,
+    // 145 sched_getscheduler, 148 sched_rr_get_interval.
+    // Previously t[148] was wrongly set to SchedGetparam (148 is
+    // actually sched_rr_get_interval) and t[143] was missing.
+    // Fixed as part of the v0.69.5 systematic audit.
+    t[142] = Syscall::SchedSetparam;
+    t[143] = Syscall::SchedGetparam;
+    t[144] = Syscall::SchedSetscheduler;
+    t[145] = Syscall::SchedGetscheduler;
     t[203] = Syscall::SchedSetaffinity;
     t[118] = Syscall::Getresuid; t[120] = Syscall::Getresgid;
     t[117] = Syscall::Setresuid; t[119] = Syscall::Setresgid;

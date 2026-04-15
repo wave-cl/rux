@@ -411,8 +411,15 @@ const SYSCALL_TABLE_AA64: [crate::syscall::Syscall; 437] = {
     t[76] = Syscall::Splice;     t[75] = Syscall::Vmsplice;
     t[77] = Syscall::Tee;
     // Batch 2: process
-    t[122] = Syscall::SchedGetparam; t[118] = Syscall::SchedSetparam;
-    t[121] = Syscall::SchedGetscheduler; t[119] = Syscall::SchedSetscheduler;
+    // Linux asm-generic: 118 sched_setparam, 119 sched_setscheduler,
+    // 120 sched_getscheduler, 121 sched_getparam, 122 sched_setaffinity.
+    // Previously t[121] was wrongly set to SchedGetscheduler and
+    // t[120] was missing entirely. Fixed as part of the v0.69.5
+    // systematic audit.
+    t[118] = Syscall::SchedSetparam;
+    t[119] = Syscall::SchedSetscheduler;
+    t[120] = Syscall::SchedGetscheduler;
+    t[121] = Syscall::SchedGetparam;
     t[122] = Syscall::SchedSetaffinity;
     t[148] = Syscall::Getresuid; t[150] = Syscall::Getresgid;
     t[147] = Syscall::Setresuid; t[149] = Syscall::Setresgid;

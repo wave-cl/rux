@@ -447,5 +447,32 @@ ctx = ctypes.c_ulong(0)
 r = S(NR_IO_SETUP, 0, ctypes.addressof(ctx))
 check('io_setup(0 events) rejected', r < 0, f'got {r}')
 
+# ── Batch 6: scheduling + process groups (audit followups) ─────────────
+# These exercise syscall numbers that an earlier aarch64/x86_64 audit
+# found wired to the wrong handlers. Having explicit conformance
+# assertions locks in the fixes and catches future regressions.
+
+# getpgrp() takes no args, returns current process group id.
+# Round 5 caught x86_64 nr 111 pointing at Getpgid (which takes a pid
+# and returned junk when called via the no-arg getpgrp wrapper).
+L.getpgrp.restype = ctypes.c_int
+expect_ok('getpgrp > 0', L.getpgrp())
+
+# sched_getscheduler(0) must return a non-negative policy.
+# musl's libc wrapper is a stub that always returns -ENOSYS (see
+# git.musl-libc.org/cgit/musl/plain/src/sched/sched_getscheduler.c),
+# so we bypass it with raw syscall. Round 5 caught aarch64 nr 120
+# being unmapped and x86_64 nr 145 being correctly mapped (already).
+NR_SGS = 120 if mach == 'aarch64' else 145
+check('sched_getscheduler(0)', S(NR_SGS, 0) >= 0, f'got {S(NR_SGS, 0)}')
+
+# sched_getparam(0, &sp) — same musl stub story.
+# Pointer arg wrapped in c_ulong because ctypes' default variadic
+# marshalling on x86_64 promotes int-typed Python values to c_int
+# (32-bit) and silently truncates a 64-bit pointer to garbage.
+NR_SGP = 121 if mach == 'aarch64' else 143
+sp_buf = ctypes.create_string_buffer(32)
+check('sched_getparam(0)', S(NR_SGP, 0, ctypes.c_ulong(ctypes.addressof(sp_buf))) >= 0)
+
 # ── Final summary ──────────────────────────────────────────────────────
 print(f'conformance: passed={P} failed={F}')

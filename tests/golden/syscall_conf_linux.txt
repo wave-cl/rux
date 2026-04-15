@@ -91,4 +91,7 @@ PASS: tgkill(self, 0)
 PASS: timer_getoverrun(bad)
 PASS: getxattr(missing) rejected
 PASS: io_setup(0 events) rejected
-conformance: passed=93 failed=0
+PASS: getpgrp > 0
+PASS: sched_getscheduler(0)
+PASS: sched_getparam(0)
+conformance: passed=96 failed=0

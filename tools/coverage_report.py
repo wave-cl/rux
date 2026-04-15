@@ -122,6 +122,7 @@ AARCH64 = {
     109: "timer_getoverrun", 110: "timer_settime", 111: "timer_delete",
     112: "clock_settime", 113: "clock_gettime", 114: "clock_getres",
     115: "clock_nanosleep", 117: "ptrace",
+    120: "sched_getscheduler", 121: "sched_getparam",
     122: "sched_setaffinity", 123: "sched_getaffinity",
     124: "sched_yield", 129: "kill", 130: "tkill", 131: "tgkill",
     132: "sigaltstack", 133: "rt_sigsuspend", 134: "rt_sigaction",
