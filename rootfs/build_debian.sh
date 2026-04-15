@@ -77,8 +77,12 @@ exec 3>&1 1>&2
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq debootstrap
-debootstrap --variant=minbase --arch='"$DEB_ARCH"' '"$DEBIAN_SUITE"' \
-    /var/staging http://deb.debian.org/debian | tail -5
+# --include=python3 pulls in cpython + stdlib (~30 MB) so we can run
+# tools/syscall_conf.py inside the Debian VM during Phase B. Keeping
+# the package list short (just python3) holds the image at ~210 MB.
+debootstrap --variant=minbase --arch='"$DEB_ARCH"' \
+    --include=python3 \
+    '"$DEBIAN_SUITE"' /var/staging http://deb.debian.org/debian | tail -5
 
 # ── Customisation inside the staged tree ──────────────────────────
 echo rux > /var/staging/etc/hostname
@@ -93,6 +97,19 @@ sed -i "s|^root:[^:]*:|root::|" /var/staging/etc/shadow
 # layer, no surprises with mount-of-/dev/null in init context.
 rm -f /var/staging/usr/sbin/init
 ln -s /usr/bin/dash /var/staging/usr/sbin/init
+
+# Phase B runner: a non-interactive init that just runs the
+# conformance script with a start sentinel and exits. The test.sh
+# debian-conf group passes init=/sbin/phase-b on the kernel cmdline
+# so we never fight the dash-stdin terminal echo race for the
+# non-interactive workloads. (No apostrophes in this comment block:
+# we are inside a single-quoted sh -c body and a stray apostrophe
+# closes it, breaking the host parser.)
+echo "#!/bin/sh"                                              > /var/staging/usr/sbin/phase-b
+echo "echo ===PHASE_B_START==="                              >> /var/staging/usr/sbin/phase-b
+echo "/usr/bin/python3 /usr/share/rux-tests/syscall_conf.py" >> /var/staging/usr/sbin/phase-b
+echo "echo ===PHASE_B_END==="                                >> /var/staging/usr/sbin/phase-b
+chmod 755 /var/staging/usr/sbin/phase-b
 
 mkdir -p /var/staging/proc /var/staging/sys /var/staging/dev/pts /var/staging/run
 : > /var/staging/etc/fstab
@@ -137,28 +154,14 @@ tar -C /var/staging -cf - . >&3
     rm -f "$STAGING_HOST/staging.tar"
 }
 
-build_debian() {
-    local ARCH="$1"
-    local DEB_ARCH="$2"
-    local OUTPUT="$OUT_DIR/debian_${ARCH}.img"
-    local STAGING="$OUT_DIR/debian_staging_${ARCH}"
-
-    echo "Building Debian rootfs for $ARCH..."
-
-    debootstrap_in_docker "$ARCH" "$DEB_ARCH" "$STAGING"
-
-    echo "  Building ext2 image ($IMG_SIZE_MB MB)..."
-    rm -f "$OUTPUT"
-    dd if=/dev/zero of="$OUTPUT" bs=1M count=$IMG_SIZE_MB 2>/dev/null
-    "$MKE2FS" -t ext2 -b 1024 -d "$STAGING" -L debian-root "$OUTPUT" 2>/dev/null
-
-    # Same uid/gid fixup as build_alpine.sh: mke2fs -d preserves host
-    # uids on macOS. Patch every inode to uid=0, gid=0 so the kernel
-    # (which doesn't have our host's user table) can read everything.
-    echo "  Fixing file ownership..."
+# Patch every inode in an ext2 image to uid=0, gid=0. mke2fs -d
+# preserves host uids on macOS; rux has no user table so it needs
+# root-owned files. Same routine as build_alpine.sh.
+fix_ownership() {
+    local IMG="$1"
     python3 -c "
 import struct
-with open('$OUTPUT', 'r+b') as f:
+with open('$IMG', 'r+b') as f:
     f.seek(1024)
     sb = f.read(1024)
     log_bs = struct.unpack_from('<I', sb, 24)[0]
@@ -178,12 +181,51 @@ with open('$OUTPUT', 'r+b') as f:
             f.seek(off + 24)
             f.write(struct.pack('<H', 0))
 " 2>/dev/null
+}
 
-    local SIZE=$(wc -c < "$OUTPUT" | tr -d ' ')
-    echo "  → $OUTPUT ($SIZE bytes)"
+# Build a single ext2 image from a staging tree.
+mkimg() {
+    local IMG="$1" STAGING="$2" LABEL="$3"
+    rm -f "$IMG"
+    dd if=/dev/zero of="$IMG" bs=1M count=$IMG_SIZE_MB 2>/dev/null
+    "$MKE2FS" -t ext2 -b 1024 -d "$STAGING" -L "$LABEL" "$IMG" 2>/dev/null
+    fix_ownership "$IMG"
+    local SIZE=$(wc -c < "$IMG" | tr -d ' ')
+    echo "  → $IMG ($SIZE bytes)"
+}
 
-    # Keep the staging tree around if KEEP_STAGING=1 — it's handy for
-    # poking at the filesystem without re-running debootstrap.
+build_debian() {
+    local ARCH="$1"
+    local DEB_ARCH="$2"
+    local OUTPUT="$OUT_DIR/debian_${ARCH}.img"
+    local OUTPUT_PHASEB="$OUT_DIR/debian_phaseb_${ARCH}.img"
+    local STAGING="$OUT_DIR/debian_staging_${ARCH}"
+
+    echo "Building Debian rootfs for $ARCH..."
+
+    debootstrap_in_docker "$ARCH" "$DEB_ARCH" "$STAGING"
+
+    # Phase B: ship tools/syscall_conf.py into the rootfs so the
+    # debian conformance group can run the same script the glibc
+    # golden was captured from.
+    mkdir -p "$STAGING/usr/share/rux-tests"
+    cp "$ROOT/tools/syscall_conf.py" "$STAGING/usr/share/rux-tests/syscall_conf.py"
+
+    # Image 1: interactive Debian. /sbin/init -> dash, no Phase B
+    # runner. This is the image plain `TEST_ROOTFS=debian` will use.
+    echo "  Building interactive image..."
+    mkimg "$OUTPUT" "$STAGING" debian-root
+
+    # Image 2: Phase B conformance runner. Re-point /sbin/init at
+    # /sbin/phase-b so the kernel boots straight into the conformance
+    # script with no shell/stdin in the loop. We need a separate
+    # image because rux currently ignores the multiboot/PVH cmdline,
+    # so init=... cannot select between them at boot time.
+    rm -f "$STAGING/usr/sbin/init"
+    ln -s /usr/sbin/phase-b "$STAGING/usr/sbin/init"
+    echo "  Building phase-b runner image..."
+    mkimg "$OUTPUT_PHASEB" "$STAGING" debian-phaseb
+
     if [ "${KEEP_STAGING:-0}" != "1" ]; then
         rm -rf "$STAGING"
     fi

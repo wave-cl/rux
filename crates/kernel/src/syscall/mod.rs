@@ -482,7 +482,7 @@ pub fn dispatch(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usi
     let result = dispatch_inner(sc, a0, a1, a2, a3, a4);
     unsafe {
         crate::uaccess::clac();
-        if STRACE_ENABLED > 0 && STRACE_ENABLED < 3 {
+        if STRACE_ENABLED > 0 {
             strace_log(&sc, a0, a1, a2, a3, a4, result);
         }
     }
@@ -506,6 +506,10 @@ fn strace_log(sc: &Syscall, a0: usize, a1: usize, _a2: usize, _a3: usize, _a4: u
     // Quiet the noisy ones unless level >= 2
     let level = unsafe { STRACE_ENABLED };
     match sc {
+        // Filter the noisy ones out at level 1; level 2+ shows everything.
+        // Note: at level 3 we *also* print enter lines via strace_enter,
+        // which helps spot syscalls that block in the kernel and never
+        // return to this point (the strace ENTER line is the last clue).
         Syscall::Read | Syscall::Write | Syscall::Sigprocmask |
         Syscall::Sigaction | Syscall::ClockGetres | Syscall::Getrlimit |
         Syscall::Getrlimit2 | Syscall::Brk | Syscall::Mmap |
@@ -1572,7 +1576,7 @@ pub unsafe fn generic_exec<V: rux_arch::VforkContext>(path_ptr: usize, argv_ptr:
     // Reset arch-specific state (e.g., aarch64 signal trampoline mapping)
     V::on_exec_reset();
 
-    crate::elf::load_elf_from_inode(ino as u64, alloc);
+    crate::elf::load_elf_from_inode(ino as u64, path, alloc);
 }
 
 // ── Generic signal delivery ─────────────────────────────────────────────

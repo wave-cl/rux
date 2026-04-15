@@ -61,12 +61,16 @@ pub unsafe fn boot(params: BootParams) -> ! {
         log("rux: no initrd found!\n");
     }
 
-    // Parse kernel command line
-    if !params.cmdline.is_empty() {
-        log("rux: cmdline: ");
+    // Parse kernel command line. Always print whether we got one,
+    // because Phase B/C debugging needs to know that init=, strace=,
+    // etc. actually reached the parser.
+    log("rux: cmdline: ");
+    if params.cmdline.is_empty() {
+        log("(none)");
+    } else {
         crate::arch::Arch::write_bytes(params.cmdline);
-        log("\n");
     }
+    log("\n");
     let cmdparams = crate::cmdline::parse(params.cmdline);
 
     // Wrap ramfs in VFS (ramfs is always slot 0 initially)
@@ -161,7 +165,7 @@ pub unsafe fn boot(params: BootParams) -> ! {
         }
     };
     let alloc = &mut *alloc_ptr;
-    crate::elf::load_elf_from_inode(init_ino as u64, alloc);
+    crate::elf::load_elf_from_inode(init_ino as u64, init_path, alloc);
 }
 
 // ── Shared net init helper ────────────────────────────────────────────────

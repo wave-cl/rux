@@ -145,12 +145,18 @@ pub unsafe fn get_cmdline(info_addr: usize) -> &'static [u8] {
     let mut len = 0;
     while *ptr.add(len) != 0 && len < 512 { len += 1; }
     let full = core::slice::from_raw_parts(ptr, len);
+    // QEMU's multiboot1 loader puts the kernel filename as the first
+    // token (e.g. "/path/to/rux-kernel.elf32 init=/sbin/phase-b"), so
+    // we strip it. If the whole cmdline is space-free we treat it as
+    // a single bare argument and return it as-is — that case shows
+    // up with `-append "foo"` where some toolchains do not prepend
+    // the kernel filename. Linux's own boot stub does the same.
     if let Some(pos) = full.iter().position(|&b| b == b' ') {
         let rest = &full[pos + 1..];
         let start = rest.iter().position(|&b| b != b' ').unwrap_or(rest.len());
         &rest[start..]
     } else {
-        b""
+        full
     }
 }
 

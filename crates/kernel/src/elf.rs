@@ -44,11 +44,22 @@ unsafe impl<'a> rux_elf::ElfPageTable for PtAdapter<'a> {
 
 /// Load an ELF binary from a VFS inode into a fresh user page table.
 ///
+/// `path` is the filesystem path that was used to resolve `ino` —
+/// the shebang handler needs it because Linux semantics for
+/// `exec("/sbin/init")` of a `#!/bin/sh` script set
+/// `argv = ["/bin/sh", "/sbin/init", ...]`. Without the original
+/// script path we end up substituting the previous argv[0] instead
+/// (e.g. "/bin/sh" if boot.rs set it that way), and dash then tries
+/// to interpret the dash binary as a script ("Syntax error: '('
+/// unexpected" on the ELF magic). Both call sites — boot.rs init
+/// exec and the execve syscall — already know the path.
+///
 /// This is the core of exec(): parse the ELF, build a user page table
 /// with the kernel identity-mapped, load segments, map a user stack,
 /// activate, and jump to user mode.
 pub unsafe fn load_elf_from_inode(
     ino: u64,
+    path: &[u8],
     alloc: &mut dyn rux_mm::FrameAllocator,
 ) -> ! {
     use rux_fs::FileSystem;
@@ -83,22 +94,14 @@ pub unsafe fn load_elf_from_inode(
                     crate::syscall::posix::exit(127);
                 }
             };
-            // Save script path from current argv[0], then set argv = [interp, script, ...]
-            // Linux: argv[0]=interpreter, argv[1]=script_path, argv[2..]=original args
-            {
-                let mut script_buf = [0u8; 128];
-                let slen = {
-                    let argc = rux_proc::execargs::argc();
-                    if argc > 0 {
-                        let (buf, len) = rux_proc::execargs::get_argv0();
-                        let n = (len as usize).min(127);
-                        script_buf[..n].copy_from_slice(&buf[..n]);
-                        n
-                    } else { 0 }
-                };
-                rux_proc::execargs::set(interp_path, &script_buf[..slen]);
-            }
-            load_elf_from_inode(interp_ino as u64, alloc);
+            // Linux semantics: argv = [interpreter, script_path, ...orig].
+            // The script_path is the path the caller used to find this
+            // inode — we threaded it in as `path`. Using the previous
+            // argv[0] would be wrong any time the caller set argv[0] to
+            // something other than the script path (e.g. the boot.rs
+            // /bin/sh hack for busybox shell mode).
+            rux_proc::execargs::set(interp_path, path);
+            load_elf_from_inode(interp_ino as u64, interp_path, alloc);
         }
     }
 
