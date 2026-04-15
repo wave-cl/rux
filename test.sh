@@ -15,6 +15,12 @@ set -e
 
 QEMU_X86="${QEMU_X86:-/opt/local/bin/qemu-system-x86_64}"
 QEMU_AA64="${QEMU_AA64:-/opt/local/bin/qemu-system-aarch64}"
+
+# Derive the rux version from Cargo.toml so release bumps touch one
+# place instead of six hand-edited strings in this file. Matches what
+# /sbin/init prints on boot.
+RUX_VERSION=$(awk -F'"' '/^version = /{print $2; exit}' crates/kernel/Cargo.toml)
+
 PASS=0
 FAIL=0
 
@@ -450,7 +456,7 @@ printf "\n\033[1m── x86_64 ──\033[0m\n"
 CURRENT_ARCH=x86_64
 
 # Boot
-check "boot banner"             "rux 0.68.0 (x86_64)"
+check "boot banner"             "rux $RUX_VERSION (x86_64)"
 check "kernel page tables"      "CR3 switched to kernel page tables"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -464,7 +470,7 @@ check "alpine issue"            "Alpine Linux"
 check "apk available"           "apk-tools"
 
 # Core commands
-check "uname"                   "rux rux 0.68.0"
+check "uname"                   "rux rux $RUX_VERSION"
 check "cat /etc/passwd"         "root:"
 check "whoami"                  "root"
 check "hostname"                "rux"
@@ -506,7 +512,7 @@ check "proc/1/cmdline"          "init"
 check "stat"                    "File:"
 check "df"                      "/dev/vda"
 check "uptime"                  "up"
-check "proc/sys/kernel/osrelease" "0.68.0"
+check "proc/sys/kernel/osrelease" "$RUX_VERSION"
 check "proc/sys/kernel/hostname"  "rux"
 check "proc/sys/kernel/ostype"    "Linux"
 check "proc/sys dir"              "kernel"
@@ -939,7 +945,7 @@ CMDS
 echo "$OUTPUT" > /tmp/rux_test_aarch64.log
 
 # Boot
-check "boot banner"             "rux 0.68.0 (aarch64)"
+check "boot banner"             "rux $RUX_VERSION (aarch64)"
 check "MMU enabled"             "MMU enabled"
 check "SMP CPUs online"          "CPUs online"
 check "ext2 root mounted"       "ext2: mounted as root"
@@ -952,7 +958,7 @@ check "alpine release"          "3.21"
 check "apk available"           "apk-tools"
 
 # Core commands
-check "uname"                   "rux rux 0.68.0"
+check "uname"                   "rux rux $RUX_VERSION"
 check "cat /etc/passwd"         "root:"
 check "whoami"                  "root"
 check "hostname"                "rux"
@@ -993,7 +999,7 @@ check "proc/1/cmdline"          "init"
 check "stat"                    "File:"
 check "df"                      "/dev/vda"
 check "uptime"                  "up"
-check "proc/sys/kernel/osrelease" "0.68.0"
+check "proc/sys/kernel/osrelease" "$RUX_VERSION"
 check "proc/sys/kernel/hostname"  "rux"
 check "proc/sys/kernel/ostype"    "Linux"
 check "proc/sys dir"              "kernel"
