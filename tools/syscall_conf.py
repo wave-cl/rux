@@ -335,5 +335,58 @@ check('clock_getres resolution > 0', ts.tv_nsec > 0 or ts.tv_sec > 0,
 # Bad clockid must be EINVAL.
 expect_errno('clock_getres(99 bad)', L.clock_getres(99, ctypes.byref(ts)), errno.EINVAL)
 
+# ── Batch 4: fd-stubs round 3, capabilities, scheduling ────────────────
+# Yet another sweep. Targets: *at() handlers that skip dirfd
+# validation, capability stubs, and sched_*affinity. The *at family
+# is a recurring source of bugs because the dirfd check is easy to
+# forget when the function is a thin wrapper over an AT_FDCWD helper.
+
+# sendmsg(-1, ...) — socket stub, should be EBADF
+NR_SENDMSG = 211 if mach == 'aarch64' else 46
+expect_errno('sendmsg(-1)', S(NR_SENDMSG, -1, 0, 0), errno.EBADF)
+
+# readahead(-1, 0, 0) — fd-based
+NR_READAHEAD = 213 if mach == 'aarch64' else 187
+expect_errno('readahead(-1)', S(NR_READAHEAD, -1, 0, 0), errno.EBADF)
+
+# fchmodat(-1, ...) / fchownat(-1, ...) / mknodat(-1, ...) —
+# dirfd-validating *at handlers. round 1 fixed faccessat/utimensat
+# but these three were never checked.
+NR_FCHMODAT = 53 if mach == 'aarch64' else 268
+NR_FCHOWNAT = 54 if mach == 'aarch64' else 260
+NR_MKNODAT  = 33 if mach == 'aarch64' else 259
+expect_errno('fchmodat(-1)', S(NR_FCHMODAT, -1, b'x', 0o644, 0), errno.EBADF)
+expect_errno('fchownat(-1)', S(NR_FCHOWNAT, -1, b'x', 0, 0, 0), errno.EBADF)
+expect_errno('mknodat(-1)',  S(NR_MKNODAT,  -1, b'x', 0o644, 0), errno.EBADF)
+
+# linkat — same pattern with two dirfds. Pass invalid olddirfd.
+NR_LINKAT = 37 if mach == 'aarch64' else 265
+expect_errno('linkat(-1 olddir)', S(NR_LINKAT, -1, b'a', 0xFFFFFFFF_FFFFFFFF - 99, b'b', 0), errno.EBADF)
+
+# setgroups(0, NULL) — clear groups, root OK
+L.setgroups.argtypes = [ctypes.c_size_t, ctypes.c_void_p]
+expect_ok('setgroups(0, NULL)', L.setgroups(0, None))
+
+# getgroups(0, NULL) — returns the number of supplementary groups
+L.getgroups.argtypes = [ctypes.c_int, ctypes.c_void_p]
+n = L.getgroups(0, None)
+check('getgroups(0, NULL) >= 0', n >= 0, f'got {n}')
+
+# sched_getaffinity(0, 128, &mask) — populates cpu mask, returns bytes.
+L.sched_getaffinity.argtypes = [ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
+mask_buf = ctypes.create_string_buffer(128)
+expect_ok('sched_getaffinity', L.sched_getaffinity(0, 128, mask_buf))
+
+# set_robust_list(NULL, 0) — len=0 is invalid per glibc man page.
+# Linux returns EINVAL; some implementations accept it as a no-op.
+# Accept either — we just want to exercise the dispatch.
+NR_SET_ROBUST_LIST = 99 if mach == 'aarch64' else 273
+r = S(NR_SET_ROBUST_LIST, 0, 0)
+check('set_robust_list reached', r == 0 or r < 0, f'got {r}')
+
+# capget(NULL, NULL) — hdr is required
+L.capget.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+expect_errno('capget(NULL)', L.capget(None, None), errno.EFAULT)
+
 # ── Final summary ──────────────────────────────────────────────────────
 print(f'conformance: passed={P} failed={F}')

@@ -730,6 +730,15 @@ pub fn sys_close_socket(fd: usize) -> isize {
 // ── sendmsg / recvmsg / sendmmsg / recvmmsg ─────────────────────────
 
 pub fn sys_sendmsg(fd: usize, msghdr_ptr: usize) -> isize {
+    // fd validity beats msghdr validity (Linux: EBADF first).
+    // ENOTSOCK would be more precise when fd is valid but not a
+    // socket, but rux doesn't define ENOTSOCK yet — fall through
+    // to the original EFAULT path for that case.
+    unsafe {
+        if rux_fs::fdtable::get_fd(fd).is_none() {
+            return crate::errno::EBADF;
+        }
+    }
     if crate::uaccess::validate_user_ptr(msghdr_ptr, 56).is_err() { return crate::errno::EFAULT; }
     unsafe {
         let msg_name: usize = crate::uaccess::get_user(msghdr_ptr);

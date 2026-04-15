@@ -69,4 +69,15 @@ PASS: setresuid(-1,-1,-1)
 PASS: clock_getres(MONOTONIC)
 PASS: clock_getres resolution > 0
 PASS: clock_getres(99 bad)
-conformance: passed=71 failed=0
+PASS: sendmsg(-1)
+PASS: readahead(-1)
+PASS: fchmodat(-1)
+PASS: fchownat(-1)
+PASS: mknodat(-1)
+PASS: linkat(-1 olddir)
+PASS: setgroups(0, NULL)
+PASS: getgroups(0, NULL) >= 0
+PASS: sched_getaffinity
+PASS: set_robust_list reached
+PASS: capget(NULL)
+conformance: passed=82 failed=0

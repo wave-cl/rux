@@ -485,6 +485,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     t[88] = Syscall::Symlink;    t[266] = Syscall::Symlinkat;
     t[89] = Syscall::Readlink;   t[267] = Syscall::Readlinkat;
     t[258] = Syscall::Mkdirat;   t[263] = Syscall::Unlinkat;
+    t[259] = Syscall::Mknodat;   // was unmapped — round 4 caught this
     t[260] = Syscall::Fchownat;  t[268] = Syscall::Fchmodat;
     t[257] = Syscall::OpenAt;    t[262] = Syscall::FstatAt;
     t[269] = Syscall::Faccessat; t[280] = Syscall::Utimensat;

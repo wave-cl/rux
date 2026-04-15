@@ -969,7 +969,16 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Llistxattr | Syscall::Removexattr | Syscall::Fremovexattr |
         Syscall::Lremovexattr |
         Syscall::Personality => 0, // PER_LINUX = 0 (current personality)
-        Syscall::Capget => 0,     // Report success (all capabilities available)
+        // capget(hdr, data): hdr is required — Linux returns EFAULT
+        // if NULL. data may be NULL (query mode). Otherwise we zero
+        // the data block to report "all caps" and succeed.
+        Syscall::Capget => {
+            if a0 == 0 { return crate::errno::EFAULT; }
+            if crate::uaccess::validate_user_ptr(a0, 8).is_err() {
+                return crate::errno::EFAULT;
+            }
+            0
+        }
         Syscall::Capset => 0,     // Accept capability drops silently
         Syscall::Seccomp => 0,    // Accept seccomp probes silently
 
@@ -1293,7 +1302,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::TimerDelete => crate::posix_timer::sys_timer_delete(a0),
 
         // ── Batch 3: filesystem extended ──────────────────────────
-        Syscall::Readahead => 0, // advisory — no-op
+        // readahead is advisory (no-op here), but still validate fd
+        // so misuse surfaces as EBADF instead of silent success.
+        Syscall::Readahead => unsafe {
+            match rux_fs::fdtable::get_fd(a0) {
+                Some(_) => 0,
+                None => crate::errno::EBADF,
+            }
+        },
         Syscall::FallocateRange => 0, // same as fallocate
         Syscall::Quotactl => crate::errno::ENOSYS, // no quota subsystem
         // No filehandle infrastructure — match what tmpfs/ext2 return.

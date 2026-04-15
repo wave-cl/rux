@@ -300,6 +300,9 @@ pub fn unlink_at(dirfd: usize, path_ptr: usize) -> isize {
 pub fn creat_at(dirfd: usize, path_ptr: usize) -> isize {
     unsafe {
         use rux_fs::FileSystem;
+        if (dirfd as isize) != -100 && fdt::get_fd(dirfd).is_none() {
+            return crate::errno::EBADF;
+        }
         let (dir_ino, fname) = match super::resolve_parent_fname_at(dirfd, path_ptr) {
             Ok(v) => v, Err(e) => return e,
         };
@@ -395,6 +398,9 @@ pub fn symlink_at(target_ptr: usize, dirfd: usize, link_ptr: usize) -> isize {
 /// fchownat(dirfd, path, uid, gid, flags) — with dirfd support
 pub fn fchownat(dirfd: usize, path_ptr: usize, uid: usize, gid: usize) -> isize {
     unsafe {
+        if (dirfd as isize) != -100 && fdt::get_fd(dirfd).is_none() {
+            return crate::errno::EBADF;
+        }
         let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_at(dirfd, path) {
             Ok(ino) => ino,
@@ -516,6 +522,10 @@ pub fn readlink_at(dirfd: usize, path_ptr: usize, buf: usize, bufsiz: usize) -> 
 /// fchmodat(dirfd, path, mode) — with dirfd support
 pub fn chmod_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
     unsafe {
+        // Validate dirfd up front (AT_FDCWD=-100 is the legal negative).
+        if (dirfd as isize) != -100 && fdt::get_fd(dirfd).is_none() {
+            return crate::errno::EBADF;
+        }
         let path = crate::uaccess::read_user_cstr(path_ptr);
         let ino = match super::resolve_at(dirfd, path) {
             Ok(ino) => ino,
@@ -532,6 +542,13 @@ pub fn chmod_at(dirfd: usize, path_ptr: usize, mode: usize) -> isize {
 /// linkat(olddirfd, old, newdirfd, new, flags) — with dirfd support
 pub fn link_at(olddirfd: usize, old_ptr: usize, newdirfd: usize, new_ptr: usize) -> isize {
     unsafe {
+        // Validate both dirfds before touching any path.
+        if (olddirfd as isize) != -100 && fdt::get_fd(olddirfd).is_none() {
+            return crate::errno::EBADF;
+        }
+        if (newdirfd as isize) != -100 && fdt::get_fd(newdirfd).is_none() {
+            return crate::errno::EBADF;
+        }
         let old_path = crate::uaccess::read_user_cstr(old_ptr);
         let old_ino = match super::resolve_at(olddirfd, old_path) {
             Ok(ino) => ino,
