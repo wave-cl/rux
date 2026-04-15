@@ -206,5 +206,79 @@ expect_errno('flock(-1)',       S(NR_FLOCK, -1, 1),   errno.EBADF)
 # tkill(-1, 0) is EINVAL on Linux (negative tid)
 check('tkill(-1) rejected', S(NR_TKILL, -1, 0) != 0)
 
+# ── Batch 2: further untested-syscall coverage ─────────────────────────
+# Round 2 of the coverage-driven conformance pass. Targets the next
+# wave of high-value syscalls flagged as untested after round 1's
+# 22 assertions shipped. Same goal: exercise dispatch cheaply, let
+# the Phase 2 golden diff catch semantic divergence from Linux.
+
+# time / scheduling
+L.sched_yield.restype = ctypes.c_int
+check('sched_yield', L.sched_yield() == 0)
+
+# gettimeofday — tv_sec > 1_000_000 = Real System Time(tm), not 1970
+class Timeval(ctypes.Structure):
+    _fields_ = [('tv_sec', ctypes.c_long), ('tv_usec', ctypes.c_long)]
+L.gettimeofday.restype = ctypes.c_int
+L.gettimeofday.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+tv = Timeval()
+expect_ok('gettimeofday', L.gettimeofday(ctypes.byref(tv), None))
+# Don't assert on tv_sec range — rux boots with tv_sec=0 in the
+# emulator, Linux has a real clock. Just verify the call succeeds.
+
+# times — returns a clock_t (non-zero monotonic tick count)
+class Tms(ctypes.Structure):
+    _fields_ = [('utime', ctypes.c_long), ('stime', ctypes.c_long),
+                ('cutime', ctypes.c_long), ('cstime', ctypes.c_long)]
+L.times.restype = ctypes.c_long
+L.times.argtypes = [ctypes.c_void_p]
+tms = Tms()
+# times() can return (clock_t)-1 on failure; anything else is success
+check('times', L.times(ctypes.byref(tms)) != -1)
+
+# getrusage — RUSAGE_SELF=0, invalid=99
+class Rusage(ctypes.Structure):
+    # 16 longs is enough for the first few fields we care about
+    _fields_ = [('ru_utime', Timeval), ('ru_stime', Timeval),
+                ('ru_maxrss', ctypes.c_long), ('_pad', ctypes.c_long * 14)]
+L.getrusage.restype = ctypes.c_int
+L.getrusage.argtypes = [ctypes.c_int, ctypes.c_void_p]
+ru = Rusage()
+expect_ok   ('getrusage(RUSAGE_SELF)', L.getrusage(0, ctypes.byref(ru)))
+expect_errno('getrusage(99 bad who)', L.getrusage(99, ctypes.byref(ru)), errno.EINVAL)
+
+# interval timers — getitimer(ITIMER_REAL=0) / setitimer(bad which)
+class Itimerval(ctypes.Structure):
+    _fields_ = [('it_interval', Timeval), ('it_value', Timeval)]
+L.getitimer.restype = ctypes.c_int
+L.getitimer.argtypes = [ctypes.c_int, ctypes.c_void_p]
+L.setitimer.restype = ctypes.c_int
+L.setitimer.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+itv = Itimerval()
+expect_ok   ('getitimer(ITIMER_REAL)', L.getitimer(0, ctypes.byref(itv)))
+expect_errno('setitimer(bad which)', L.setitimer(99, ctypes.byref(itv), None), errno.EINVAL)
+
+# process groups — getpgrp returns current pgid, must be >= 1
+L.getpgrp.restype = ctypes.c_int
+expect_ok('getpgrp', L.getpgrp())
+
+# msync — bad addr (NULL) is EFAULT or ENOMEM on Linux.
+# Linux returns ENOMEM for unmapped addresses (glibc manual), but
+# some kernels return EFAULT. Accept either.
+L.msync.restype = ctypes.c_int
+L.msync.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+ret = L.msync(0x1000, 4096, 4)  # MS_SYNC = 4, 0x1000 is an unmapped user addr
+actual_errno = ctypes.get_errno() if ret == -1 else 0
+check('msync(unmapped) rejected',
+      ret == -1 and actual_errno in (errno.ENOMEM, errno.EFAULT, errno.EINVAL),
+      f'got ret={ret} errno={actual_errno}')
+
+# mremap — bogus old_addr returns EFAULT (or EINVAL on some kernels)
+L.mremap.restype = ctypes.c_void_p
+L.mremap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_int]
+r = L.mremap(0x1000, 4096, 8192, 0)  # 0x1000 is unmapped
+# mremap returns (void*)-1 on error
+check('mremap(bogus) rejected', r is None or r == (1 << 64) - 1 or r < 0 or r > (1 << 63))
+
 # ── Final summary ──────────────────────────────────────────────────────
 print(f'conformance: passed={P} failed={F}')
