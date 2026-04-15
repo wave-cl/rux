@@ -50,13 +50,29 @@ pub struct MemoryMap {
 /// `info_addr` must be the valid physical address of a MultibootInfo struct
 /// passed by the bootloader.
 pub unsafe fn parse_memory_map(info_addr: usize) -> MemoryMap {
-    let info = &*(info_addr as *const MultibootInfo);
-
     let mut map = MemoryMap {
         regions: [MemRegion { base: PhysAddr::new(0), size: 0 }; MAX_REGIONS],
         count: 0,
         total_usable: 0,
     };
+
+    // PVH-booted kernels arrive with EBX=0 (no multiboot info). In that
+    // case assume the QEMU default of 256 MiB RAM starting at 1 MiB.
+    // It's a lie (should come from the PVH hvm_start_info), but it's
+    // the same value the old multiboot1 path was getting anyway, and
+    // it gets us to kernel_main so we can pull the real map later.
+    if info_addr == 0 {
+        map.regions[0] = MemRegion {
+            base: PhysAddr::new(0x100000),
+            size: 256 * 1024 * 1024 - 0x100000,
+        };
+        map.count = 1;
+        map.total_usable = map.regions[0].size;
+        crate::arch::x86_64::console::write_str("  pvh boot: assuming 256 MiB RAM at 1 MiB\n");
+        return map;
+    }
+
+    let info = &*(info_addr as *const MultibootInfo);
 
     // Debug: print flags
     crate::arch::x86_64::console::write_str("  multiboot flags: ");
@@ -139,6 +155,9 @@ struct MultibootModule {
 /// Get the kernel command line from multiboot info.
 /// Skips the kernel filename prefix and returns only the arguments.
 pub unsafe fn get_cmdline(info_addr: usize) -> &'static [u8] {
+    // PVH boot: no multiboot info, cmdline will come from hvm_start_info
+    // later (TODO). For now just report an empty cmdline.
+    if info_addr == 0 { return b""; }
     let info = &*(info_addr as *const MultibootInfo);
     if info.flags & (1 << 2) == 0 || info.cmdline == 0 { return b""; }
     let ptr = info.cmdline as *const u8;
@@ -161,6 +180,8 @@ pub unsafe fn get_cmdline(info_addr: usize) -> &'static [u8] {
 }
 
 pub unsafe fn get_initrd(info_addr: usize) -> Option<(usize, usize)> {
+    // PVH boot: no multiboot info, no initrd.
+    if info_addr == 0 { return None; }
     let info = &*(info_addr as *const MultibootInfo);
 
     // Check if modules are present (flag bit 3)

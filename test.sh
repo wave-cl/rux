@@ -80,40 +80,12 @@ RUN_X86=true; RUN_AA64=true
 
 # ── Build ───────────────────────────────────────────────────────────
 printf "\033[1mBuilding...\033[0m\n"
-$RUN_X86 && {
-    cargo build --target x86_64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
-    rust-objcopy --output-target=elf32-i386 \
-        target/x86_64-unknown-none/debug/rux-kernel \
-        target/x86_64-unknown-none/debug/rux-kernel.elf32
-    # Fix elf32 BSS memsz: rust-objcopy truncates it during elf64→elf32.
-    python3 -c "
-import struct, sys
-with open(sys.argv[1], 'r+b') as f:
-    f.seek(28); phoff = struct.unpack('<I', f.read(4))[0]
-    f.seek(42); phsz = struct.unpack('<H', f.read(2))[0]
-    f.seek(44); phnum = struct.unpack('<H', f.read(2))[0]
-    for i in range(phnum):
-        off = phoff + i * phsz
-        f.seek(off); ptype = struct.unpack('<I', f.read(4))[0]
-        if ptype == 1:
-            f.seek(off + 16); p_filesz = struct.unpack('<I', f.read(4))[0]
-            f.seek(off + 20); p_memsz = struct.unpack('<I', f.read(4))[0]
-            if p_filesz == 0 and p_memsz > 0:
-                with open(sys.argv[2], 'rb') as f64:
-                    f64.seek(32); ph64off = struct.unpack('<Q', f64.read(8))[0]
-                    f64.seek(54); ph64sz = struct.unpack('<H', f64.read(2))[0]
-                    f64.seek(56); ph64num = struct.unpack('<H', f64.read(2))[0]
-                    for j in range(ph64num):
-                        o64 = ph64off + j * ph64sz
-                        f64.seek(o64); pt = struct.unpack('<I', f64.read(4))[0]
-                        f64.seek(o64 + 32); fs64 = struct.unpack('<Q', f64.read(8))[0]
-                        f64.seek(o64 + 40); ms64 = struct.unpack('<Q', f64.read(8))[0]
-                        if pt == 1 and fs64 == 0 and ms64 > 0:
-                            f.seek(off + 20)
-                            f.write(struct.pack('<I', ms64))
-                            break
-" target/x86_64-unknown-none/debug/rux-kernel.elf32 target/x86_64-unknown-none/debug/rux-kernel
-}
+# The x86_64 kernel is now loaded by QEMU -kernel via Xen PVH directly
+# from the ELF64 binary. The previous rust-objcopy→elf32 + BSS memsz
+# fix-up is gone; it was only needed for multiboot1, which requires
+# ELF32 and couldn't represent high-canonical VAs. The PVH path accepts
+# ELF64 as-is.
+$RUN_X86 && cargo build --target x86_64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
 $RUN_AA64 && cargo build --target aarch64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
 
 # Rootfs selection — Alpine is the primary fast suite, Debian is an
@@ -160,7 +132,7 @@ run_qemu_x86() {
         [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
         cat; \
     } | "$QEMU_X86" -cpu max -smp 2 \
-        -kernel target/x86_64-unknown-none/debug/rux-kernel.elf32 \
+        -kernel target/x86_64-unknown-none/debug/rux-kernel \
         -drive file="$rootfs",format=raw,if=none,id=disk0 -device virtio-blk-pci,drive=disk0 \
         -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
         -chardev stdio,id=char0,logfile="/tmp/rux_serial_x86_64_${tag}.log" \

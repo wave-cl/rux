@@ -1,36 +1,45 @@
 ENTRY(_start)
 
+/* QEMU's PVH loader needs the XEN_ELFNOTE_PHYS32_ENTRY note to be in
+ * a PT_NOTE program header, not just an SHT_NOTE section header.
+ * ld only creates PT_NOTE automatically when NO explicit PHDRS block
+ * is present; with SECTIONS alone it silently drops the note out of
+ * the program-header table. We declare all the segments ourselves. */
+PHDRS {
+    text PT_LOAD FLAGS(5);    /* R-X */
+    note PT_NOTE FLAGS(4);
+    data PT_LOAD FLAGS(6);    /* RW- */
+}
+
 SECTIONS {
-    /* Kernel loaded at 1M physical by multiboot/QEMU -kernel */
+    /* Kernel loaded at 1M physical by QEMU -kernel via Xen PVH. */
     . = 0x100000;
 
-    .multiboot2 : ALIGN(8) {
-        KEEP(*(.multiboot2))
-    }
-
-    /* PVH entry note — QEMU reads this to enter 64-bit kernel directly */
-    .note : ALIGN(4) {
+    /* PVH note lives in the same file region as .text (both get
+     * mapped by the `text` PT_LOAD) AND has its own PT_NOTE header
+     * so the PVH loader can find it by program-header walk. */
+    .note.rux : ALIGN(4) {
         KEEP(*(.note.rux))
-    }
+    } :text :note
 
     .text : ALIGN(4096) {
         __text_start = .;
         *(.text .text.*)
         __text_end = .;
-    }
+    } :text
 
     .rodata : ALIGN(4096) {
         __rodata_start = .;
         *(.rodata .rodata.*)
         *(.eh_frame_hdr)
         __rodata_end = .;
-    }
+    } :text
 
     .data : ALIGN(4096) {
         __data_start = .;
         *(.got .got.*)
         *(.data .data.*)
-    }
+    } :data
 
     .bss : ALIGN(4096) {
         __bss_start = .;
@@ -43,7 +52,7 @@ SECTIONS {
          * kernel_main skips zeroing this region (page tables are live). */
         *(.boot_bss)
         __bss_end = .;
-    }
+    } :data
 
     /* End of kernel image — page-aligned, above all code/data/BSS. */
     . = ALIGN(4096);

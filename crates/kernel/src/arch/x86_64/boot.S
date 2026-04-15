@@ -3,25 +3,23 @@
  * and jump to the 64-bit Rust entry point.
  */
 
-/* Multiboot header — must be in first 8K of the binary */
-.section .multiboot2, "a"
-.align 4
-multiboot_header:
-    .long 0x1BADB002             /* magic */
-    .long 0x00000003             /* flags: align + meminfo */
-    .long 0xE4524FFB             /* checksum: -(magic + flags) */
-
-/* PVH entry note — tells QEMU -kernel to load us in 64-bit mode directly.
- * QEMU reads this ELF note and enters at the specified address in long mode
- * with identity-mapped memory, bypassing the 32-bit multiboot path entirely. */
-.section .note.rux, "a"
-.align 4
-    .long 4                      /* namesz: "Xen\0" */
-    .long 8                      /* descsz: 8 bytes (64-bit entry addr) */
+/* Xen PVH ELF note — QEMU's only supported -kernel path for ELF64.
+ * We intentionally do NOT include a Multiboot1 header: QEMU's
+ * multiboot1 loader requires ELF32 and rejects ELF64 with
+ * "Cannot load x86-64 image, give a 32bit one", which means
+ * multiboot1 steals kernel loading before the PVH path gets a
+ * chance. With only the PVH note present, QEMU walks the ELF
+ * notes, finds XEN_ELFNOTE_PHYS32_ENTRY, and enters at the given
+ * 32-bit physical address in protected mode with EBX = 0. */
+.section .note.rux, "a", @note
+.balign 4
+    .long 2f - 1f                /* namesz */
+    .long 4f - 3f                /* descsz */
     .long 18                     /* type: XEN_ELFNOTE_PHYS32_ENTRY */
-    .asciz "Xen"                 /* name (4 bytes including null) */
-    .long _pvh_start             /* entry point (32-bit, but we handle it) */
-    .long 0                      /* padding for 8-byte descsz */
+1:  .asciz "Xen"                 /* name */
+2:  .balign 4
+3:  .long _pvh_start             /* 32-bit phys entry point */
+4:  .balign 4
 
 /* PVH entry point — 32-bit protected mode, no paging, EBX = hvm_start_info.
  * QEMU uses this when loading an ELF64 with -kernel (reads the Xen note).
