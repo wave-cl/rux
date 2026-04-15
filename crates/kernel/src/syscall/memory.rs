@@ -792,10 +792,31 @@ unsafe fn writeback_shared(addr: usize, len: usize) {
 
 /// msync(addr, len, flags) — write back MAP_SHARED pages.
 /// MS_ASYNC (1): hint, return immediately. MS_SYNC (4): synchronous write-back.
-pub unsafe fn msync(addr: usize, len: usize, flags: usize) {
+/// Returns 0 on success, or a negative errno on failure.
+pub unsafe fn msync(addr: usize, len: usize, flags: usize) -> isize {
     const MS_ASYNC: usize = 1;
-    if flags & MS_ASYNC != 0 { return; } // async: no-op (write-back on munmap)
+    const MS_INVALIDATE: usize = 2;
+    const MS_SYNC: usize = 4;
+    // Reject unknown flag bits / MS_ASYNC|MS_SYNC both set.
+    let valid = MS_ASYNC | MS_INVALIDATE | MS_SYNC;
+    if flags == 0 || flags & !valid != 0 || flags & (MS_ASYNC | MS_SYNC) == (MS_ASYNC | MS_SYNC) {
+        return crate::errno::EINVAL;
+    }
+    // Verify [addr, addr+len) is entirely covered by a VMA — Linux
+    // returns ENOMEM otherwise. Caught by the round-2 conformance
+    // assertion msync(0x1000, 4096, MS_SYNC) which used to silently
+    // return 0 for unmapped addresses.
+    use rux_mm::vma::VmaOps;
+    use rux_klib::VirtAddr;
+    let end = addr.wrapping_add(len);
+    if end < addr { return crate::errno::EINVAL; } // overflow
+    let vmas = crate::task_table::vma_list(crate::task_table::current_task_idx());
+    if vmas.find(VirtAddr::new(addr)).is_none() {
+        return crate::errno::ENOMEM;
+    }
+    if flags & MS_ASYNC != 0 { return 0; } // async: no-op (write-back on munmap)
     writeback_shared(addr, (len + 0xFFF) & !0xFFF);
+    0
 }
 
 /// mmap(addr, len, prot, flags, fd, offset) — POSIX.1
@@ -992,6 +1013,18 @@ pub fn mremap(old_addr: usize, old_size: usize, new_size: usize, flags: usize, n
     const MREMAP_FIXED: usize = 2;
     if old_addr & 0xFFF != 0 { return crate::errno::EINVAL; }
     if new_size == 0 { return crate::errno::EINVAL; }
+    // Verify old_addr is actually mapped (has a VMA covering it).
+    // Linux returns EFAULT for bogus old_addr. Without this, the
+    // aarch64 in-place-grow path silently maps new pages for an
+    // old_addr that was never mapped. Caught by round-2 conformance
+    // mremap(0x1000, 4096, 8192, 0).
+    unsafe {
+        use rux_mm::vma::VmaOps;
+        let vmas = crate::task_table::vma_list(crate::task_table::current_task_idx());
+        if vmas.find(rux_klib::VirtAddr::new(old_addr)).is_none() {
+            return crate::errno::EFAULT;
+        }
+    }
 
     // MREMAP_FIXED: move mapping to a specific address
     if flags & MREMAP_FIXED != 0 {

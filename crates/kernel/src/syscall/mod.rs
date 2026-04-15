@@ -845,8 +845,11 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         },
         Syscall::SetItimer => unsafe {
             // setitimer(which, new_value, old_value)
-            // Only ITIMER_REAL (which=0) is implemented — sends SIGALRM on wall clock expiry
-            if a0 != 0 { return 0; } // ITIMER_VIRTUAL/PROF: stub
+            // Valid `which` per POSIX: ITIMER_REAL=0, ITIMER_VIRTUAL=1, ITIMER_PROF=2.
+            // Anything else → EINVAL (Linux rejects bad `which` up-front).
+            if a0 > 2 { return crate::errno::EINVAL; }
+            // Only ITIMER_REAL (which=0) is implemented — sends SIGALRM on wall clock expiry.
+            if a0 != 0 { return 0; } // VIRTUAL/PROF accepted as no-op stub
             use rux_arch::TimerOps;
             let now = crate::arch::Arch::ticks();
             let idx = crate::task_table::current_task_idx();
@@ -922,6 +925,12 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
 
         // ── Phase 1 stubs ─────────────────────────────────────────
         Syscall::Getrusage => {
+            // who: RUSAGE_SELF=0, RUSAGE_CHILDREN=-1, RUSAGE_THREAD=1.
+            // Anything else must be EINVAL (Linux enforces this).
+            let who = a0 as i32;
+            if who != 0 && who != -1 && who != 1 {
+                return crate::errno::EINVAL;
+            }
             // Zero the rusage struct (144 bytes)
             if a1 != 0 && crate::uaccess::validate_user_ptr(a1, 144).is_ok() {
                 unsafe { core::ptr::write_bytes(a1 as *mut u8, 0, 144); }
@@ -1006,7 +1015,7 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         Syscall::Madvise => 0, // hints are advisory — safe to ignore
         Syscall::Mincore => memory::mincore(a0, a1, a2),
         Syscall::Mremap => memory::mremap(a0, a1, a2, a3, a4),
-        Syscall::Msync => { unsafe { memory::msync(a0, a1, a2); } 0 }
+        Syscall::Msync => unsafe { memory::msync(a0, a1, a2) },
         Syscall::Mlock | Syscall::Munlock |
         Syscall::Mlockall | Syscall::Munlockall => 0, // all pages are locked (no swap)
 

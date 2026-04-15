@@ -116,6 +116,7 @@ AARCH64 = {
     90: "capget", 91: "capset", 93: "exit", 94: "exit_group",
     95: "waitid", 96: "set_tid_address", 98: "futex",
     99: "set_robust_list", 101: "nanosleep",
+    102: "getitimer",
     103: "setitimer", 107: "timer_create", 108: "timer_gettime",
     109: "timer_getoverrun", 110: "timer_settime", 111: "timer_delete",
     112: "clock_settime", 113: "clock_gettime", 114: "clock_getres",
