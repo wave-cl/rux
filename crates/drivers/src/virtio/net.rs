@@ -137,7 +137,7 @@ pub unsafe fn init_mmio(base: usize, rx_pages: usize, tx_pages: usize) -> bool {
     for i in 0..rx_qsize.min(16) {
         let desc = NET.rx_desc as *mut Descriptor;
         let d = &mut *desc.add(i as usize);
-        d.addr = NET.rx_bufs[i as usize].as_ptr() as u64;
+        d.addr = crate::kva_to_phys(NET.rx_bufs[i as usize].as_ptr() as u64);
         d.len = BUF_SIZE as u32;
         d.flags = DESC_F_WRITE; // device writes to this buffer
         d.next = 0;
@@ -191,13 +191,13 @@ pub unsafe fn send(frame: &[u8]) -> bool {
     let desc = NET.tx_desc as *mut Descriptor;
     // Use descriptor 0 for header, 1 for data
     let d0 = &mut *desc.add(0);
-    d0.addr = core::ptr::addr_of!(NET.tx_hdr) as u64;
+    d0.addr = crate::kva_to_phys(core::ptr::addr_of!(NET.tx_hdr) as u64);
     d0.len = VirtioNetHdr::SIZE as u32;
     d0.flags = DESC_F_NEXT;
     d0.next = 1;
 
     let d1 = &mut *desc.add(1);
-    d1.addr = frame.as_ptr() as u64;
+    d1.addr = crate::kva_to_phys(frame.as_ptr() as u64);
     d1.len = frame.len() as u32;
     d1.flags = 0; // device reads
 

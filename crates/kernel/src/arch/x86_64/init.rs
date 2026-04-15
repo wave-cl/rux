@@ -280,11 +280,14 @@ pub fn x86_64_init(multiboot_info: usize) {
     }
 
     // ── Compute addresses for BuddyAllocator + RamFs ──────────────────
-    // Place after the kernel image (_end from linker script). Use _end as a
-    // floor so growing BSS (e.g., raising MAX_PROCS) never overlaps.
-    // Keep a 0x600000 minimum for historical compatibility.
+    // Place after the kernel image (_end from linker script). _end is
+    // now a high-half virtual address (kernel linked at KERNEL_VMA);
+    // convert to physical so we can compare against multiboot memory
+    // regions which are in phys addresses.
     extern "C" { static _end: u8; }
-    let kernel_end = unsafe { &_end as *const u8 as usize };
+    const KERNEL_VMA: usize = 0xffffffff80000000;
+    let kernel_end_va = unsafe { &_end as *const u8 as usize };
+    let kernel_end = kernel_end_va - KERNEL_VMA;
 
     let initrd_info = unsafe { super::multiboot::get_initrd(multiboot_info) };
     let initrd_end = match initrd_info {
@@ -380,6 +383,22 @@ pub fn x86_64_init(multiboot_info: usize) {
                 rux_klib::PhysAddr::new(0xFEE00000), 4096, dev_flags, alloc,
             ).expect("lapic map");
             console::write_str("rux: identity mapped 0-128 MiB + LAPIC\n");
+
+            // Higher-half kernel window: VA[KERNEL_VMA..+128 MiB] ->
+            // PA[0..128 MiB]. The kernel is linked up here; without
+            // this mapping the instruction fetch after `mov cr3`
+            // triple-faults.
+            let mut hh_off = 0usize;
+            while hh_off < 128 * 1024 * 1024 {
+                kpt.map_2m(
+                    rux_klib::VirtAddr::new(KERNEL_VMA + hh_off),
+                    rux_klib::PhysAddr::new(hh_off),
+                    rwx,
+                    alloc,
+                ).expect("high-half map");
+                hh_off += 2 * 1024 * 1024;
+            }
+            console::write_str("rux: high-half mapped\n");
 
             super::paging::activate(&kpt);
             pgtrack::set_kernel_pt(kpt.root_phys().as_usize() as u64);

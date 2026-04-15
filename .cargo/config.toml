@@ -31,9 +31,11 @@ rustflags = [
     # rejected by newer rustc. -mmx and +retpoline were similarly removed (the
     # toolchain no longer recognizes either as -Ctarget-feature operands).
     "-C", "target-feature=+bmi1,+bmi2,+popcnt,+lzcnt,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,-fma",
-    # code-model=kernel disabled for now — requires higher-half mapping.
-    # Re-enable when the kernel runs at 0xFFFFFFFF80000000+.
-    # "-C", "code-model=kernel",
+    # Kernel is linked at 0xffffffff80000000+ (higher-half). The
+    # kernel code model tells LLVM to use 32-bit sign-extended
+    # addressing for globals — only valid when everything is in
+    # the top 2 GiB of the canonical address space.
+    "-C", "code-model=kernel",
     "-C", "force-frame-pointers=no",
     "-C", "link-arg=-z", "-C", "link-arg=max-page-size=4096",
     "-C", "link-arg=--icf=all",

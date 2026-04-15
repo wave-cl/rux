@@ -4,6 +4,26 @@
 pub mod pci;
 pub mod virtio;
 
+/// Convert a kernel virtual address to a physical address for device DMA.
+///
+/// Virtio and other DMA-capable devices see **physical** memory, not the
+/// kernel's virtual address space. Any time we hand a device a buffer
+/// pointer — descriptor ring bases, scatter/gather entries, request
+/// headers — we must first translate the Rust pointer (which is a VA)
+/// to a PA.
+///
+/// Today the kernel is linked at low physical VAs (identity-mapped), so
+/// VA == PA and this function is a no-op. Once the higher-half refactor
+/// lands, kernel statics will live at `0xffffffff80000000+` and this
+/// helper will subtract the offset. The `if va >= ...` guard makes the
+/// function correct in **both** worlds so the driver audit can land
+/// before the kernel link address moves.
+#[inline]
+pub fn kva_to_phys(va: u64) -> u64 {
+    const KERNEL_VMA: u64 = 0xffffffff80000000;
+    if va >= KERNEL_VMA { va - KERNEL_VMA } else { va }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DeviceType {

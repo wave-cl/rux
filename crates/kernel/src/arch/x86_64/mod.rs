@@ -119,7 +119,7 @@ unsafe impl super::KernelMapOps for X86_64 {
         pt: &mut super::PageTable,
         alloc: &mut dyn rux_mm::FrameAllocator,
     ) {
-        use rux_klib::PhysAddr;
+        use rux_klib::{PhysAddr, VirtAddr};
         use rux_mm::MappingFlags;
         // User PTs must use 4K pages for the kernel identity map (not huge pages).
         // User ELF segments (0x400000+) overlap the 0-128MB kernel identity map.
@@ -134,6 +134,23 @@ unsafe impl super::KernelMapOps for X86_64 {
         let dev_flags = MappingFlags::READ.or(MappingFlags::WRITE).or(MappingFlags::NO_CACHE);
         pt.identity_map_range(PhysAddr::new(0xFEE00000), 4096, dev_flags, alloc)
             .expect("lapic map");
+        // Higher-half kernel window: every per-task user PT needs
+        // the kernel text/rodata/data/bss visible at 0xffffffff80...
+        // or we crash on the next kernel instruction fetch after
+        // the CR3 switch into the user PT.
+        const KERNEL_VMA: usize = 0xffffffff80000000;
+        const HH_SIZE: usize = 128 * 1024 * 1024;
+        let mut off = 0usize;
+        while off < HH_SIZE {
+            pt.map_2m(
+                VirtAddr::new(KERNEL_VMA + off),
+                PhysAddr::new(off),
+                kflags,
+                alloc,
+            )
+            .expect("high-half map");
+            off += 2 * 1024 * 1024;
+        }
     }
 }
 

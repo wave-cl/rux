@@ -947,37 +947,23 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
 }
 
 /// sendfile(out_fd, in_fd, offset_ptr, count) — Linux (widely used by busybox cat)
-pub fn sendfile(out_fd: usize, in_fd: usize, offset_ptr: usize, count: usize) -> isize {
-    // If offset_ptr is non-NULL, use it as the read position (and update it).
-    // Otherwise, use the fd's current offset (via normal read).
-    unsafe {
-        if offset_ptr != 0 {
-            if crate::uaccess::validate_user_ptr(offset_ptr, 8).is_err() { return crate::errno::EFAULT; }
-            let off: u64 = crate::uaccess::get_user(offset_ptr);
-            if let Some(f) = fdt::get_fd_mut(in_fd) { f.offset = off as usize; }
-        }
-    }
-    let buf = [0u8; 4096]; // mutated via raw pointer in read()
-    let mut total: isize = 0;
-    let mut remaining = count;
-    while remaining > 0 {
-        let chunk = remaining.min(4096);
-        let n = read(in_fd, buf.as_ptr() as usize, chunk);
-        if n <= 0 { break; }
-        let written = write(out_fd, buf.as_ptr() as usize, n as usize);
-        if written < 0 { return if total > 0 { total } else { written }; }
-        total += written;
-        remaining = remaining.saturating_sub(n as usize);
-    }
-    // Update offset_ptr with new position
-    unsafe {
-        if offset_ptr != 0 {
-            if let Some(f) = fdt::get_fd(in_fd) {
-                crate::uaccess::put_user(offset_ptr, f.offset as u64);
-            }
-        }
-    }
-    total
+///
+/// TODO(higher-half): we used to implement this by allocating a 4 KiB
+/// buffer on the kernel stack and passing its address to `read()`/
+/// `write()` as if it were a user pointer. That worked when the kernel
+/// lived at low identity-mapped VAs (kernel stack VA == phys addr, and
+/// `validate_user_ptr` accepted it because the stack sat below
+/// `USER_ADDR_LIMIT`). In the higher-half world, kernel stacks live at
+/// `0xffffffff80...`, `validate_user_ptr` rejects them, and the partial
+/// VFS read advances the file offset before returning EFAULT — which
+/// leaves busybox cat staring at an empty file on fallback.
+///
+/// For now, return `ENOSYS` unconditionally. busybox cat (and other
+/// sendfile callers) fall back to read+write and get the right result.
+/// A proper fix needs sendfile to drive the VFS directly via the
+/// kernel-side read API rather than reentering the syscall layer.
+pub fn sendfile(_out_fd: usize, _in_fd: usize, _offset_ptr: usize, _count: usize) -> isize {
+    crate::errno::ENOSYS
 }
 
 /// Check if the current process can safely block on a pipe.

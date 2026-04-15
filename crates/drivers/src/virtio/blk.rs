@@ -148,21 +148,21 @@ impl VirtioBlk {
 
         // Descriptor 0: request header (device reads)
         let d0 = &mut *self.vq.desc.add(head as usize);
-        d0.addr = &self.req_header as *const BlkReqHeader as u64;
+        d0.addr = crate::kva_to_phys(&self.req_header as *const BlkReqHeader as u64);
         d0.len = 16;
         d0.flags = DESC_F_NEXT;
         let d1_idx = d0.next;
 
         // Descriptor 1: data buffer (device writes)
         let d1 = &mut *self.vq.desc.add(d1_idx as usize);
-        d1.addr = buf as u64;
+        d1.addr = crate::kva_to_phys(buf as u64);
         d1.len = 512;
         d1.flags = DESC_F_WRITE | DESC_F_NEXT;
         let d2_idx = d1.next;
 
         // Descriptor 2: status byte (device writes)
         let d2 = &mut *self.vq.desc.add(d2_idx as usize);
-        d2.addr = &self.status_byte as *const u8 as u64;
+        d2.addr = crate::kva_to_phys(&self.status_byte as *const u8 as u64);
         d2.len = 1;
         d2.flags = DESC_F_WRITE;
 
@@ -202,19 +202,19 @@ impl BlockDevice for VirtioBlk {
         let head = self.vq.alloc_chain(3).ok_or(DriverError::ResourceBusy)?;
 
         let d0 = &mut *self.vq.desc.add(head as usize);
-        d0.addr = &self.req_header as *const BlkReqHeader as u64;
+        d0.addr = crate::kva_to_phys(&self.req_header as *const BlkReqHeader as u64);
         d0.len = 16;
         d0.flags = DESC_F_NEXT;
         let d1_idx = d0.next;
 
         let d1 = &mut *self.vq.desc.add(d1_idx as usize);
-        d1.addr = buf as u64;
+        d1.addr = crate::kva_to_phys(buf as u64);
         d1.len = 512;
         d1.flags = DESC_F_NEXT; // device reads (no WRITE flag)
         let d2_idx = d1.next;
 
         let d2 = &mut *self.vq.desc.add(d2_idx as usize);
-        d2.addr = &self.status_byte as *const u8 as u64;
+        d2.addr = crate::kva_to_phys(&self.status_byte as *const u8 as u64);
         d2.len = 1;
         d2.flags = DESC_F_WRITE;
 

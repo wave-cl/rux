@@ -177,19 +177,19 @@ unsafe fn pci_read_sector_inner(sector: u64, buf: *mut u8) -> Result<(), DriverE
 
     // Set up descriptors
     let d0 = &mut *desc.add(head as usize);
-    d0.addr = &raw const STATE.req_header as u64;
+    d0.addr = crate::kva_to_phys(&raw const STATE.req_header as u64);
     d0.len = 16;
     d0.flags = DESC_F_NEXT;
     let d1_idx = d0.next;
 
     let d1 = &mut *desc.add(d1_idx as usize);
-    d1.addr = buf as u64;
+    d1.addr = crate::kva_to_phys(buf as u64);
     d1.len = 512;
     d1.flags = DESC_F_WRITE | DESC_F_NEXT;
     let d2_idx = d1.next;
 
     let d2 = &mut *desc.add(d2_idx as usize);
-    d2.addr = &raw const STATE.status_byte as u64;
+    d2.addr = crate::kva_to_phys(&raw const STATE.status_byte as u64);
     d2.len = 1;
     d2.flags = DESC_F_WRITE;
 
@@ -266,20 +266,20 @@ unsafe fn pci_write_sector_inner(sector: u64, buf: *const u8) -> Result<(), Driv
     STATE.num_free -= 3;
 
     let d0 = &mut *desc.add(head as usize);
-    d0.addr = &raw const STATE.req_header as u64;
+    d0.addr = crate::kva_to_phys(&raw const STATE.req_header as u64);
     d0.len = 16;
     d0.flags = DESC_F_NEXT;
     let d1_idx = d0.next;
 
     // Data: device READS from buf (no DESC_F_WRITE)
     let d1 = &mut *desc.add(d1_idx as usize);
-    d1.addr = buf as u64;
+    d1.addr = crate::kva_to_phys(buf as u64);
     d1.len = 512;
     d1.flags = DESC_F_NEXT;
     let d2_idx = d1.next;
 
     let d2 = &mut *desc.add(d2_idx as usize);
-    d2.addr = &raw const STATE.status_byte as u64;
+    d2.addr = crate::kva_to_phys(&raw const STATE.status_byte as u64);
     d2.len = 1;
     d2.flags = DESC_F_WRITE;
 
