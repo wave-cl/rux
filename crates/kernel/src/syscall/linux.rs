@@ -428,7 +428,14 @@ pub fn statfs(path_ptr: usize, buf_ptr: usize) -> isize {
 }
 
 /// fstatfs(fd, buf) — Linux filesystem stats by file descriptor.
-pub fn fstatfs(_fd: usize, buf_ptr: usize) -> isize {
+pub fn fstatfs(fd: usize, buf_ptr: usize) -> isize {
+    // Validate fd before touching anything — round 3 caught this as
+    // a silent-0 stub for fstatfs(-1, ...).
+    unsafe {
+        if rux_fs::fdtable::get_fd(fd).is_none() {
+            return crate::errno::EBADF;
+        }
+    }
     if crate::uaccess::validate_user_ptr(buf_ptr, 120).is_err() { return crate::errno::EFAULT; }
     unsafe { fill_statfs(buf_ptr, 0xEF53); }
     0
@@ -508,8 +515,15 @@ pub fn splice(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_ptr: usize
     unsafe {
         use rux_fs::fdtable as fdt;
 
-        let in_is_pipe = fd_in < fdt::MAX_FDS && (*fdt::fd_table())[fd_in].active && (*fdt::fd_table())[fd_in].is_pipe;
-        let out_is_pipe = fd_out < fdt::MAX_FDS && (*fdt::fd_table())[fd_out].active && (*fdt::fd_table())[fd_out].is_pipe;
+        // Validate both fds up front. Linux's splice returns EBADF
+        // when either fd is invalid; the previous code fell through
+        // to the "neither is a pipe" branch and returned EINVAL.
+        if fdt::get_fd(fd_in).is_none() || fdt::get_fd(fd_out).is_none() {
+            return crate::errno::EBADF;
+        }
+
+        let in_is_pipe = (*fdt::fd_table())[fd_in].is_pipe;
+        let out_is_pipe = (*fdt::fd_table())[fd_out].is_pipe;
         let out_is_socket = super::socket::is_socket(fd_out);
 
         // At least one fd must be a pipe (Linux requirement)
@@ -592,9 +606,13 @@ pub fn splice(fd_in: usize, off_in_ptr: usize, fd_out: usize, off_out_ptr: usize
 pub fn tee(fd_in: usize, fd_out: usize, len: usize, _flags: usize) -> isize {
     unsafe {
         use rux_fs::fdtable as fdt;
-        // Both fds must be pipes
-        let in_pipe = fd_in < fdt::MAX_FDS && (*fdt::fd_table())[fd_in].active && (*fdt::fd_table())[fd_in].is_pipe;
-        let out_pipe = fd_out < fdt::MAX_FDS && (*fdt::fd_table())[fd_out].active && (*fdt::fd_table())[fd_out].is_pipe;
+        // Validate both fds first (EBADF beats EINVAL on Linux), then
+        // require both to be pipes.
+        if fdt::get_fd(fd_in).is_none() || fdt::get_fd(fd_out).is_none() {
+            return crate::errno::EBADF;
+        }
+        let in_pipe = (*fdt::fd_table())[fd_in].is_pipe;
+        let out_pipe = (*fdt::fd_table())[fd_out].is_pipe;
         if !in_pipe || !out_pipe { return crate::errno::EINVAL; }
     }
     splice(fd_in, 0, fd_out, 0, len, 0)

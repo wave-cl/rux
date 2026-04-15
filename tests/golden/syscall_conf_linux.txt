@@ -57,4 +57,16 @@ PASS: setitimer(bad which)
 PASS: getpgrp
 PASS: msync(unmapped) rejected
 PASS: mremap(bogus) rejected
-conformance: passed=59 failed=0
+PASS: fallocate(-1)
+PASS: fstatfs(-1)
+PASS: splice(-1)
+PASS: tee(-1, -1)
+PASS: accept(-1)
+PASS: shutdown(-1)
+PASS: getresuid
+PASS: getresuid populates all 3
+PASS: setresuid(-1,-1,-1)
+PASS: clock_getres(MONOTONIC)
+PASS: clock_getres resolution > 0
+PASS: clock_getres(99 bad)
+conformance: passed=71 failed=0

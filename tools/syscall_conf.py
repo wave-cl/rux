@@ -280,5 +280,60 @@ r = L.mremap(0x1000, 4096, 8192, 0)  # 0x1000 is unmapped
 # mremap returns (void*)-1 on error
 check('mremap(bogus) rejected', r is None or r == (1 << 64) - 1 or r < 0 or r > (1 << 63))
 
+# ── Batch 3: more fd-stub coverage + misc process state ────────────────
+# Another pass targeting fd-based syscalls that might be stubs returning
+# 0 unconditionally (the same pattern that caught fsync/fdatasync/flock
+# in round 1 and fallocate in round 1's stub group). Plus a few
+# clock/process-state assertions.
+
+# fallocate(-1) — round 1 added fallocate to the fd-validating stub
+# group in syscall/mod.rs but no conformance assertion verified it.
+L.fallocate.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_long, ctypes.c_long]
+expect_errno('fallocate(-1)', L.fallocate(-1, 0, 0, 4096), errno.EBADF)
+
+# fstatfs(-1) — likely a stub. statfs_t is 120 bytes on Linux.
+statfs_buf = ctypes.create_string_buffer(128)
+L.fstatfs.argtypes = [ctypes.c_int, ctypes.c_void_p]
+expect_errno('fstatfs(-1)', L.fstatfs(-1, statfs_buf), errno.EBADF)
+
+# splice/tee — pipe manipulation, fd-validated
+NR_SPLICE = 76 if mach == 'aarch64' else 275
+NR_TEE    = 77 if mach == 'aarch64' else 276
+expect_errno('splice(-1)', S(NR_SPLICE, -1, 0, -1, 0, 4096, 0), errno.EBADF)
+expect_errno('tee(-1, -1)', S(NR_TEE, -1, -1, 4096, 0), errno.EBADF)
+
+# Sockets — accept/shutdown on -1 must be EBADF (not ENOTSOCK, since
+# fd validation happens before the socket-type check).
+NR_ACCEPT   = 202 if mach == 'aarch64' else 43
+NR_SHUTDOWN = 210 if mach == 'aarch64' else 48
+expect_errno('accept(-1)',   S(NR_ACCEPT,   -1, 0, 0), errno.EBADF)
+expect_errno('shutdown(-1)', S(NR_SHUTDOWN, -1, 0),    errno.EBADF)
+
+# getresuid — fill in a ruid/euid/suid triple for the current process.
+# Should always succeed with all three equal to our uid.
+ruid = ctypes.c_uint32(0xFFFFFFFF)
+euid = ctypes.c_uint32(0xFFFFFFFF)
+suid = ctypes.c_uint32(0xFFFFFFFF)
+L.getresuid.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+expect_ok('getresuid', L.getresuid(ctypes.byref(ruid), ctypes.byref(euid), ctypes.byref(suid)))
+check('getresuid populates all 3', ruid.value != 0xFFFFFFFF and
+      euid.value != 0xFFFFFFFF and suid.value != 0xFFFFFFFF,
+      f'r={ruid.value:#x} e={euid.value:#x} s={suid.value:#x}')
+
+# setresuid(-1,-1,-1) is a POSIX no-op (leaves everything as-is).
+L.setresuid.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+expect_ok('setresuid(-1,-1,-1)', L.setresuid(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF))
+
+# clock_getres — CLOCK_MONOTONIC must return a positive resolution.
+class Timespec(ctypes.Structure):
+    _fields_ = [('tv_sec', ctypes.c_long), ('tv_nsec', ctypes.c_long)]
+L.clock_getres.argtypes = [ctypes.c_int, ctypes.c_void_p]
+ts = Timespec()
+expect_ok('clock_getres(MONOTONIC)', L.clock_getres(1, ctypes.byref(ts)))
+check('clock_getres resolution > 0', ts.tv_nsec > 0 or ts.tv_sec > 0,
+      f'got tv_sec={ts.tv_sec} tv_nsec={ts.tv_nsec}')
+# Bad clockid must be EINVAL.
+expect_errno('clock_getres(99 bad)', L.clock_getres(99, ctypes.byref(ts)), errno.EINVAL)
+
 # ── Final summary ──────────────────────────────────────────────────────
 print(f'conformance: passed={P} failed={F}')

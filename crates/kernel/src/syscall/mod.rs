@@ -825,6 +825,13 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Additional syscalls ────────────────────────────────────
         Syscall::Getrandom => posix::getrandom(a0, a1, a2),
         Syscall::ClockGetres => {
+            // Valid Linux clockids: REALTIME=0, MONOTONIC=1,
+            // PROCESS_CPUTIME_ID=2, THREAD_CPUTIME_ID=3,
+            // MONOTONIC_RAW=4, REALTIME_COARSE=5, MONOTONIC_COARSE=6,
+            // BOOTTIME=7, REALTIME_ALARM=8, BOOTTIME_ALARM=9,
+            // SGI_CYCLE=10, TAI=11. Anything else → EINVAL (caught by
+            // round-3 clock_getres(99) assertion).
+            if a0 > 11 { return crate::errno::EINVAL; }
             // clock_getres(clockid, res) — return 1ns resolution
             if a1 != 0 {
                 if crate::uaccess::validate_user_ptr(a1, 16).is_ok() {
