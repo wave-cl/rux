@@ -114,31 +114,12 @@ pub unsafe fn load_elf_from_inode(
         }
     };
 
-    // Reject non-PIE binaries whose load addresses overlap the
-    // kernel's identity-mapped region (currently 0x100000..0x6fc000).
-    // rux is a low-half kernel: user pages mapped over those VAs
-    // *replace* the kernel's own identity mappings, and the very
-    // next kernel data access (reading a static or a function
-    // pointer) silently reads user bytes and hangs/crashes. This is
-    // exactly what made Debian's python3.13 (ET_EXEC, text at
-    // 0x400000+) freeze inside execargs::set_hwcap during Phase B
-    // bring-up. Until rux gets a higher-half kernel layout, the
-    // safest thing we can do is fail the exec early with ENOEXEC so
-    // the parent shell sees a clear error instead of a deadlock.
-    if elf_info.e_type == 2 {
-        use rux_arch::ConsoleOps;
-        for i in 0..elf_info.num_segments {
-            let s = elf_info.segments[i];
-            let kernel_top: u64 = 0x800000; // _end is ~0x6fc000; round up.
-            if s.vaddr < kernel_top && s.vaddr + s.memsz > 0x100000 {
-                crate::arch::Arch::write_str(
-                    "rux: exec: ET_EXEC binary collides with kernel image\n",
-                );
-                crate::syscall::posix::exit(crate::errno::ENOEXEC as i32);
-            }
-            let _ = path;
-        }
-    }
+    // (Previously: ET_EXEC collision check against the low-half
+    // kernel identity map. The kernel now lives at 0xffffffff80...
+    // so user ET_EXEC binaries whose text sits at 0x400000 — e.g.
+    // Debian's python3.13 — no longer collide with anything. The
+    // guard that lived here is gone; this comment is its headstone.)
+    let _ = path;
 
     // Build user page table with kernel identity map
     let mut upt = {
