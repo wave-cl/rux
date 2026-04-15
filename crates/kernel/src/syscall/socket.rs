@@ -824,6 +824,12 @@ pub fn sys_setsockopt(fd: usize, level: usize, optname: usize, optval: usize, _o
 }
 
 pub fn sys_getsockopt(fd: usize, level: usize, optname: usize, optval: usize, optlen: usize) -> isize {
+    // Validate fd before anything else: EBADF beats EFAULT.
+    unsafe {
+        if rux_fs::fdtable::get_fd(fd).is_none() {
+            return crate::errno::EBADF;
+        }
+    }
     if optval != 0 && crate::uaccess::validate_user_ptr(optval, 4).is_err() { return crate::errno::EFAULT; }
     if optlen != 0 && crate::uaccess::validate_user_ptr(optlen, 4).is_err() { return crate::errno::EFAULT; }
     unsafe {

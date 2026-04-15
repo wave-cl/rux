@@ -80,4 +80,15 @@ PASS: getgroups(0, NULL) >= 0
 PASS: sched_getaffinity
 PASS: set_robust_list reached
 PASS: capget(NULL)
-conformance: passed=82 failed=0
+PASS: getresgid
+PASS: getresgid populates all 3
+PASS: setfsuid(-1) query
+PASS: setfsgid(-1) query
+PASS: fadvise64(-1)
+PASS: recvfrom(-1)
+PASS: getsockopt(-1)
+PASS: tgkill(self, 0)
+PASS: timer_getoverrun(bad)
+PASS: getxattr(missing) rejected
+PASS: io_setup(0 events) rejected
+conformance: passed=93 failed=0

@@ -1,6 +1,6 @@
 [package]
 name = "rux-ipc"
-version = "0.69.3"
+version = "0.69.4"
 edition = "2021"
 
 [lib]

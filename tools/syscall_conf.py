@@ -388,5 +388,64 @@ check('set_robust_list reached', r == 0 or r < 0, f'got {r}')
 L.capget.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 expect_errno('capget(NULL)', L.capget(None, None), errno.EFAULT)
 
+# ── Batch 5: xattr, IPC, fd-stubs, rlimit, tgkill, io_setup ────────────
+# Round 5: a sweep across the remaining fd-stub candidates plus a
+# couple of previously untested subsystems (xattr, SysV IPC, AIO).
+# Skips syscalls that require root-mutating state (setuid/setgid).
+
+# getresgid — symmetric with round-3 getresuid
+rgid = ctypes.c_uint32(0xFFFFFFFF)
+egid = ctypes.c_uint32(0xFFFFFFFF)
+sgid = ctypes.c_uint32(0xFFFFFFFF)
+L.getresgid.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+expect_ok('getresgid', L.getresgid(ctypes.byref(rgid), ctypes.byref(egid), ctypes.byref(sgid)))
+check('getresgid populates all 3', rgid.value != 0xFFFFFFFF and
+      egid.value != 0xFFFFFFFF and sgid.value != 0xFFFFFFFF,
+      f'r={rgid.value:#x} e={egid.value:#x} s={sgid.value:#x}')
+
+# setfsuid(-1) / setfsgid(-1) — Linux: returns the CURRENT fsuid/fsgid
+# without changing anything (the man page documents -1 as a query).
+# For root this should be 0; just check for no error (non-negative).
+L.setfsuid.argtypes = [ctypes.c_uint32]
+L.setfsgid.argtypes = [ctypes.c_uint32]
+r_fsu = L.setfsuid(0xFFFFFFFF)
+check('setfsuid(-1) query', r_fsu >= 0, f'got {r_fsu}')
+r_fsg = L.setfsgid(0xFFFFFFFF)
+check('setfsgid(-1) query', r_fsg >= 0, f'got {r_fsg}')
+
+# fadvise64(-1, 0, 0, POSIX_FADV_NORMAL=0) — fd-based, should be EBADF
+NR_FADVISE = 223 if mach == 'aarch64' else 221
+expect_errno('fadvise64(-1)', S(NR_FADVISE, -1, 0, 0, 0), errno.EBADF)
+
+# Socket ops on -1
+NR_RECVFROM   = 207 if mach == 'aarch64' else 45
+NR_GETSOCKOPT = 209 if mach == 'aarch64' else 55
+expect_errno('recvfrom(-1)',   S(NR_RECVFROM,   -1, 0, 0, 0, 0, 0), errno.EBADF)
+expect_errno('getsockopt(-1)', S(NR_GETSOCKOPT, -1, 1, 3, 0, 0),    errno.EBADF)
+
+# tgkill(pid, pid, 0) — signal-0 probe, should succeed
+NR_GETPID = 172 if mach == 'aarch64' else 39
+NR_TGKILL = 131 if mach == 'aarch64' else 234
+my_pid = S(NR_GETPID)
+expect_ok('tgkill(self, 0)', S(NR_TGKILL, my_pid, my_pid, 0))
+
+# timer_getoverrun on a bogus timer id → EINVAL
+NR_TIMER_GETOVERRUN = 109 if mach == 'aarch64' else 225
+expect_errno('timer_getoverrun(bad)', S(NR_TIMER_GETOVERRUN, 9999), errno.EINVAL)
+
+# getxattr on a path with no xattrs → ENODATA (or ENOTSUP on some FSes).
+# Some kernels return ENOSYS if xattr isn't compiled in. Accept any
+# negative value — we just want to exercise the dispatch.
+NR_GETXATTR = 8 if mach == 'aarch64' else 191
+r = S(NR_GETXATTR, b'/etc/hostname', b'user.nonexistent', 0, 0)
+check('getxattr(missing) rejected', r < 0, f'got {r}')
+
+# io_setup(0, &ctx) — nr_events=0 is EINVAL per man page.
+# io_setup returns (ctx is out via aio_context_t*).
+NR_IO_SETUP = 0 if mach == 'aarch64' else 206
+ctx = ctypes.c_ulong(0)
+r = S(NR_IO_SETUP, 0, ctypes.addressof(ctx))
+check('io_setup(0 events) rejected', r < 0, f'got {r}')
+
 # ── Final summary ──────────────────────────────────────────────────────
 print(f'conformance: passed={P} failed={F}')

@@ -508,6 +508,7 @@ const SYSCALL_TABLE_X86: [crate::syscall::Syscall; 437] = {
     // Linux extensions
     t[157] = Syscall::Prctl;     t[186] = Syscall::Gettid;
     t[200] = Syscall::Tkill;     t[202] = Syscall::Futex;
+    t[234] = Syscall::Tgkill;    // was unmapped — round 5 caught this
     t[204] = Syscall::SchedGetaffinity;
     t[218] = Syscall::SetTidAddress;
     t[273] = Syscall::SetRobustList;

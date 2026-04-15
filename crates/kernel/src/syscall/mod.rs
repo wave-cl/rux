@@ -963,11 +963,18 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
                 None => crate::errno::EBADF,
             }
         },
-        // Unsupported: return ENOSYS
+        // xattr: we don't implement extended attributes. Return
+        // EOPNOTSUPP across the board, which matches what Linux
+        // reports for filesystems without xattr support (and is
+        // what round 5 conformance expected — the previous
+        // "unconditional 0" stub let getxattr pretend success
+        // and return a zero-length value, which is a real bug
+        // per the xattr(7) contract: 0 means "zero-length VALUE"
+        // but you reach that only if the name resolved.)
         Syscall::Getxattr | Syscall::Setxattr | Syscall::Fgetxattr | Syscall::Fsetxattr |
         Syscall::Lgetxattr | Syscall::Lsetxattr | Syscall::Listxattr | Syscall::Flistxattr |
         Syscall::Llistxattr | Syscall::Removexattr | Syscall::Fremovexattr |
-        Syscall::Lremovexattr |
+        Syscall::Lremovexattr => crate::errno::EOPNOTSUPP,
         Syscall::Personality => 0, // PER_LINUX = 0 (current personality)
         // capget(hdr, data): hdr is required — Linux returns EFAULT
         // if NULL. data may be NULL (query mode). Otherwise we zero
@@ -1152,7 +1159,14 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
         // ── Batch 2: filesystem misc ──────────────────────────────
         Syscall::Chroot => 0, // stub: succeed (sshd privilege separation needs this)
         Syscall::PivotRoot => crate::errno::EPERM, // no namespace support
-        Syscall::Fadvise => 0, // advisory — safe to ignore
+        // posix_fadvise is advisory (no-op here), but still validate fd
+        // so fadvise64(-1, ...) reports EBADF like Linux.
+        Syscall::Fadvise => unsafe {
+            match rux_fs::fdtable::get_fd(a0) {
+                Some(_) => 0,
+                None => crate::errno::EBADF,
+            }
+        },
         Syscall::Inotify => {
             // inotify_init1(flags) → fd
             // Return a valid fd that never becomes readable. Programs fall back
@@ -1229,8 +1243,11 @@ fn dispatch_inner(sc: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: u
             0
         }
         Syscall::Lchown => posix::chown(a0, a1, a2), // same as chown for now
-        Syscall::Setfsuid => 0,
-        Syscall::Setfsgid => 0,
+        // setfsuid / setfsgid: Linux semantics return the PREVIOUS
+        // fsuid/fsgid unconditionally. -1 is specifically a "query
+        // without changing" mode. We're single-user root so the
+        // current fsuid is always 0; return 0 either way.
+        Syscall::Setfsuid | Syscall::Setfsgid => 0,
         Syscall::MemfdCreate => {
             // memfd_create(name, flags) → fd
             // Return an anonymous fd. mmap on it works via MAP_ANONYMOUS fallback.
