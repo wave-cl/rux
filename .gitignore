@@ -11,6 +11,8 @@ crates/vfs/fuzz/corpus/
 crates/vfs/fuzz/artifacts/
 user/ld-musl-*-stripped*
 rootfs/*.img
+rootfs/debian_staging_*
+rootfs/debian_build_*.log
 mutants.out/
 mutants.out.old/
 tools/__pycache__/

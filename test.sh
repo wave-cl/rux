@@ -116,11 +116,33 @@ with open(sys.argv[1], 'r+b') as f:
 }
 $RUN_AA64 && cargo build --target aarch64-unknown-none -p rux-kernel --features net 2>&1 | tail -1
 
-# Build Alpine rootfs images
-[ -f rootfs/alpine_x86_64.img ] || bash rootfs/build_alpine.sh
+# Rootfs selection — Alpine is the primary fast suite, Debian is an
+# alternate target used when explicitly requested (TEST_ROOTFS=debian).
+# Phase A of plans/majestic-launching-whisper.md only requires the
+# Debian image to boot to a shell; Phase B+C wire it into the test
+# framework proper. For now we just swap the disk image and keep the
+# rest of the runner identical.
+TEST_ROOTFS="${TEST_ROOTFS:-alpine}"
+case "$TEST_ROOTFS" in
+    alpine)
+        ROOTFS_PREFIX="alpine"
+        ROOTFS_BUILD_SCRIPT="rootfs/build_alpine.sh"
+        ;;
+    debian)
+        ROOTFS_PREFIX="debian"
+        ROOTFS_BUILD_SCRIPT="rootfs/build_debian.sh"
+        ;;
+    *)
+        echo "ERROR: TEST_ROOTFS must be 'alpine' or 'debian', got '$TEST_ROOTFS'"
+        exit 2
+        ;;
+esac
 
-# Cleanup temp rootfs copies on exit
-cleanup() { rm -f /tmp/rux_alpine_*.img; }
+# Build the selected rootfs image if missing.
+[ -f "rootfs/${ROOTFS_PREFIX}_x86_64.img" ] || bash "$ROOTFS_BUILD_SCRIPT"
+
+# Cleanup temp rootfs copies on exit (covers both alpine and debian).
+cleanup() { rm -f /tmp/rux_alpine_*.img /tmp/rux_debian_*.img; }
 trap cleanup EXIT
 
 # ── Grouped-boot QEMU runners ──────────────────────────────────────
@@ -131,8 +153,8 @@ trap cleanup EXIT
 
 run_qemu_x86() {
     local tag="${1:-all}"
-    local rootfs="/tmp/rux_alpine_x86_64.img"
-    cp rootfs/alpine_x86_64.img "$rootfs"
+    local rootfs="/tmp/rux_${ROOTFS_PREFIX}_x86_64.img"
+    cp "rootfs/${ROOTFS_PREFIX}_x86_64.img" "$rootfs"
     debugfs -w -R "rm /etc/inittab" "$rootfs" 2>/dev/null
     { sleep 5; \
         [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \
@@ -151,8 +173,8 @@ run_qemu_x86() {
 
 run_qemu_aa64() {
     local tag="${1:-all}"
-    local rootfs="/tmp/rux_alpine_aarch64.img"
-    cp rootfs/alpine_aarch64.img "$rootfs"
+    local rootfs="/tmp/rux_${ROOTFS_PREFIX}_aarch64.img"
+    cp "rootfs/${ROOTFS_PREFIX}_aarch64.img" "$rootfs"
     debugfs -w -R "rm /etc/inittab" "$rootfs" 2>/dev/null
     { sleep 30; \
         [ -n "$STRACE" ] && printf 'python3 -c "import ctypes; ctypes.CDLL(None).prctl(0x52755800, 1, 0, 0, 0)" 2>/dev/null\n'; \

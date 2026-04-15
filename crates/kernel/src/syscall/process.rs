@@ -293,6 +293,12 @@ pub fn waitpid(pid: usize, wstatus_ptr: usize, options: usize) -> isize {
 }
 
 /// getcwd(buf, size) — POSIX.1
+///
+/// Linux ABI: the syscall returns the length of the path including the
+/// trailing NUL. (The libc wrapper returns the buffer pointer; the raw
+/// syscall does not.) We had been returning `buf as isize` here, which
+/// happened to look "non-negative" to glibc/musl wrappers but is wrong
+/// according to the kernel ABI and confuses anyone using raw syscall().
 pub fn getcwd(buf: usize, size: usize) -> isize {
     unsafe {
         let len = super::process().fs_ctx.cwd_path_len;
@@ -304,8 +310,8 @@ pub fn getcwd(buf: usize, size: usize) -> isize {
             *ptr.add(i) = super::process().fs_ctx.cwd_path[i];
         }
         *ptr.add(len) = 0;
+        (len + 1) as isize
     }
-    buf as isize
 }
 
 /// uname(buf) — POSIX.1

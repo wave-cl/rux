@@ -43,7 +43,8 @@ mod tests {
         let r = unsafe {
             syscall::dispatch(Syscall::Getcwd, buf.as_mut_ptr() as usize, 256, 0, 0, 0)
         };
-        assert_eq!(r, buf.as_ptr() as isize, "getcwd returned error");
+        // Linux ABI: returns length including trailing NUL. For "/" → 2.
+        assert_eq!(r, 2, "getcwd should return strlen+1 for '/'");
         assert_eq!(buf[0], b'/', "cwd should start with /");
         assert_eq!(buf[1], 0, "cwd should be exactly /");
     }

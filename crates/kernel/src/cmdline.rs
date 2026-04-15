@@ -14,6 +14,11 @@ pub struct CmdlineParams {
     /// Root filesystem type (e.g., "ext2"), empty if not specified.
     pub rootfstype: [u8; 16],
     pub rootfstype_len: usize,
+    /// Initial strace level (`strace=N` on the cmdline). 0 = off,
+    /// 1 = name+result, 2 = full args, 3 = also-noisy. Useful when
+    /// debugging userspace programs that crash before they get a
+    /// chance to flip the prctl themselves (e.g. dynamic linker).
+    pub strace: u8,
 }
 
 impl CmdlineParams {
@@ -22,6 +27,7 @@ impl CmdlineParams {
             root: [0; 64], root_len: 0,
             init: [0; 64], init_len: 0,
             rootfstype: [0; 16], rootfstype_len: 0,
+            strace: 0,
         }
     }
 
@@ -59,6 +65,11 @@ pub fn parse(cmdline: &[u8]) -> CmdlineParams {
             let n = val.len().min(15);
             params.rootfstype[..n].copy_from_slice(&val[..n]);
             params.rootfstype_len = n;
+        } else if let Some(val) = strip_prefix(token, b"strace=") {
+            // Single ASCII digit 0..=9; ignore anything fancier.
+            if val.len() == 1 && val[0] >= b'0' && val[0] <= b'9' {
+                params.strace = val[0] - b'0';
+            }
         }
     }
 

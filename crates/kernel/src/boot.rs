@@ -103,12 +103,23 @@ pub unsafe fn boot(params: BootParams) -> ! {
     crate::task_table::init_pid1();
     crate::scheduler::init_idle_sched();
     { use rux_mm::FrameAllocator; crate::cow::init((*alloc_ptr).alloc_base()); }
-    // Set CWD to VFS root (ext2 root if mounted, otherwise ramfs root)
+    // Set CWD to VFS root (ext2 root if mounted, otherwise ramfs root).
+    // We also have to initialise cwd_path/cwd_path_len to "/", otherwise
+    // getcwd() returns an empty string at boot. Alpine's busybox didn't
+    // care, but Debian's dash treats an empty getcwd() as a hard failure
+    // ("sh: 0: getcwd() failed: Success") and refuses to source scripts.
     {
         use rux_fs::FileSystem;
         let root_ino = (*vfs_ptr).root_inode();
         crate::syscall::PROCESS.fs_ctx.cwd = root_ino;
         crate::syscall::PROCESS.fs_ctx.root = root_ino;
+        crate::syscall::PROCESS.fs_ctx.cwd_path[0] = b'/';
+        crate::syscall::PROCESS.fs_ctx.cwd_path_len = 1;
+    }
+    // Honour `strace=N` from the kernel cmdline so we can debug
+    // programs that crash before they can flip the runtime prctl.
+    if cmdparams.strace > 0 {
+        crate::syscall::STRACE_ENABLED = cmdparams.strace;
     }
     log("rux: kernel state initialized\n");
 

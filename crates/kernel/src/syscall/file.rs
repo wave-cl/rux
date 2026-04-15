@@ -699,7 +699,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                 }
                 TCGETS => {
                     if let Some(p) = crate::pty::get_mut(pty_id) {
-                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 60).is_ok() {
+                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 36).is_ok() {
                             p.termios.to_user(arg);
                         }
                     }
@@ -708,7 +708,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
                 0x5402 | 0x5403 | 0x5404 => {
                     // TCSETS/TCSETSW/TCSETSF
                     if let Some(p) = crate::pty::get_mut(pty_id) {
-                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 60).is_ok() {
+                        if arg != 0 && crate::uaccess::validate_user_ptr(arg, 36).is_ok() {
                             if request == 0x5404 {
                                 p.flush_input();
                             }
@@ -759,7 +759,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
         TCGETS => {
             if !is_tty { return crate::errno::ENOTTY; }
             if arg != 0 {
-                if crate::uaccess::validate_user_ptr(arg, 60).is_err() { return crate::errno::EFAULT; }
+                if crate::uaccess::validate_user_ptr(arg, 36).is_err() { return crate::errno::EFAULT; }
                 unsafe {
                     let tty = &*(&raw const crate::tty::TTY);
                     tty.termios.to_user(arg);
@@ -770,7 +770,7 @@ pub fn ioctl(fd: usize, request: usize, arg: usize) -> isize {
         // TCSETS / TCSETSW / TCSETSF: set terminal attributes
         0x5402 | 0x5403 | 0x5404 => {
             if arg != 0 {
-                if crate::uaccess::validate_user_ptr(arg, 60).is_err() { return crate::errno::EFAULT; }
+                if crate::uaccess::validate_user_ptr(arg, 36).is_err() { return crate::errno::EFAULT; }
                 unsafe {
                     let tty = &mut *(&raw mut crate::tty::TTY);
                     // TCSETSF (0x5404): flush input first

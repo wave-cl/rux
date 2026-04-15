@@ -246,17 +246,27 @@ impl Termios {
     #[inline] pub fn vtime(&self) -> u8 { self.c_cc[VTIME] }
 
     /// Copy raw bytes from user pointer into this struct.
-    /// # Safety: ptr must be valid and readable for 60 bytes.
+    ///
+    /// IMPORTANT: the Linux kernel ioctl ABI for TCGETS/TCSETS uses
+    /// `struct __kernel_termios` which is **36 bytes** on x86_64 and
+    /// aarch64 — NOT the 60-byte libc `struct termios`. The first 4
+    /// u32 + 1 u8 + 19 u8 = 36 bytes match exactly; c_ispeed/c_ospeed
+    /// are tail fields used only by TCGETS2 (0x802C542A). Writing 60
+    /// bytes via TCGETS clobbers glibc's 36-byte `__kernel_termios`
+    /// stack buffer (4 trailing words → stack canary smash). musl
+    /// happens to pass the full 60-byte struct so we got away with it
+    /// for years; glibc's dash blew up the moment we booted Debian.
     pub unsafe fn from_user(&mut self, ptr: usize) {
-        let src = ptr as *const Termios;
-        *self = *src;
+        let src = ptr as *const u8;
+        let dst = self as *mut Termios as *mut u8;
+        for i in 0..36 { *dst.add(i) = *src.add(i); }
     }
 
-    /// Copy this struct to user pointer.
-    /// # Safety: ptr must be valid and writable for 60 bytes.
+    /// Copy this struct to user pointer (Linux kernel ABI: 36 bytes).
     pub unsafe fn to_user(&self, ptr: usize) {
-        let dst = ptr as *mut Termios;
-        *dst = *self;
+        let src = self as *const Termios as *const u8;
+        let dst = ptr as *mut u8;
+        for i in 0..36 { *dst.add(i) = *src.add(i); }
     }
 
     /// Process an input byte through c_iflag flags.
