@@ -11,6 +11,7 @@ pub const ESRCH: isize = -3;       // No such process
 pub const EINTR: isize = -4;       // Interrupted system call
 pub const EIO: isize = -5;         // Input/output error
 pub const EBADF: isize = -9;       // Bad file descriptor
+pub const ENOEXEC: isize = -8;     // Exec format error
 pub const ECHILD: isize = -10;     // No child processes
 pub const EAGAIN: isize = -11;     // Resource temporarily unavailable
 pub const ENOTTY: isize = -25;    // Not a typewriter (inappropriate ioctl for device)
